@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node / фронтенд
+webapp/node_modules/
+webapp/dist/
+
+# Секреты — .env НИКОГДА не должен попасть в репозиторий
+.env
+
+# Локальные БД для разработки/тестов
+*.db
+*.sqlite3
+
+# IDE / OS
+.DS_Store
+.vscode/
+.idea/

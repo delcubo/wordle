@@ -1,0 +1,148 @@
+"""
+Эндпоинты игровой части сайта. Идентификация — по персональному access_token
+пользователя (глобальному, не привязанному к одному розыгрышу). Так как один
+человек может участвовать в нескольких розыгрышах одновременно, для игры и
+статуса дополнительно указывается tournament_id.
+"""
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from api.database import get_session
+from api.schemas import TodayWordStatus, GuessRequest, GuessResponse, LetterState, MyTournamentOut
+from api.wordle_logic import check_guess, is_solved
+from api.scoring import calculate_points
+from api.dictionary import is_valid_word
+from api.tournament_time import today, day_number_for_date
+from api import crud
+
+router = APIRouter(prefix="/game", tags=["game"])
+
+MAX_ATTEMPTS = 6
+
+
+async def _authenticate_user(session: AsyncSession, token: str):
+    user = await crud.get_user_by_token(session, token)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Ссылка недействительна")
+    return user
+
+
+@router.get("/my-tournaments", response_model=list[MyTournamentOut])
+async def my_tournaments(token: str, session: AsyncSession = Depends(get_session)):
+    """Список розыгрышей, в которых участвует владелец ссылки — экран 'мои розыгрыши'."""
+    user = await _authenticate_user(session, token)
+    entries = await crud.list_entries_for_user(session, user.id)
+
+    result = []
+    for entry in entries:
+        tournament = await crud.get_tournament(session, entry.tournament_id)
+        if tournament is None:
+            continue
+        result.append(
+            MyTournamentOut(
+                tournament_id=tournament.id,
+                title=tournament.title,
+                type=tournament.type,
+                callsign=entry.callsign,
+                status=tournament.status,
+            )
+        )
+    return result
+
+
+async def _resolve_context(session: AsyncSession, token: str, tournament_id: int):
+    """
+    Находит пользователя, его участие (entry) в указанном розыгрыше и слово на
+    сегодняшний день этого розыгрыша. daily_word может быть None, если розыгрыш
+    ещё не начался/уже закончился, или тип розыгрыша не подразумевает
+    ежедневное слово вне пары (knockout — вне текущей реализации плей-офф).
+    """
+    user = await _authenticate_user(session, token)
+    entry = await crud.get_entry(session, tournament_id, user.id)
+    if entry is None:
+        raise HTTPException(status_code=403, detail="Вы не участвуете в этом розыгрыше")
+
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+
+    if tournament.duration_days is None:
+        # knockout: обычного "слова дня" вне сетки нет — эта логика в следующем этапе
+        return entry, tournament, None
+
+    day_number = day_number_for_date(tournament.start_date, today())
+    if day_number < 1 or day_number > tournament.duration_days:
+        return entry, tournament, None
+
+    daily_word = await crud.get_or_suggest_daily_word(session, tournament, day_number)
+    return entry, tournament, daily_word
+
+
+@router.get("/today", response_model=TodayWordStatus)
+async def get_today_status(token: str, tournament_id: int, session: AsyncSession = Depends(get_session)):
+    entry, tournament, daily_word = await _resolve_context(session, token, tournament_id)
+
+    if daily_word is None:
+        return TodayWordStatus(
+            has_word_today=False, already_played=False, callsign=entry.callsign, tournament_title=tournament.title
+        )
+
+    attempt = await crud.get_attempt(session, entry.id, daily_word.id)
+    if attempt is None:
+        return TodayWordStatus(
+            has_word_today=True, already_played=False, max_attempts=MAX_ATTEMPTS,
+            callsign=entry.callsign, tournament_title=tournament.title,
+        )
+
+    already_played = attempt.solved or attempt.attempts_used >= MAX_ATTEMPTS
+    return TodayWordStatus(
+        has_word_today=True,
+        already_played=already_played,
+        attempts_used=attempt.attempts_used,
+        solved=attempt.solved,
+        previous_guesses=attempt.guesses,
+        max_attempts=MAX_ATTEMPTS,
+        callsign=entry.callsign,
+        tournament_title=tournament.title,
+    )
+
+
+@router.post("/guess", response_model=GuessResponse)
+async def submit_guess(payload: GuessRequest, session: AsyncSession = Depends(get_session)):
+    guess = payload.guess.strip().lower()
+
+    if len(guess) != 5:
+        raise HTTPException(status_code=400, detail="Слово должно быть из 5 букв")
+    if not is_valid_word(guess):
+        raise HTTPException(status_code=400, detail="Такого слова нет в словаре")
+
+    entry, tournament, daily_word = await _resolve_context(session, payload.token, payload.tournament_id)
+    if daily_word is None:
+        raise HTTPException(status_code=400, detail="Слово дня сегодня недоступно")
+
+    # Состояние попытки хранится на сервере и привязано к entry.id — открытие той же
+    # персональной ссылки с другого устройства не даёт мошеннически начать заново.
+    attempt = await crud.get_or_create_attempt(session, entry.id, daily_word.id)
+
+    if attempt.solved or attempt.attempts_used >= MAX_ATTEMPTS:
+        raise HTTPException(status_code=400, detail="Попытки на сегодня исчерпаны")
+
+    statuses = check_guess(guess, daily_word.word)
+    solved = is_solved(statuses)
+    attempts_used = attempt.attempts_used + 1
+    game_over = solved or attempts_used >= MAX_ATTEMPTS
+
+    points = None
+    if game_over:
+        points = calculate_points(attempts_used, solved, tournament.scoring_rules)
+
+    await crud.save_guess(session, attempt, guess, solved, game_over, points)
+
+    return GuessResponse(
+        result=[LetterState(letter=g, state=s) for g, s in zip(guess, statuses)],
+        solved=solved,
+        attempts_used=attempts_used,
+        attempts_remaining=MAX_ATTEMPTS - attempts_used,
+        game_over=game_over,
+        points=points,
+    )

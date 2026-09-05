@@ -1,0 +1,228 @@
+"""
+Схема БД под платформу из нескольких одновременных розыгрышей разных типов.
+
+Ключевое разделение: User — глобальная личность человека (одна постоянная ссылка
+на все розыгрыши), TournamentEntry — его участие в конкретном Tournament (свой
+позывной на каждый розыгрыш). Attempt и PlayoffMatch ссылаются на entry, а не
+на пользователя напрямую — так один и тот же человек в разных розыгрышах играет
+под разными позывными и с независимым прогрессом.
+"""
+import enum
+from datetime import datetime, date
+
+from sqlalchemy import (
+    Integer, String, Boolean, Date, DateTime, ForeignKey, UniqueConstraint,
+    Enum as SAEnum, JSON,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from api.database import Base
+
+
+class TournamentType(str, enum.Enum):
+    standard = "standard"          # простое распределение мест по очкам за N дней
+    knockout = "knockout"          # игра на вылет для 2^n игроков, сетка задаётся вручную
+    championship = "championship"  # standard N дней + тай-брейк + плей-офф топ-2^n
+
+
+class TournamentStatus(str, enum.Enum):
+    draft = "draft"           # создан, ещё не стартовал
+    active = "active"         # идёт основной этап
+    tiebreak = "tiebreak"     # идёт тай-брейк перед посевом (championship)
+    playoff = "playoff"       # идёт плей-офф / сетка на вылет
+    finished = "finished"     # завершён
+
+
+class DailyWordStatus(str, enum.Enum):
+    suggested = "suggested"   # предложено системой, админ ещё не подтвердил/не заменил
+    confirmed = "confirmed"   # админ явно подтвердил или заменил слово
+
+
+class PlayoffMatchType(str, enum.Enum):
+    tiebreak = "tiebreak"     # мини-плей-офф за распределение мест / посев (championship)
+    playoff = "playoff"       # основная сетка на выбывание (championship и knockout)
+
+
+class PlayoffMatchStatus(str, enum.Enum):
+    pending = "pending"
+    in_progress = "in_progress"
+    finished = "finished"
+
+
+class User(Base):
+    """
+    Глобальная личность человека — одна постоянная персональная ссылка на все
+    розыгрыши, куда его подключит администратор. Регистрирует администратор
+    вручную (никакой самостоятельной регистрации нет).
+    """
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    access_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    admin_note: Mapped[str | None] = mapped_column(String(200), nullable=True)  # для админа: кто это
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    entries: Mapped[list["TournamentEntry"]] = relationship(back_populates="user")
+
+
+class Tournament(Base):
+    """Один розыгрыш. Несколько розыгрышей могут идти параллельно и независимо."""
+    __tablename__ = "tournaments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    type: Mapped[TournamentType] = mapped_column(SAEnum(TournamentType))
+
+    # Для standard/championship — день 1 основного этапа.
+    # Для knockout — дата первого раунда сетки (duration_days не используется).
+    start_date: Mapped[date] = mapped_column(Date)
+    duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    scoring_rules: Mapped[dict] = mapped_column(JSON)  # {"1": 10, "2": 5, ...}
+    skip_flag_symbol: Mapped[str] = mapped_column(String(8), default="🚩")
+
+    # Общее число участников сетки (2^n). Для championship — сколько лучших мест
+    # основного этапа проходит в плей-офф; для knockout — общий размер турнира.
+    bracket_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # сколько основных раундов решает исход пары в сетке (по умолчанию 1)
+    rounds_per_match: Mapped[int] = mapped_column(Integer, default=1)
+
+    status: Mapped[TournamentStatus] = mapped_column(
+        SAEnum(TournamentStatus), default=TournamentStatus.draft
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    entries: Mapped[list["TournamentEntry"]] = relationship(back_populates="tournament")
+    daily_words: Mapped[list["DailyWord"]] = relationship(back_populates="tournament")
+
+
+class TournamentEntry(Base):
+    """
+    Участие конкретного User в конкретном Tournament — со своим позывным.
+    Один и тот же User может иметь несколько TournamentEntry (по одной на розыгрыш).
+    """
+    __tablename__ = "tournament_entries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tournament_id: Mapped[int] = mapped_column(ForeignKey("tournaments.id"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+    callsign: Mapped[str] = mapped_column(String(100))
+
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # день розыгрыша (1-based), с которого подключён — дни ДО этого числа всё равно
+    # помечаются флагом пропуска (см. ранее согласованные правила).
+    joined_on_day: Mapped[int] = mapped_column(Integer)
+
+    tournament: Mapped["Tournament"] = relationship(back_populates="entries")
+    user: Mapped["User"] = relationship(back_populates="entries")
+    attempts: Mapped[list["Attempt"]] = relationship(back_populates="entry")
+
+
+class DailyWord(Base):
+    """
+    Слово дня для конкретного розыгрыша. day_number — 1-based день розыгрыша
+    (для knockout — номер раунда сетки, если у него тоже используется отдельное
+    слово вне пары — см. PlayoffGame.word для пар).
+
+    status: suggested — предложено алгоритмом, ещё может быть заменено админом;
+    confirmed — либо явно подтверждено, либо наступил дедлайн (начало дня) и
+    предложенное слово стало действующим автоматически. Игра использует слово
+    независимо от статуса, как только наступила calendar_date — статус нужен
+    только для UI администратора ("это предложение, можно ещё поменять" vs
+    "уже зафиксировано").
+    """
+    __tablename__ = "daily_words"
+    __table_args__ = (
+        UniqueConstraint("tournament_id", "day_number", name="uq_word_per_day"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tournament_id: Mapped[int] = mapped_column(ForeignKey("tournaments.id"))
+    day_number: Mapped[int] = mapped_column(Integer)
+    word: Mapped[str] = mapped_column(String(16))
+    calendar_date: Mapped[date] = mapped_column(Date)
+    status: Mapped[DailyWordStatus] = mapped_column(SAEnum(DailyWordStatus), default=DailyWordStatus.suggested)
+
+    tournament: Mapped["Tournament"] = relationship(back_populates="daily_words")
+    attempts: Mapped[list["Attempt"]] = relationship(back_populates="daily_word")
+
+
+class Attempt(Base):
+    """Одна законченная игра участника (TournamentEntry) за день — итог, не отдельная догадка."""
+    __tablename__ = "attempts"
+    __table_args__ = (
+        UniqueConstraint("entry_id", "daily_word_id", name="uq_attempt_per_day"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entry_id: Mapped[int] = mapped_column(ForeignKey("tournament_entries.id"))
+    daily_word_id: Mapped[int] = mapped_column(ForeignKey("daily_words.id"))
+
+    guesses: Mapped[list] = mapped_column(JSON, default=list)
+    attempts_used: Mapped[int] = mapped_column(Integer)
+    solved: Mapped[bool] = mapped_column(Boolean)
+    points: Mapped[int] = mapped_column(Integer)
+
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    entry: Mapped["TournamentEntry"] = relationship(back_populates="attempts")
+    daily_word: Mapped["DailyWord"] = relationship(back_populates="attempts")
+
+
+class PlayoffMatch(Base):
+    """
+    Универсальная "пара" сетки — используется и для тай-брейка (championship),
+    и для основной сетки на выбывание (championship и knockout).
+
+    round_number: 1 = первый раунд сетки (например, топ-16), растёт дальше
+    (2 = топ-8, ...). Для knockout первый раунд создаёт вручную администратор
+    (нет предварительного рейтинга для автопосева); дальнейшие раунды
+    заполняются победителями предыдущего через next_match_id.
+    """
+    __tablename__ = "playoff_matches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tournament_id: Mapped[int] = mapped_column(ForeignKey("tournaments.id"))
+
+    match_type: Mapped[PlayoffMatchType] = mapped_column(SAEnum(PlayoffMatchType))
+    round_number: Mapped[int] = mapped_column(Integer)
+
+    entry_a_id: Mapped[int | None] = mapped_column(ForeignKey("tournament_entries.id"), nullable=True)
+    entry_b_id: Mapped[int | None] = mapped_column(ForeignKey("tournament_entries.id"), nullable=True)
+
+    winner_entry_id: Mapped[int | None] = mapped_column(ForeignKey("tournament_entries.id"), nullable=True)
+    status: Mapped[PlayoffMatchStatus] = mapped_column(
+        SAEnum(PlayoffMatchStatus), default=PlayoffMatchStatus.pending
+    )
+
+    next_match_id: Mapped[int | None] = mapped_column(ForeignKey("playoff_matches.id"), nullable=True)
+    scheduled_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    games: Mapped[list["PlayoffGame"]] = relationship(back_populates="match")
+
+
+class PlayoffGame(Base):
+    """Один раунд игры внутри пары (обычный раунд или sudden death при ничьей)."""
+    __tablename__ = "playoff_games"
+    __table_args__ = (
+        UniqueConstraint("match_id", "game_number", name="uq_game_per_match"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    match_id: Mapped[int] = mapped_column(ForeignKey("playoff_matches.id"))
+    game_number: Mapped[int] = mapped_column(Integer)
+    word: Mapped[str] = mapped_column(String(16))
+    is_sudden_death: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    entry_a_attempts_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    entry_a_solved: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    entry_a_technical_loss: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    entry_b_attempts_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    entry_b_solved: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    entry_b_technical_loss: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    match: Mapped["PlayoffMatch"] = relationship(back_populates="games")
