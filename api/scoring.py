@@ -46,29 +46,41 @@ def build_standings(
     для пропущенных). Дни, где участник не играл (в т.ч. до регистрации), помечаются
     played=False, что рендерится как флаг, а не как 0.
 
-    Места с учётом равенства очков: участники с одинаковой суммой получают
-    одинаковое место в формате "2-3" (диапазон), следующий участник получает место
-    сразу после диапазона (стандартная спортивная система, "competition ranking").
+    Места с учётом равенства очков: при равной сумме очков выше становится
+    участник с меньшим числом пропусков (played=False дней) — это основной
+    тай-брейк таблицы. Только при полном совпадении и очков, и пропусков
+    участники делят место в формате "2-3" (диапазон), следующий участник
+    получает место сразу после диапазона (competition ranking).
     """
     totals: dict[int, int] = {}
+    skips: dict[int, int] = {}
     for p in participants:
         pid = p["id"]
         total = 0
+        skip_count = 0
         for day in range(1, total_days + 1):
             result = daily_results.get(day, {}).get(pid)
             if result and result.played and result.points is not None:
                 total += result.points
+            else:
+                skip_count += 1
         totals[pid] = total
+        skips[pid] = skip_count
 
-    # сортировка по убыванию очков
-    ordered = sorted(participants, key=lambda p: totals[p["id"]], reverse=True)
+    # сортировка по убыванию очков, при равенстве — по возрастанию числа пропусков
+    ordered = sorted(participants, key=lambda p: (-totals[p["id"]], skips[p["id"]]))
 
-    # вычисление мест с дележом (competition ranking: 1,2,2,4)
+    # вычисление мест с дележом (competition ranking: 1,2,2,4) — делят место
+    # только участники с одинаковыми и очками, и числом пропусков
     rows: list[StandingsRow] = []
     i = 0
     while i < len(ordered):
         j = i
-        while j + 1 < len(ordered) and totals[ordered[j + 1]["id"]] == totals[ordered[i]["id"]]:
+        while (
+            j + 1 < len(ordered)
+            and totals[ordered[j + 1]["id"]] == totals[ordered[i]["id"]]
+            and skips[ordered[j + 1]["id"]] == skips[ordered[i]["id"]]
+        ):
             j += 1
         if i == j:
             place_label = str(i + 1)
@@ -103,7 +115,9 @@ def build_standings(
 
 def groups_needing_tiebreak(rows: list[StandingsRow], playoff_cutoff: int) -> list[list[StandingsRow]]:
     """
-    Находит группы участников с равными очками, которым нужен тай-брейк:
+    Находит группы участников, которым нужен тай-брейк — то есть тех, кто делит
+    место в таблице (row.place вида "2-3"), а значит уже совпал и по очкам,
+    и по числу пропусков (см. build_standings):
     - любая группа с дележом места ВНУТРИ топ-N (нужна для правильного посева)
     - группа на границе топ-N (от которой зависит, кто попадает в плей-офф)
 
