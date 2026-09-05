@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models import (
     Tournament, TournamentStatus, TournamentEntry, User, DailyWord, DailyWordStatus, Attempt,
 )
-from api.dictionary import pick_word_for_day
+from api.dictionary import pick_word_for_day, pick_alternative_word
 from api.tournament_time import today, day_number_for_date, date_for_day_number
 
 
@@ -180,6 +180,20 @@ async def confirm_daily_word(
     if override_word:
         daily_word.word = override_word
     daily_word.status = DailyWordStatus.confirmed
+    session.add(daily_word)
+    await session.commit()
+    await session.refresh(daily_word)
+    return daily_word
+
+
+async def reroll_daily_word(session: AsyncSession, daily_word: DailyWord) -> DailyWord:
+    """
+    Заменяет предложенное слово на другое случайное (кнопка "предложить другое
+    слово"). Статус остаётся suggested — админ по-прежнему может согласиться,
+    заменить вручную или запросить ещё вариант.
+    """
+    already_used = await _get_used_words(session, daily_word.tournament_id)
+    daily_word.word = pick_alternative_word(already_used, exclude=daily_word.word)
     session.add(daily_word)
     await session.commit()
     await session.refresh(daily_word)

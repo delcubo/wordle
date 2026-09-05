@@ -215,6 +215,21 @@ async def confirm_word(
     return await crud.confirm_daily_word(session, daily_word, override)
 
 
+@router.post("/words/{daily_word_id}/reroll", response_model=DailyWordOut)
+async def reroll_word(
+    daily_word_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
+):
+    from api.models import DailyWord
+    daily_word = await session.get(DailyWord, daily_word_id)
+    if daily_word is None:
+        raise HTTPException(status_code=404, detail="Слово не найдено")
+
+    if daily_word.calendar_date <= today():
+        raise HTTPException(status_code=400, detail="Этот день уже наступил — слово менять поздно")
+
+    return await crud.reroll_daily_word(session, daily_word)
+
+
 # ---------- Standings ----------
 
 @router.get("/tournaments/{tournament_id}/standings", response_model=StandingsResponse)

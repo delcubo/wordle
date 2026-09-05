@@ -48,6 +48,21 @@ def pick_word_for_day(tournament_id: int, day_number: int, already_used: set[str
     return rng.choice(candidates)
 
 
+def pick_alternative_word(already_used: set[str], exclude: str | None = None) -> str:
+    """
+    Выбор нового случайного предложения взамен текущего (кнопка "предложить
+    другое слово" в админке) — в отличие от pick_word_for_day, недетерминирован:
+    иначе повторное нажатие всегда возвращало бы то же самое слово.
+    exclude — текущее предложенное слово, чтобы не предложить его же снова.
+    """
+    words = load_words()
+    excluded = already_used | ({exclude} if exclude else set())
+    candidates = [w for w in words if w not in excluded]
+    if not candidates:
+        raise RuntimeError("Словарь исчерпан — новых слов для замены не осталось")
+    return random.choice(candidates)
+
+
 def validate_manual_word(word: str, already_used: set[str]) -> str | None:
     """
     Проверка слова, которое администратор вводит вручную взамен предложенного.

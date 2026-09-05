@@ -393,6 +393,16 @@ function WordConfirmPanel({ tournament }) {
     }
   }
 
+  async function handleReroll() {
+    setError("");
+    try {
+      const updated = await api(`/api/admin/words/${word.id}/reroll`, { method: "POST" });
+      setWord(updated);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   if (notApplicable) return null;
   if (!word) return null;
 
@@ -411,6 +421,7 @@ function WordConfirmPanel({ tournament }) {
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button onClick={() => handleConfirm(false)} style={buttonStyle}>Согласиться с этим словом</button>
+        <button onClick={handleReroll} style={ghostButtonStyle}>Предложить другое слово</button>
         <input placeholder="Или ввести своё слово" value={override} onChange={(e) => setOverride(e.target.value)} style={inputStyle} maxLength={5} />
         <button onClick={() => handleConfirm(true)} disabled={override.trim().length !== 5} style={ghostButtonStyle}>Заменить</button>
       </div>
