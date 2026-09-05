@@ -181,6 +181,9 @@ class PlayoffMatch(Base):
     (2 = топ-8, ...). Для knockout первый раунд создаёт вручную администратор
     (нет предварительного рейтинга для автопосева); дальнейшие раунды
     заполняются победителями предыдущего через next_match_id.
+
+    position: 0-based номер пары внутри своего раунда — по нему победители пар
+    2k и 2k+1 сводятся в пару k следующего раунда (стандартная сетка).
     """
     __tablename__ = "playoff_matches"
 
@@ -188,6 +191,7 @@ class PlayoffMatch(Base):
     tournament_id: Mapped[int] = mapped_column(ForeignKey("tournaments.id"))
 
     round_number: Mapped[int] = mapped_column(Integer)
+    position: Mapped[int] = mapped_column(Integer)
 
     entry_a_id: Mapped[int | None] = mapped_column(ForeignKey("tournament_entries.id"), nullable=True)
     entry_b_id: Mapped[int | None] = mapped_column(ForeignKey("tournament_entries.id"), nullable=True)

@@ -87,6 +87,9 @@ export default function AdminDashboard() {
                 <WordConfirmPanel tournament={selected} />
                 {selected.duration_days != null && <StandingsPanel tournament={selected} />}
                 {selected.type === "championship" && <TiebreakPanel tournament={selected} />}
+                {(selected.type === "championship" || selected.type === "knockout") && (
+                  <BracketPanel tournament={selected} />
+                )}
               </>
             ) : (
               <div style={{ opacity: 0.7 }}>Создайте розыгрыш, чтобы начать.</div>
@@ -547,6 +550,122 @@ function TiebreakPanel({ tournament }) {
           </table>
         </div>
       ))}
+    </div>
+  );
+}
+
+const MATCH_STATUS_LABEL = { pending: "ожидает", in_progress: "идёт", finished: "завершён" };
+
+function BracketPanel({ tournament }) {
+  const [entries, setEntries] = useState([]);
+  const [matches, setMatches] = useState(null);
+  const [pairSelections, setPairSelections] = useState([]);
+  const [error, setError] = useState("");
+
+  async function refresh() {
+    try {
+      setMatches(await api(`/api/admin/tournaments/${tournament.id}/bracket`));
+      setError("");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  useEffect(() => {
+    api(`/api/admin/tournaments/${tournament.id}/entries`).then(setEntries).catch(() => {});
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id]);
+
+  const pairsNeeded = tournament.bracket_size ? tournament.bracket_size / 2 : 0;
+
+  useEffect(() => {
+    setPairSelections(Array.from({ length: pairsNeeded }, () => ({ a: "", b: "" })));
+  }, [pairsNeeded, tournament.id]);
+
+  async function handleGenerate() {
+    setError("");
+    try {
+      await api(`/api/admin/tournaments/${tournament.id}/bracket/generate`, { method: "POST" });
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  function updatePair(index, side, value) {
+    setPairSelections((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [side]: value };
+      return next;
+    });
+  }
+
+  async function handleSubmitRound1(e) {
+    e.preventDefault();
+    setError("");
+    try {
+      const pairs = pairSelections.map((p) => [Number(p.a), Number(p.b)]);
+      await api(`/api/admin/tournaments/${tournament.id}/bracket/round1`, {
+        method: "POST",
+        body: JSON.stringify({ pairs }),
+      });
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  const bracketExists = matches && matches.length > 0;
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ marginTop: 0 }}>Сетка плей-офф</h3>
+        <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+      </div>
+      {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
+
+      {!bracketExists && tournament.type === "championship" && (
+        <button onClick={handleGenerate} style={buttonStyle}>Сгенерировать сетку по итогам</button>
+      )}
+
+      {!bracketExists && tournament.type === "knockout" && (
+        <form onSubmit={handleSubmitRound1} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {pairSelections.map((p, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span style={{ opacity: 0.7, fontSize: 13 }}>Пара {i + 1}:</span>
+              <select value={p.a} onChange={(e) => updatePair(i, "a", e.target.value)} style={inputStyle} required>
+                <option value="" disabled>Игрок A</option>
+                {entries.map((en) => <option key={en.id} value={en.id}>{en.callsign}</option>)}
+              </select>
+              <select value={p.b} onChange={(e) => updatePair(i, "b", e.target.value)} style={inputStyle} required>
+                <option value="" disabled>Игрок B</option>
+                {entries.map((en) => <option key={en.id} value={en.id}>{en.callsign}</option>)}
+              </select>
+            </div>
+          ))}
+          <button type="submit" style={buttonStyle}>Сохранить раунд 1</button>
+        </form>
+      )}
+
+      {bracketExists && (
+        <table style={{ borderCollapse: "collapse", fontSize: 13, marginTop: 8 }}>
+          <tbody>
+            {matches.map((m) => (
+              <tr key={m.id} style={{ borderTop: "1px solid #2a2a2c" }}>
+                <td style={tdStyle}>Р{m.round_number} · пара {m.position + 1}</td>
+                <td style={tdStyle}>{m.entry_a_callsign || "?"}</td>
+                <td style={tdStyle}>—</td>
+                <td style={tdStyle}>{m.entry_b_callsign || "?"}</td>
+                <td style={{ ...tdStyle, opacity: 0.7 }}>
+                  {m.winner_entry_id ? "победитель определён" : MATCH_STATUS_LABEL[m.status] || m.status}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

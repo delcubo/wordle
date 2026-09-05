@@ -3,13 +3,14 @@
 напрямую — так вся логика живёт в одном месте.
 """
 import secrets
+from datetime import date
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models import (
     Tournament, TournamentStatus, TournamentEntry, User, DailyWord, DailyWordStatus, Attempt,
-    TiebreakRound, TiebreakParticipant,
+    TiebreakRound, TiebreakParticipant, PlayoffMatch,
 )
 from api.dictionary import pick_word_for_day, pick_alternative_word
 from api.tournament_time import today, day_number_for_date, date_for_day_number
@@ -383,3 +384,57 @@ async def get_active_tiebreak_round_for_entry(
         )
     )
     return result.scalars().first()
+
+
+async def list_root_tiebreak_rounds(session: AsyncSession, tournament_id: int) -> list[TiebreakRound]:
+    """Раунды, с которых началась цепочка тай-брейка (не продолжения) — по одному
+    на каждую исходную группу с равными местами."""
+    result = await session.execute(
+        select(TiebreakRound).where(
+            TiebreakRound.tournament_id == tournament_id,
+            TiebreakRound.previous_round_id.is_(None),
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def get_child_rounds(session: AsyncSession, round_id: int) -> list[TiebreakRound]:
+    """Раунды-продолжения, заведённые из-за остаточной ничьей внутри round_id."""
+    result = await session.execute(
+        select(TiebreakRound).where(TiebreakRound.previous_round_id == round_id)
+    )
+    return list(result.scalars().all())
+
+
+# ---------- Сетка плей-офф ----------
+
+async def list_playoff_matches(session: AsyncSession, tournament_id: int) -> list[PlayoffMatch]:
+    result = await session.execute(
+        select(PlayoffMatch)
+        .where(PlayoffMatch.tournament_id == tournament_id)
+        .order_by(PlayoffMatch.round_number, PlayoffMatch.position)
+    )
+    return list(result.scalars().all())
+
+
+async def create_playoff_match(
+    session: AsyncSession,
+    tournament_id: int,
+    round_number: int,
+    position: int,
+    entry_a_id: int,
+    entry_b_id: int,
+    scheduled_date: date | None,
+) -> PlayoffMatch:
+    match = PlayoffMatch(
+        tournament_id=tournament_id,
+        round_number=round_number,
+        position=position,
+        entry_a_id=entry_a_id,
+        entry_b_id=entry_b_id,
+        scheduled_date=scheduled_date,
+    )
+    session.add(match)
+    await session.commit()
+    await session.refresh(match)
+    return match

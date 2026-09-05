@@ -8,6 +8,9 @@
 за все 6 попыток, как техническое поражение в сетке. Если после разрешения
 раунда часть группы всё ещё совпадает — для неё сразу заводится продолжение
 (новое слово того же дня, см. create_tiebreak_round), играть можно немедленно.
+
+compute_final_order() восстанавливает итоговый порядок участников по цепочкам
+разрешённых раундов — им пользуется генерация сетки плей-офф (api/bracket.py).
 """
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,6 +63,14 @@ async def resolve_ready_rounds(session: AsyncSession, tournament: Tournament) ->
         await _try_resolve_round(session, tournament, round_)
 
 
+async def _result_key(session: AsyncSession, entry_id: int, daily_word_id: int) -> tuple[bool, int] | None:
+    """(solved, attempts_used) для законченной попытки, иначе None (ещё играет/не начинал)."""
+    attempt = await crud.get_attempt(session, entry_id, daily_word_id)
+    if attempt is not None and (attempt.solved or attempt.attempts_used >= 6):
+        return (attempt.solved, attempt.attempts_used)
+    return None
+
+
 async def _try_resolve_round(session: AsyncSession, tournament: Tournament, round_: TiebreakRound) -> None:
     daily_word = await crud.get_daily_word_by_id(session, round_.daily_word_id)
     deadline_passed = daily_word.calendar_date < today()
@@ -68,12 +79,11 @@ async def _try_resolve_round(session: AsyncSession, tournament: Tournament, roun
     results: dict[int, tuple[bool, int]] = {}
     all_finished = True
     for p in participants:
-        attempt = await crud.get_attempt(session, p.entry_id, daily_word.id)
-        if attempt is not None and (attempt.solved or attempt.attempts_used >= 6):
-            results[p.entry_id] = (attempt.solved, attempt.attempts_used)
-        else:
+        key = await _result_key(session, p.entry_id, daily_word.id)
+        if key is None:
             all_finished = False
-            results[p.entry_id] = (False, 6)  # используется, только если наступил дедлайн
+            key = (False, 6)  # используется, только если наступил дедлайн
+        results[p.entry_id] = key
 
     if not all_finished and not deadline_passed:
         return  # ждём, пока доиграют остальные
@@ -89,6 +99,75 @@ async def _try_resolve_round(session: AsyncSession, tournament: Tournament, roun
     for entry_ids in still_tied.values():
         if len(entry_ids) > 1:
             await crud.create_tiebreak_round(session, tournament, entry_ids, previous_round_id=round_.id)
+
+
+async def compute_final_order(session: AsyncSession, tournament: Tournament) -> list[int]:
+    """
+    Итоговый порядок участников championship (лучший первым) после основного
+    этапа и, если понадобился, тай-брейка — используется для посева сетки
+    плей-офф. Бросает ValueError, если для какой-то группы с равными местами
+    тай-брейк ещё не запущен или не разрешился полностью — вызывающий код
+    (генерация сетки) не должен сеять розыгрыш с неразрешённой ничьей.
+    """
+    rows = await compute_standings(session, tournament)
+
+    roots_by_group: dict[frozenset, TiebreakRound] = {}
+    for root in await crud.list_root_tiebreak_rounds(session, tournament.id):
+        participants = await crud.list_tiebreak_participants(session, root.id)
+        roots_by_group[frozenset(p.entry_id for p in participants)] = root
+
+    order: list[int] = []
+    seen_places = set()
+    for row in rows:
+        if row.place in seen_places:
+            continue
+        seen_places.add(row.place)
+
+        if "-" not in row.place:
+            order.append(row.participant_id)
+            continue
+
+        group_ids = frozenset(r.participant_id for r in rows if r.place == row.place)
+        root = roots_by_group.get(group_ids)
+        if root is None:
+            raise ValueError(f"Тай-брейк для места {row.place} ещё не запущен")
+        order.extend(await _resolve_group_order(session, root))
+
+    return order
+
+
+async def _resolve_group_order(session: AsyncSession, round_: TiebreakRound) -> list[int]:
+    """Порядок участников (лучший первым) для группы, разрешаемой цепочкой
+    раундов, начинающейся с round_. Рекурсивно спускается в продолжения."""
+    if not round_.completed:
+        raise ValueError(f"Раунд тай-брейка #{round_.id} ещё не завершён")
+
+    daily_word = await crud.get_daily_word_by_id(session, round_.daily_word_id)
+    participants = await crud.list_tiebreak_participants(session, round_.id)
+
+    keyed: dict[tuple[bool, int], list[int]] = {}
+    for p in participants:
+        key = await _result_key(session, p.entry_id, daily_word.id) or (False, 6)
+        keyed.setdefault(key, []).append(p.entry_id)
+
+    children_by_group = {}
+    for child in await crud.get_child_rounds(session, round_.id):
+        child_participants = await crud.list_tiebreak_participants(session, child.id)
+        children_by_group[frozenset(p.entry_id for p in child_participants)] = child
+
+    # сортировка ключей: сначала решившие, затем по возрастанию числа попыток
+    order: list[int] = []
+    for key in sorted(keyed.keys(), key=lambda k: (not k[0], k[1])):
+        entry_ids = keyed[key]
+        if len(entry_ids) == 1:
+            order.append(entry_ids[0])
+            continue
+        child = children_by_group.get(frozenset(entry_ids))
+        if child is None:
+            raise ValueError(f"Раунд #{round_.id}: часть группы всё ещё равна, но продолжение не найдено")
+        order.extend(await _resolve_group_order(session, child))
+
+    return order
 
 
 async def get_rounds_view(session: AsyncSession, tournament_id: int) -> list[dict]:

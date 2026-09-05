@@ -177,3 +177,22 @@ class TiebreakRoundOut(BaseModel):
 class TiebreakStartResponse(BaseModel):
     started: bool
     rounds_created: int
+
+
+# ---------- Сетка плей-офф ----------
+
+class PlayoffMatchOut(BaseModel):
+    id: int
+    round_number: int
+    position: int
+    entry_a_id: int | None
+    entry_a_callsign: str | None
+    entry_b_id: int | None
+    entry_b_callsign: str | None
+    winner_entry_id: int | None
+    status: str
+    scheduled_date: date | None
+
+
+class BracketRound1Request(BaseModel):
+    pairs: list[tuple[int, int]]  # (entry_a_id, entry_b_id) для каждой пары раунда 1

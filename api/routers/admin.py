@@ -16,12 +16,13 @@ from api.schemas import (
     DailyWordOut, ConfirmWordRequest,
     StandingsResponse, StandingsRowOut, DailyCell,
     TiebreakRoundOut, TiebreakParticipantOut, TiebreakStartResponse,
+    PlayoffMatchOut, BracketRound1Request,
 )
 from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry
 from api.admin_auth import check_password, create_session_token, require_admin, COOKIE_NAME
 from api.dictionary import validate_manual_word
 from api.tournament_time import today, day_number_for_date
-from api import crud, tiebreak
+from api import crud, tiebreak, bracket
 from api.standings_view import compute_standings
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -301,3 +302,44 @@ async def get_tiebreak_state(tournament_id: int, session: AsyncSession = Depends
         )
         for r in rounds
     ]
+
+
+# ---------- Сетка плей-офф ----------
+
+def _bracket_response(rows: list[dict]) -> list[PlayoffMatchOut]:
+    return [PlayoffMatchOut(**r) for r in rows]
+
+
+@router.post("/tournaments/{tournament_id}/bracket/generate", response_model=list[PlayoffMatchOut])
+async def generate_bracket(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    try:
+        await bracket.generate_championship_bracket(session, tournament)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _bracket_response(await bracket.get_bracket_view(session, tournament_id))
+
+
+@router.post("/tournaments/{tournament_id}/bracket/round1", response_model=list[PlayoffMatchOut])
+async def set_bracket_round1(
+    tournament_id: int, payload: BracketRound1Request,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    try:
+        await bracket.set_knockout_round1(session, tournament, payload.pairs)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _bracket_response(await bracket.get_bracket_view(session, tournament_id))
+
+
+@router.get("/tournaments/{tournament_id}/bracket", response_model=list[PlayoffMatchOut])
+async def get_bracket(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    return _bracket_response(await bracket.get_bracket_view(session, tournament_id))
