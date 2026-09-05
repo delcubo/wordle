@@ -127,6 +127,7 @@ async def get_bracket_view(session: AsyncSession, tournament_id: int) -> list[di
             "winner_entry_id": m.winner_entry_id,
             "status": m.status,
             "scheduled_date": m.scheduled_date,
+            "admin_note": m.admin_note,
         }
         for m in matches
     ]

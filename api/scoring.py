@@ -24,6 +24,7 @@ class ParticipantDayResult:
     callsign: str
     played: bool          # делал ли попытку в этот день
     points: int | None    # None означает "пропуск" (флаг), не 0
+    admin_note: str | None = None  # заполнено, только если результат дня скорректирован админом вручную
 
 
 @dataclass

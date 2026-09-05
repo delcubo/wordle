@@ -437,6 +437,9 @@ function WordConfirmPanel({ tournament }) {
 
 function StandingsPanel({ tournament }) {
   const [standings, setStandings] = useState(null);
+  const [editing, setEditing] = useState(null); // {participantId, day} | null
+  const [form, setForm] = useState({ attempts_used: 1, solved: true, note: "" });
+  const [error, setError] = useState("");
 
   async function refresh() {
     setStandings(await api(`/api/admin/tournaments/${tournament.id}/standings`));
@@ -449,12 +452,44 @@ function StandingsPanel({ tournament }) {
 
   if (!standings) return null;
 
+  function startEdit(participantId, day, cell) {
+    setError("");
+    setEditing({ participantId, day });
+    setForm({
+      attempts_used: cell.played ? 1 : 1,
+      solved: cell.played ? cell.points > 0 : true,
+      note: "",
+    });
+  }
+
+  async function handleSave() {
+    setError("");
+    try {
+      await api(`/api/admin/entries/${editing.participantId}/days/${editing.day}/override`, {
+        method: "POST",
+        body: JSON.stringify({
+          attempts_used: Number(form.attempts_used),
+          solved: form.solved,
+          note: form.note,
+        }),
+      });
+      setEditing(null);
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   return (
     <div style={{ ...panelStyle, marginTop: 20, overflowX: "auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h3 style={{ marginTop: 0 }}>Таблица</h3>
         <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
       </div>
+      <p style={{ fontSize: 12, opacity: 0.6, marginTop: -4 }}>
+        Клик по ячейке дня — ручная корректировка результата (исключительные случаи).
+      </p>
+      {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
       <table style={{ borderCollapse: "collapse", fontSize: 13, minWidth: 400 }}>
         <thead>
           <tr>
@@ -472,11 +507,51 @@ function StandingsPanel({ tournament }) {
               <td style={tdStyle}>{r.place}</td>
               <td style={tdStyle}>{r.callsign}</td>
               <td style={{ ...tdStyle, fontWeight: 700 }}>{r.total_points}</td>
-              {r.daily.map((d, i) => (
-                <td key={i} style={{ ...tdStyle, textAlign: "center" }}>
-                  {d.played ? d.points : standings.skip_flag_symbol}
-                </td>
-              ))}
+              {r.daily.map((d, i) => {
+                const day = i + 1;
+                const isEditing = editing?.participantId === r.participant_id && editing?.day === day;
+                if (isEditing) {
+                  return (
+                    <td key={i} style={{ ...tdStyle, background: "#2a2a2c" }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 140 }}>
+                        <input
+                          type="number" min={1} max={6} value={form.attempts_used}
+                          onChange={(e) => setForm((f) => ({ ...f, attempts_used: e.target.value }))}
+                          style={{ ...inputStyle, padding: "2px 6px", fontSize: 12 }}
+                          placeholder="Попыток"
+                        />
+                        <label style={{ fontSize: 11, display: "flex", gap: 4, alignItems: "center" }}>
+                          <input
+                            type="checkbox" checked={form.solved}
+                            onChange={(e) => setForm((f) => ({ ...f, solved: e.target.checked }))}
+                          />
+                          угадал
+                        </label>
+                        <input
+                          placeholder="Причина (обязательно)" value={form.note}
+                          onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
+                          style={{ ...inputStyle, padding: "2px 6px", fontSize: 12 }}
+                        />
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <button onClick={handleSave} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
+                          <button onClick={() => setEditing(null)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>Отмена</button>
+                        </div>
+                      </div>
+                    </td>
+                  );
+                }
+                return (
+                  <td
+                    key={i}
+                    onClick={() => startEdit(r.participant_id, day, d)}
+                    title={d.admin_note ? `Скорректировано: ${d.admin_note}` : "Клик — скорректировать"}
+                    style={{ ...tdStyle, textAlign: "center", cursor: "pointer" }}
+                  >
+                    {d.played ? d.points : standings.skip_flag_symbol}
+                    {d.admin_note && <sup style={{ color: "#e5a94c" }}>✎</sup>}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>
@@ -488,6 +563,9 @@ function StandingsPanel({ tournament }) {
 function TiebreakPanel({ tournament }) {
   const [rounds, setRounds] = useState(null);
   const [error, setError] = useState("");
+  const [overridingRoundId, setOverridingRoundId] = useState(null);
+  const [ranks, setRanks] = useState({});
+  const [orderNote, setOrderNote] = useState("");
 
   async function refresh() {
     try {
@@ -508,6 +586,32 @@ function TiebreakPanel({ tournament }) {
     try {
       const res = await api(`/api/admin/tournaments/${tournament.id}/tiebreak/start`, { method: "POST" });
       if (!res.started) setError("Тай-брейк не нужен — равных мест на границе сетки нет.");
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  function startOverride(round) {
+    setError("");
+    setOverridingRoundId(round.id);
+    const initial = {};
+    round.participants.forEach((p, i) => { initial[p.entry_id] = i + 1; });
+    setRanks(initial);
+    setOrderNote("");
+  }
+
+  async function handleSubmitOrder(round) {
+    setError("");
+    try {
+      const order = [...round.participants]
+        .sort((a, b) => (Number(ranks[a.entry_id]) || 0) - (Number(ranks[b.entry_id]) || 0))
+        .map((p) => p.entry_id);
+      await api(`/api/admin/tiebreak/rounds/${round.id}/override`, {
+        method: "POST",
+        body: JSON.stringify({ order, note: orderNote }),
+      });
+      setOverridingRoundId(null);
       refresh();
     } catch (e) {
       setError(e.message);
@@ -535,6 +639,9 @@ function TiebreakPanel({ tournament }) {
             Раунд {r.round_number}{r.previous_round_id ? ` (продолжение раунда #${r.previous_round_id})` : ""} ·{" "}
             слово: <b style={{ textTransform: "uppercase" }}>{r.word}</b> ·{" "}
             {r.completed ? "завершён" : "идёт"}
+            {r.manual_order && (
+              <span title={`Скорректировано: ${r.admin_note}`} style={{ color: "#e5a94c" }}> ✎ порядок задан вручную</span>
+            )}
           </div>
           <table style={{ borderCollapse: "collapse", fontSize: 13 }}>
             <tbody>
@@ -544,10 +651,41 @@ function TiebreakPanel({ tournament }) {
                   <td style={tdStyle}>
                     {p.attempts_used == null ? "ещё не играл" : `${p.solved ? "угадал" : "не угадал"} за ${p.attempts_used}`}
                   </td>
+                  {overridingRoundId === r.id && (
+                    <td style={tdStyle}>
+                      <input
+                        type="number" min={1} value={ranks[p.entry_id] || ""}
+                        onChange={(e) => setRanks((prev) => ({ ...prev, [p.entry_id]: e.target.value }))}
+                        style={{ ...inputStyle, width: 50, padding: "2px 6px", fontSize: 12 }}
+                        placeholder="Место"
+                      />
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
+          {overridingRoundId === r.id ? (
+            <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
+              <input
+                placeholder="Причина (обязательно)" value={orderNote}
+                onChange={(e) => setOrderNote(e.target.value)}
+                style={{ ...inputStyle, padding: "4px 8px", fontSize: 12, flex: 1 }}
+              />
+              <button
+                onClick={() => handleSubmitOrder(r)}
+                disabled={!orderNote.trim()}
+                style={{ ...buttonStyle, padding: "4px 10px", fontSize: 12 }}
+              >
+                Сохранить порядок
+              </button>
+              <button onClick={() => setOverridingRoundId(null)} style={{ ...ghostButtonStyle, padding: "4px 10px", fontSize: 12 }}>Отмена</button>
+            </div>
+          ) : (
+            <button onClick={() => startOverride(r)} style={{ ...ghostButtonStyle, padding: "4px 10px", fontSize: 12, marginTop: 8 }}>
+              Задать порядок вручную
+            </button>
+          )}
         </div>
       ))}
     </div>
@@ -561,6 +699,8 @@ function BracketPanel({ tournament }) {
   const [matches, setMatches] = useState(null);
   const [pairSelections, setPairSelections] = useState([]);
   const [error, setError] = useState("");
+  const [overriding, setOverriding] = useState(null); // matchId | null
+  const [overrideNote, setOverrideNote] = useState("");
 
   async function refresh() {
     try {
@@ -616,6 +756,21 @@ function BracketPanel({ tournament }) {
     }
   }
 
+  async function handleOverride(matchId, winnerEntryId) {
+    setError("");
+    try {
+      await api(`/api/admin/bracket/matches/${matchId}/override`, {
+        method: "POST",
+        body: JSON.stringify({ winner_entry_id: winnerEntryId, note: overrideNote }),
+      });
+      setOverriding(null);
+      setOverrideNote("");
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   const bracketExists = matches && matches.length > 0;
 
   return (
@@ -661,8 +816,41 @@ function BracketPanel({ tournament }) {
                   <td style={tdStyle}>{m.entry_b_callsign || "?"}</td>
                   <td style={{ ...tdStyle, opacity: 0.7 }}>
                     {m.winner_entry_id
-                      ? `победил: ${m.winner_entry_id === m.entry_a_id ? m.entry_a_callsign : m.entry_b_callsign}`
+                      ? <>победил: {m.winner_entry_id === m.entry_a_id ? m.entry_a_callsign : m.entry_b_callsign}
+                        {m.admin_note && <sup title={`Скорректировано: ${m.admin_note}`} style={{ color: "#e5a94c" }}> ✎</sup>}</>
                       : MATCH_STATUS_LABEL[m.status] || m.status}
+                  </td>
+                  <td style={tdStyle}>
+                    {!m.winner_entry_id && m.status !== "finished" && (
+                      overriding === m.id ? (
+                        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                          <input
+                            placeholder="Причина" value={overrideNote}
+                            onChange={(e) => setOverrideNote(e.target.value)}
+                            style={{ ...inputStyle, padding: "2px 6px", fontSize: 12, width: 100 }}
+                          />
+                          <button
+                            onClick={() => handleOverride(m.id, m.entry_a_id)}
+                            disabled={!overrideNote.trim()}
+                            style={{ ...ghostButtonStyle, padding: "2px 6px", fontSize: 11 }}
+                          >
+                            Победил {m.entry_a_callsign || "A"}
+                          </button>
+                          <button
+                            onClick={() => handleOverride(m.id, m.entry_b_id)}
+                            disabled={!overrideNote.trim()}
+                            style={{ ...ghostButtonStyle, padding: "2px 6px", fontSize: 11 }}
+                          >
+                            Победил {m.entry_b_callsign || "B"}
+                          </button>
+                          <button onClick={() => { setOverriding(null); setOverrideNote(""); }} style={{ ...ghostButtonStyle, padding: "2px 6px", fontSize: 11 }}>×</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setOverriding(m.id)} style={{ ...ghostButtonStyle, padding: "2px 6px", fontSize: 11 }}>
+                          Назначить победителя
+                        </button>
+                      )
+                    )}
                   </td>
                 </tr>
               ))}

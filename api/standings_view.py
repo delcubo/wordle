@@ -41,7 +41,7 @@ async def compute_standings(session: AsyncSession, tournament: Tournament) -> li
                 finished = attempt.solved or attempt.attempts_used >= 6
                 if finished:
                     daily_results[day_number][p.id] = ParticipantDayResult(
-                        p.id, p.callsign, played=True, points=attempt.points
+                        p.id, p.callsign, played=True, points=attempt.points, admin_note=attempt.admin_note
                     )
                 else:
                     daily_results[day_number][p.id] = ParticipantDayResult(

@@ -166,6 +166,10 @@ class Attempt(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # заполнено, только если результат этого дня скорректирован админом вручную
+    # (см. api/routers/admin.py::override_attempt) — не пусто = не "естественный" результат
+    admin_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
     entry: Mapped["TournamentEntry"] = relationship(back_populates="attempts")
     daily_word: Mapped["DailyWord"] = relationship(back_populates="attempts")
 
@@ -203,6 +207,10 @@ class PlayoffMatch(Base):
 
     next_match_id: Mapped[int | None] = mapped_column(ForeignKey("playoff_matches.id"), nullable=True)
     scheduled_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    # заполнено, только если победитель назначен админом вручную (зависшая или
+    # спорная пара), а не обычной игрой — см. api/bracket_game.py::override_winner
+    admin_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     games: Mapped[list["PlayoffGame"]] = relationship(back_populates="match")
 
@@ -265,6 +273,12 @@ class TiebreakRound(Base):
     round_number: Mapped[int] = mapped_column(Integer, default=1)
     previous_round_id: Mapped[int | None] = mapped_column(ForeignKey("tiebreak_rounds.id"), nullable=True)
     completed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # заполнено, только если порядок группы назначен админом вручную (зависший
+    # раунд — например, никто из группы не сыграл) — см. api/tiebreak.py::override_round_order.
+    # Когда задано, _resolve_group_order отдаёт его как есть, минуя пересчёт по попыткам.
+    manual_order: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    admin_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     daily_word: Mapped["DailyWord"] = relationship()
     participants: Mapped[list["TiebreakParticipant"]] = relationship(back_populates="round")

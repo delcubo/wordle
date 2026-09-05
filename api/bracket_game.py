@@ -159,6 +159,32 @@ async def resolve_ready_matches(session: AsyncSession, tournament: Tournament) -
         await resolve_match_if_ready(session, tournament, match)
 
 
+async def override_winner(
+    session: AsyncSession, tournament: Tournament, match: PlayoffMatch, winner_entry_id: int, note: str
+) -> PlayoffMatch:
+    """
+    Ручное назначение победителя пары (зависшая — оба не явились — или спорная
+    пара). Разрешено только пока пара не завершена обычной игрой: победитель
+    уже завершённой пары мог пойти дальше и, возможно, уже сыграть следующий
+    раунд — откатывать это назад мы не пытаемся.
+    """
+    if match.status == PlayoffMatchStatus.finished:
+        raise ValueError("Эта пара уже завершена — исход можно поменять только напрямую в БД")
+    if winner_entry_id not in (match.entry_a_id, match.entry_b_id):
+        raise ValueError("Победителем можно назначить только одного из участников этой пары")
+    if not note.strip():
+        raise ValueError("Нужно указать причину корректировки")
+
+    match.winner_entry_id = winner_entry_id
+    match.status = PlayoffMatchStatus.finished
+    match.admin_note = note.strip()
+    session.add(match)
+    await session.commit()
+
+    await _advance_winner(session, tournament, match)
+    return match
+
+
 async def get_player_view(session: AsyncSession, tournament: Tournament, entry) -> dict:
     """Статус текущего матча сетки для конкретного участника — для игровой страницы."""
     matches = await crud.list_playoff_matches_for_entry(session, tournament.id, entry.id)

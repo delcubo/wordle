@@ -258,6 +258,38 @@ async def get_or_create_attempt(session: AsyncSession, entry_id: int, daily_word
     return attempt
 
 
+async def override_attempt(
+    session: AsyncSession,
+    entry_id: int,
+    daily_word_id: int,
+    attempts_used: int,
+    solved: bool,
+    points: int,
+    note: str,
+) -> Attempt:
+    """
+    Создаёт или перезаписывает Attempt результатом, заданным админом вручную
+    (исправление ошибки или зачёт дня, который участник не мог сыграть) —
+    см. api/routers/admin.py::override_day_result. Реальные guesses при этом
+    не восстанавливаются, только итог (сколько попыток, угадал ли, очки).
+    """
+    from datetime import datetime
+
+    attempt = await get_attempt(session, entry_id, daily_word_id)
+    if attempt is None:
+        attempt = Attempt(entry_id=entry_id, daily_word_id=daily_word_id, guesses=[])
+    attempt.attempts_used = attempts_used
+    attempt.solved = solved
+    attempt.points = points
+    attempt.admin_note = note
+    if attempt.finished_at is None:
+        attempt.finished_at = datetime.utcnow()
+    session.add(attempt)
+    await session.commit()
+    await session.refresh(attempt)
+    return attempt
+
+
 async def list_attempts_for_tournament(session: AsyncSession, tournament_id: int) -> list[Attempt]:
     result = await session.execute(
         select(Attempt)

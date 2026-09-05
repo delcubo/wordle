@@ -155,6 +155,7 @@ class GuessResponse(BaseModel):
 class DailyCell(BaseModel):
     played: bool
     points: int | None
+    admin_note: str | None = None
 
 
 class StandingsRowOut(BaseModel):
@@ -188,11 +189,18 @@ class TiebreakRoundOut(BaseModel):
     word: str
     calendar_date: date
     participants: list[TiebreakParticipantOut]
+    manual_order: list[int] | None = None
+    admin_note: str | None = None
 
 
 class TiebreakStartResponse(BaseModel):
     started: bool
     rounds_created: int
+
+
+class TiebreakOverrideRequest(BaseModel):
+    order: list[int]  # entry_id всех участников раунда, от лучшего к худшему
+    note: str
 
 
 # ---------- Сетка плей-офф ----------
@@ -208,7 +216,30 @@ class PlayoffMatchOut(BaseModel):
     winner_entry_id: int | None
     status: str
     scheduled_date: date | None
+    admin_note: str | None = None
 
 
 class BracketRound1Request(BaseModel):
     pairs: list[tuple[int, int]]  # (entry_a_id, entry_b_id) для каждой пары раунда 1
+
+
+class MatchOverrideRequest(BaseModel):
+    winner_entry_id: int
+    note: str
+
+
+# ---------- Ручная корректировка результата дня ----------
+
+class DayResultOverrideRequest(BaseModel):
+    attempts_used: int
+    solved: bool
+    note: str
+
+
+class DayResultOverrideResponse(BaseModel):
+    entry_id: int
+    day_number: int
+    attempts_used: int
+    solved: bool
+    points: int
+    admin_note: str

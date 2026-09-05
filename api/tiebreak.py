@@ -4,10 +4,13 @@
 и их разрешение по мере того, как участники доигрывают общее слово.
 
 Раунд можно разрешить, когда либо все участники доиграли слово, либо наступил
-дедлайн (день раунда уже прошёл) — тогда не сыгравшие считаются не угадавшими
-за все 6 попыток, как техническое поражение в сетке. Если после разрешения
+дедлайн (день раунда уже прошёл). На дедлайне тот, кто вообще не сделал ни
+одной попытки, всегда ставится ниже того, кто играл и не угадал за все 6 —
+неявка хуже участия, даже неудачного (см. _result_key). Если после разрешения
 раунда часть группы всё ещё совпадает — для неё сразу заводится продолжение
-(новое слово того же дня, см. create_tiebreak_round), играть можно немедленно.
+(новое слово того же дня, см. create_tiebreak_round), играть можно немедленно;
+исключение — если совпадение вызвано тем, что вся подгруппа не участвовала
+вовсе: новый раунд тут не поможет (играть некому), нужна ручная доигровка.
 
 compute_final_order() восстанавливает итоговый порядок участников по цепочкам
 разрешённых раундов — им пользуется генерация сетки плей-офф (api/bracket.py).
@@ -63,12 +66,28 @@ async def resolve_ready_rounds(session: AsyncSession, tournament: Tournament) ->
         await _try_resolve_round(session, tournament, round_)
 
 
-async def _result_key(session: AsyncSession, entry_id: int, daily_word_id: int) -> tuple[bool, int] | None:
-    """(solved, attempts_used) для законченной попытки, иначе None (ещё играет/не начинал)."""
+async def _result_key(
+    session: AsyncSession, entry_id: int, daily_word_id: int, *, finalize: bool
+) -> tuple[bool, bool, int] | None:
+    """
+    (не участвовал вовсе, не угадал, число попыток) — меньше значит лучше.
+    Участник, который не сделал ни одной попытки, всегда хуже того, кто играл
+    и не угадал за все 6 — даже на дедлайне оба не "закончили удачно", но один
+    хотя бы принял участие.
+
+    Пока finalize=False, недоигранная попытка (или её полное отсутствие) даёт
+    None — сигнал подождать. finalize=True вызывается только после дедлайна и
+    всегда возвращает окончательный ключ, засчитывая неявку как участие не
+    принявшего и недоигранную попытку как есть (сколько успел).
+    """
     attempt = await crud.get_attempt(session, entry_id, daily_word_id)
     if attempt is not None and (attempt.solved or attempt.attempts_used >= 6):
-        return (attempt.solved, attempt.attempts_used)
-    return None
+        return (False, not attempt.solved, attempt.attempts_used)
+    if not finalize:
+        return None
+    if attempt is None:
+        return (True, True, 6)  # не сделал ни одной попытки — хуже всех
+    return (False, True, attempt.attempts_used)  # начал, но не успел доиграть до дедлайна
 
 
 async def _try_resolve_round(session: AsyncSession, tournament: Tournament, round_: TiebreakRound) -> None:
@@ -76,28 +95,34 @@ async def _try_resolve_round(session: AsyncSession, tournament: Tournament, roun
     deadline_passed = daily_word.calendar_date < today()
 
     participants = await crud.list_tiebreak_participants(session, round_.id)
-    results: dict[int, tuple[bool, int]] = {}
+    keys: dict[int, tuple[bool, bool, int] | None] = {}
     all_finished = True
     for p in participants:
-        key = await _result_key(session, p.entry_id, daily_word.id)
+        key = await _result_key(session, p.entry_id, daily_word.id, finalize=False)
         if key is None:
             all_finished = False
-            key = (False, 6)  # используется, только если наступил дедлайн
-        results[p.entry_id] = key
+        keys[p.entry_id] = key
 
     if not all_finished and not deadline_passed:
         return  # ждём, пока доиграют остальные
+
+    if not all_finished:
+        for p in participants:
+            if keys[p.entry_id] is None:
+                keys[p.entry_id] = await _result_key(session, p.entry_id, daily_word.id, finalize=True)
 
     round_.completed = True
     session.add(round_)
     await session.commit()
 
-    still_tied: dict[tuple[bool, int], list[int]] = {}
-    for entry_id, key in results.items():
+    still_tied: dict[tuple[bool, bool, int], list[int]] = {}
+    for entry_id, key in keys.items():
         still_tied.setdefault(key, []).append(entry_id)
 
-    for entry_ids in still_tied.values():
-        if len(entry_ids) > 1:
+    for key, entry_ids in still_tied.items():
+        # если ничья только потому, что вся подгруппа вообще не участвовала —
+        # новый раунд её не разрешит (играть некому), нужна ручная доигровка
+        if len(entry_ids) > 1 and not key[0]:
             await crud.create_tiebreak_round(session, tournament, entry_ids, previous_round_id=round_.id)
 
 
@@ -139,15 +164,19 @@ async def compute_final_order(session: AsyncSession, tournament: Tournament) -> 
 async def _resolve_group_order(session: AsyncSession, round_: TiebreakRound) -> list[int]:
     """Порядок участников (лучший первым) для группы, разрешаемой цепочкой
     раундов, начинающейся с round_. Рекурсивно спускается в продолжения."""
+    if round_.manual_order is not None:
+        return round_.manual_order  # админ уже назначил порядок вручную — пересчёт не нужен
+
     if not round_.completed:
         raise ValueError(f"Раунд тай-брейка #{round_.id} ещё не завершён")
 
     daily_word = await crud.get_daily_word_by_id(session, round_.daily_word_id)
     participants = await crud.list_tiebreak_participants(session, round_.id)
 
-    keyed: dict[tuple[bool, int], list[int]] = {}
+    keyed: dict[tuple[bool, bool, int], list[int]] = {}
     for p in participants:
-        key = await _result_key(session, p.entry_id, daily_word.id) or (False, 6)
+        # раунд уже завершён, значит финальный ключ для каждого участника уже определён
+        key = await _result_key(session, p.entry_id, daily_word.id, finalize=True)
         keyed.setdefault(key, []).append(p.entry_id)
 
     children_by_group = {}
@@ -155,9 +184,9 @@ async def _resolve_group_order(session: AsyncSession, round_: TiebreakRound) -> 
         child_participants = await crud.list_tiebreak_participants(session, child.id)
         children_by_group[frozenset(p.entry_id for p in child_participants)] = child
 
-    # сортировка ключей: сначала решившие, затем по возрастанию числа попыток
+    # ключи уже в порядке "меньше — лучше" (False < True), сортировка по кортежу напрямую
     order: list[int] = []
-    for key in sorted(keyed.keys(), key=lambda k: (not k[0], k[1])):
+    for key in sorted(keyed.keys()):
         entry_ids = keyed[key]
         if len(entry_ids) == 1:
             order.append(entry_ids[0])
@@ -168,6 +197,34 @@ async def _resolve_group_order(session: AsyncSession, round_: TiebreakRound) -> 
         order.extend(await _resolve_group_order(session, child))
 
     return order
+
+
+async def override_round_order(
+    session: AsyncSession, tournament: Tournament, round_: TiebreakRound, order: list[int], note: str
+) -> TiebreakRound:
+    """
+    Ручное назначение порядка участников раунда (например, если он завис —
+    никто из подгруппы не сыграл, и новый раунд играть некому). Разрешено
+    только пока сетка плей-офф ещё не сгенерирована — иначе порядок мог уже
+    повлиять на посев, который задним числом не пересобирается.
+    """
+    if await crud.list_playoff_matches(session, tournament.id):
+        raise ValueError("Сетка плей-офф уже сгенерирована — менять порядок тай-брейка поздно")
+    if not note.strip():
+        raise ValueError("Нужно указать причину корректировки")
+
+    participants = await crud.list_tiebreak_participants(session, round_.id)
+    expected = {p.entry_id for p in participants}
+    if set(order) != expected or len(order) != len(expected):
+        raise ValueError("Порядок должен содержать ровно всех участников этого раунда, без повторов")
+
+    round_.manual_order = order
+    round_.completed = True
+    round_.admin_note = note.strip()
+    session.add(round_)
+    await session.commit()
+    await session.refresh(round_)
+    return round_
 
 
 async def get_rounds_view(session: AsyncSession, tournament_id: int) -> list[dict]:
@@ -196,5 +253,7 @@ async def get_rounds_view(session: AsyncSession, tournament_id: int) -> list[dic
             "word": daily_word.word,
             "calendar_date": daily_word.calendar_date,
             "participants": participant_views,
+            "manual_order": round_.manual_order,
+            "admin_note": round_.admin_note,
         })
     return views

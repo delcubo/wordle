@@ -15,12 +15,14 @@ from api.schemas import (
     EntryCreateRequest, EntryOut, EntryEditRequest,
     DailyWordOut, ConfirmWordRequest,
     StandingsResponse, StandingsRowOut, DailyCell,
-    TiebreakRoundOut, TiebreakParticipantOut, TiebreakStartResponse,
-    PlayoffMatchOut, BracketRound1Request,
+    TiebreakRoundOut, TiebreakParticipantOut, TiebreakStartResponse, TiebreakOverrideRequest,
+    PlayoffMatchOut, BracketRound1Request, MatchOverrideRequest,
+    DayResultOverrideRequest, DayResultOverrideResponse,
 )
-from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry
+from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry, PlayoffMatch, TiebreakRound
 from api.admin_auth import check_password, create_session_token, require_admin, COOKIE_NAME
 from api.dictionary import validate_manual_word
+from api.scoring import calculate_points
 from api.tournament_time import today, day_number_for_date
 from api import crud, tiebreak, bracket, bracket_game
 from api.standings_view import compute_standings
@@ -256,12 +258,51 @@ async def get_standings(tournament_id: int, session: AsyncSession = Depends(get_
                 callsign=r.callsign,
                 total_points=r.total_points,
                 place=r.place,
-                daily=[DailyCell(played=d.played, points=d.points) for d in r.daily],
+                daily=[DailyCell(played=d.played, points=d.points, admin_note=d.admin_note) for d in r.daily],
             )
             for r in rows
         ],
         total_days=tournament.duration_days,
         skip_flag_symbol=tournament.skip_flag_symbol,
+    )
+
+
+@router.post("/entries/{entry_id}/days/{day_number}/override", response_model=DayResultOverrideResponse)
+async def override_day_result(
+    entry_id: int, day_number: int, payload: DayResultOverrideRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """
+    Ручная корректировка результата дня для одного участника — правит ошибку
+    в записи или засчитывает день, который участник не мог сыграть. Таблица
+    ничего отдельно не хранит — пересчитывается как обычно, уже с этим Attempt.
+    """
+    entry = await session.get(TournamentEntry, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Участие не найдено")
+    tournament = await crud.get_tournament(session, entry.tournament_id)
+    if tournament is None or tournament.duration_days is None:
+        raise HTTPException(status_code=400, detail="Для этого розыгрыша нет дней с очками")
+    if day_number < 1 or day_number > tournament.duration_days:
+        raise HTTPException(status_code=400, detail=f"День должен быть от 1 до {tournament.duration_days}")
+    if not (1 <= payload.attempts_used <= 6):
+        raise HTTPException(status_code=400, detail="Число попыток должно быть от 1 до 6")
+    note = payload.note.strip()
+    if not note:
+        raise HTTPException(status_code=400, detail="Нужно указать причину корректировки")
+
+    daily_word = await crud.get_or_suggest_daily_word(session, tournament, day_number)
+    points = calculate_points(payload.attempts_used, payload.solved, tournament.scoring_rules)
+    attempt = await crud.override_attempt(
+        session, entry.id, daily_word.id, payload.attempts_used, payload.solved, points, note
+    )
+    return DayResultOverrideResponse(
+        entry_id=entry.id,
+        day_number=day_number,
+        attempts_used=attempt.attempts_used,
+        solved=attempt.solved,
+        points=attempt.points,
+        admin_note=attempt.admin_note,
     )
 
 
@@ -279,6 +320,20 @@ async def start_tiebreak(tournament_id: int, session: AsyncSession = Depends(get
     return TiebreakStartResponse(started=len(rounds) > 0, rounds_created=len(rounds))
 
 
+def _tiebreak_round_response(r: dict) -> TiebreakRoundOut:
+    return TiebreakRoundOut(
+        id=r["id"],
+        round_number=r["round_number"],
+        previous_round_id=r["previous_round_id"],
+        completed=r["completed"],
+        word=r["word"],
+        calendar_date=r["calendar_date"],
+        participants=[TiebreakParticipantOut(**p) for p in r["participants"]],
+        manual_order=r["manual_order"],
+        admin_note=r["admin_note"],
+    )
+
+
 @router.get("/tournaments/{tournament_id}/tiebreak", response_model=list[TiebreakRoundOut])
 async def get_tiebreak_state(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
     tournament = await crud.get_tournament(session, tournament_id)
@@ -290,18 +345,29 @@ async def get_tiebreak_state(tournament_id: int, session: AsyncSession = Depends
     await tiebreak.resolve_ready_rounds(session, tournament)
 
     rounds = await tiebreak.get_rounds_view(session, tournament_id)
-    return [
-        TiebreakRoundOut(
-            id=r["id"],
-            round_number=r["round_number"],
-            previous_round_id=r["previous_round_id"],
-            completed=r["completed"],
-            word=r["word"],
-            calendar_date=r["calendar_date"],
-            participants=[TiebreakParticipantOut(**p) for p in r["participants"]],
-        )
-        for r in rounds
-    ]
+    return [_tiebreak_round_response(r) for r in rounds]
+
+
+@router.post("/tiebreak/rounds/{round_id}/override", response_model=TiebreakRoundOut)
+async def override_tiebreak_round(
+    round_id: int, payload: TiebreakOverrideRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    round_ = await session.get(TiebreakRound, round_id)
+    if round_ is None:
+        raise HTTPException(status_code=404, detail="Раунд тай-брейка не найден")
+    tournament = await crud.get_tournament(session, round_.tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+
+    try:
+        await tiebreak.override_round_order(session, tournament, round_, payload.order, payload.note)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    rounds = await tiebreak.get_rounds_view(session, tournament.id)
+    updated = next(r for r in rounds if r["id"] == round_.id)
+    return _tiebreak_round_response(updated)
 
 
 # ---------- Сетка плей-офф ----------
@@ -348,3 +414,25 @@ async def get_bracket(tournament_id: int, session: AsyncSession = Depends(get_se
     await bracket_game.resolve_ready_matches(session, tournament)
 
     return _bracket_response(await bracket.get_bracket_view(session, tournament_id))
+
+
+@router.post("/bracket/matches/{match_id}/override", response_model=PlayoffMatchOut)
+async def override_match(
+    match_id: int, payload: MatchOverrideRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    match = await session.get(PlayoffMatch, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Пара не найдена")
+    tournament = await crud.get_tournament(session, match.tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+
+    try:
+        await bracket_game.override_winner(session, tournament, match, payload.winner_entry_id, payload.note)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    rows = await bracket.get_bracket_view(session, tournament.id)
+    updated = next(r for r in rows if r["id"] == match.id)
+    return PlayoffMatchOut(**updated)
