@@ -90,13 +90,19 @@ async def set_knockout_round1(
 async def _create_round(
     session: AsyncSession, tournament_id: int, round_number: int, pairs: list[tuple[int, int]], scheduled_date
 ) -> list[PlayoffMatch]:
+    """
+    Создаёт пары раунда и сразу первую игру для каждой — не откладываем её
+    создание до первого захода игрока, иначе дедлайн ("не сыграл до начала
+    следующего дня — техническое поражение") не от чего было бы отсчитывать,
+    если оба долго не заходят.
+    """
     matches = []
     for position, (entry_a, entry_b) in enumerate(pairs):
-        matches.append(
-            await crud.create_playoff_match(
-                session, tournament_id, round_number, position, entry_a, entry_b, scheduled_date
-            )
+        match = await crud.create_playoff_match(
+            session, tournament_id, round_number, position, entry_a, entry_b, scheduled_date
         )
+        await crud.create_playoff_game(session, tournament_id, match.id, 1, scheduled_date or today())
+        matches.append(match)
     return matches
 
 

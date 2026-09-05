@@ -8,13 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_session
-from api.schemas import TodayWordStatus, GuessRequest, GuessResponse, LetterState, MyTournamentOut
+from api.schemas import TodayWordStatus, GuessRequest, GuessResponse, LetterState, MyTournamentOut, BracketTodayStatus
 from api.wordle_logic import check_guess, is_solved
 from api.scoring import calculate_points
 from api.dictionary import is_valid_word
 from api.tournament_time import today, day_number_for_date
-from api.models import TournamentType, TournamentStatus
-from api import crud, tiebreak
+from api.models import TournamentType, TournamentStatus, PlayoffMatchStatus
+from api import crud, tiebreak, bracket_game
 
 router = APIRouter(prefix="/game", tags=["game"])
 
@@ -72,7 +72,8 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
 
     if tournament.type == TournamentType.knockout:
-        # обычного "слова дня" вне сетки нет — эта логика в следующем этапе
+        # у knockout нет слова дня вне сетки вообще — играют только через
+        # /game/bracket/today и /game/bracket/guess, с первого дня
         return entry, tournament, None
 
     if tournament.status == TournamentStatus.tiebreak:
@@ -164,4 +165,63 @@ async def submit_guess(payload: GuessRequest, session: AsyncSession = Depends(ge
         attempts_remaining=MAX_ATTEMPTS - attempts_used,
         game_over=game_over,
         points=points,
+    )
+
+
+# ---------- Сетка плей-офф (championship после посева, knockout всегда) ----------
+
+@router.get("/bracket/today", response_model=BracketTodayStatus)
+async def get_bracket_today(token: str, tournament_id: int, session: AsyncSession = Depends(get_session)):
+    user = await _authenticate_user(session, token)
+    entry = await crud.get_entry(session, tournament_id, user.id)
+    if entry is None:
+        raise HTTPException(status_code=403, detail="Вы не участвуете в этом розыгрыше")
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+
+    # тот же лениво-вычисляемый паттерн, что и у слова дня/тай-брейка: пары,
+    # чей дедлайн уже прошёл, разрешаются прямо при заходе игрока
+    await bracket_game.resolve_ready_matches(session, tournament)
+
+    view = await bracket_game.get_player_view(session, tournament, entry)
+    return BracketTodayStatus(**view, callsign=entry.callsign, tournament_title=tournament.title)
+
+
+@router.post("/bracket/guess", response_model=GuessResponse)
+async def submit_bracket_guess(payload: GuessRequest, session: AsyncSession = Depends(get_session)):
+    guess = payload.guess.strip().lower()
+
+    if len(guess) != 5:
+        raise HTTPException(status_code=400, detail="Слово должно быть из 5 букв")
+    if not is_valid_word(guess):
+        raise HTTPException(status_code=400, detail="Такого слова нет в словаре")
+
+    user = await _authenticate_user(session, payload.token)
+    entry = await crud.get_entry(session, payload.tournament_id, user.id)
+    if entry is None:
+        raise HTTPException(status_code=403, detail="Вы не участвуете в этом розыгрыше")
+    tournament = await crud.get_tournament(session, payload.tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+
+    matches = await crud.list_playoff_matches_for_entry(session, tournament.id, entry.id)
+    active_matches = [m for m in matches if m.status != PlayoffMatchStatus.finished]
+    if not active_matches:
+        raise HTTPException(status_code=400, detail="У вас сейчас нет активного матча сетки")
+
+    try:
+        statuses, solved, attempts_used, game_over = await bracket_game.submit_guess(
+            session, tournament, active_matches[0], entry.id, guess
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return GuessResponse(
+        result=[LetterState(letter=g, state=s) for g, s in zip(guess, statuses)],
+        solved=solved,
+        attempts_used=attempts_used,
+        attempts_remaining=MAX_ATTEMPTS - attempts_used,
+        game_over=game_over,
+        points=None,
     )

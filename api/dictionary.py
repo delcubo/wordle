@@ -48,6 +48,20 @@ def pick_word_for_day(tournament_id: int, day_number: int, already_used: set[str
     return rng.choice(candidates)
 
 
+def pick_word_for_match(match_id: int, game_number: int, already_used: set[str]) -> str:
+    """
+    Детерминированный выбор слова для конкретной игры внутри пары сетки —
+    аналог pick_word_for_day, но сид строится из id пары и номера игры (у пар
+    нет единого "номера дня розыгрыша", как у обычных дней).
+    """
+    words = load_words()
+    rng = random.Random(f"match:{match_id}:{game_number}")
+    candidates = [w for w in words if w not in already_used]
+    if not candidates:
+        raise RuntimeError("Словарь исчерпан — слов для новой игры сетки не осталось")
+    return rng.choice(candidates)
+
+
 def pick_alternative_word(already_used: set[str], exclude: str | None = None) -> str:
     """
     Выбор нового случайного предложения взамен текущего (кнопка "предложить

@@ -22,7 +22,7 @@ from api.models import Tournament, TournamentStatus, TournamentType, User, Tourn
 from api.admin_auth import check_password, create_session_token, require_admin, COOKIE_NAME
 from api.dictionary import validate_manual_word
 from api.tournament_time import today, day_number_for_date
-from api import crud, tiebreak, bracket
+from api import crud, tiebreak, bracket, bracket_game
 from api.standings_view import compute_standings
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -342,4 +342,9 @@ async def get_bracket(tournament_id: int, session: AsyncSession = Depends(get_se
     tournament = await crud.get_tournament(session, tournament_id)
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+
+    # тот же лениво-вычисляемый паттерн, что и у тай-брейка: пары с истёкшим
+    # дедлайном разрешаются прямо при просмотре админом
+    await bracket_game.resolve_ready_matches(session, tournament)
+
     return _bracket_response(await bracket.get_bracket_view(session, tournament_id))

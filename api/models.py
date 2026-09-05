@@ -208,7 +208,16 @@ class PlayoffMatch(Base):
 
 
 class PlayoffGame(Base):
-    """Один раунд игры внутри пары (обычный раунд или sudden death при ничьей)."""
+    """
+    Один раунд игры внутри пары (обычный раунд или sudden death при ничьей).
+    В отличие от обычного дня, обе стороны хранятся прямо в этой строке (а не
+    через DailyWord/Attempt) — пара всегда ровно из двух участников.
+
+    calendar_date — день, когда эта конкретная игра стала действующей (для
+    game_number=1 это scheduled_date матча; для sudden death — день, когда
+    обнаружилась ничья). Дедлайн ("начало следующего дня — техническое
+    поражение за неявку") считается от неё же, отдельно для каждой игры.
+    """
     __tablename__ = "playoff_games"
     __table_args__ = (
         UniqueConstraint("match_id", "game_number", name="uq_game_per_match"),
@@ -218,12 +227,15 @@ class PlayoffGame(Base):
     match_id: Mapped[int] = mapped_column(ForeignKey("playoff_matches.id"))
     game_number: Mapped[int] = mapped_column(Integer)
     word: Mapped[str] = mapped_column(String(16))
+    calendar_date: Mapped[date] = mapped_column(Date)
     is_sudden_death: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    entry_a_guesses: Mapped[list] = mapped_column(JSON, default=list)
     entry_a_attempts_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     entry_a_solved: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     entry_a_technical_loss: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    entry_b_guesses: Mapped[list] = mapped_column(JSON, default=list)
     entry_b_attempts_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     entry_b_solved: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     entry_b_technical_loss: Mapped[bool] = mapped_column(Boolean, default=False)

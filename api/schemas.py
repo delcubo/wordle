@@ -114,6 +114,22 @@ class TodayWordStatus(BaseModel):
     tournament_title: str | None = None
 
 
+class BracketTodayStatus(BaseModel):
+    has_match: bool
+    match_finished: bool = False
+    won: bool | None = None
+    opponent_callsign: str | None = None
+    round_number: int | None = None
+    already_played: bool = False
+    attempts_used: int | None = None
+    solved: bool | None = None
+    previous_guesses: list[str] = []
+    max_attempts: int = 6
+    waiting_for_opponent: bool = False
+    callsign: str | None = None
+    tournament_title: str | None = None
+
+
 class GuessRequest(BaseModel):
     token: str
     tournament_id: int

@@ -659,7 +659,9 @@ function BracketPanel({ tournament }) {
                 <td style={tdStyle}>—</td>
                 <td style={tdStyle}>{m.entry_b_callsign || "?"}</td>
                 <td style={{ ...tdStyle, opacity: 0.7 }}>
-                  {m.winner_entry_id ? "победитель определён" : MATCH_STATUS_LABEL[m.status] || m.status}
+                  {m.winner_entry_id
+                    ? `победил: ${m.winner_entry_id === m.entry_a_id ? m.entry_a_callsign : m.entry_b_callsign}`
+                    : MATCH_STATUS_LABEL[m.status] || m.status}
                 </td>
               </tr>
             ))}

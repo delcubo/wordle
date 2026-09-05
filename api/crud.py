@@ -10,9 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models import (
     Tournament, TournamentStatus, TournamentEntry, User, DailyWord, DailyWordStatus, Attempt,
-    TiebreakRound, TiebreakParticipant, PlayoffMatch,
+    TiebreakRound, TiebreakParticipant, PlayoffMatch, PlayoffGame,
 )
-from api.dictionary import pick_word_for_day, pick_alternative_word
+from api.dictionary import pick_word_for_day, pick_alternative_word, pick_word_for_match
 from api.tournament_time import today, day_number_for_date, date_for_day_number
 
 
@@ -438,3 +438,98 @@ async def create_playoff_match(
     await session.commit()
     await session.refresh(match)
     return match
+
+
+async def get_playoff_match_by_position(
+    session: AsyncSession, tournament_id: int, round_number: int, position: int
+) -> PlayoffMatch | None:
+    result = await session.execute(
+        select(PlayoffMatch).where(
+            PlayoffMatch.tournament_id == tournament_id,
+            PlayoffMatch.round_number == round_number,
+            PlayoffMatch.position == position,
+        )
+    )
+    return result.scalars().first()
+
+
+async def list_playoff_matches_for_entry(session: AsyncSession, tournament_id: int, entry_id: int) -> list[PlayoffMatch]:
+    """Все пары сетки этого розыгрыша, где участвует entry — обычно активна не
+    больше одной одновременно (следующий раунд появляется только после победы)."""
+    result = await session.execute(
+        select(PlayoffMatch).where(
+            PlayoffMatch.tournament_id == tournament_id,
+            (PlayoffMatch.entry_a_id == entry_id) | (PlayoffMatch.entry_b_id == entry_id),
+        )
+    )
+    return list(result.scalars().all())
+
+
+# ---------- Игры внутри пары сетки ----------
+
+async def _get_used_playoff_words(session: AsyncSession, tournament_id: int) -> set[str]:
+    result = await session.execute(
+        select(PlayoffGame.word)
+        .join(PlayoffMatch, PlayoffGame.match_id == PlayoffMatch.id)
+        .where(PlayoffMatch.tournament_id == tournament_id)
+    )
+    return {row[0] for row in result.all()}
+
+
+async def get_all_used_words(session: AsyncSession, tournament_id: int) -> set[str]:
+    """Все слова, уже использованные в розыгрыше — обычные дни, тай-брейк
+    (тоже DailyWord) и игры сетки — чтобы новое слово нигде не повторялось."""
+    return await _get_used_words(session, tournament_id) | await _get_used_playoff_words(session, tournament_id)
+
+
+async def list_playoff_games(session: AsyncSession, match_id: int) -> list[PlayoffGame]:
+    result = await session.execute(
+        select(PlayoffGame).where(PlayoffGame.match_id == match_id).order_by(PlayoffGame.game_number)
+    )
+    return list(result.scalars().all())
+
+
+async def create_playoff_game(
+    session: AsyncSession,
+    tournament_id: int,
+    match_id: int,
+    game_number: int,
+    calendar_date: date,
+    is_sudden_death: bool = False,
+) -> PlayoffGame:
+    already_used = await get_all_used_words(session, tournament_id)
+    word = pick_word_for_match(match_id, game_number, already_used)
+    game = PlayoffGame(
+        match_id=match_id,
+        game_number=game_number,
+        word=word,
+        calendar_date=calendar_date,
+        is_sudden_death=is_sudden_death,
+        entry_a_guesses=[],
+        entry_b_guesses=[],
+    )
+    session.add(game)
+    await session.commit()
+    await session.refresh(game)
+    return game
+
+
+async def save_playoff_guess(
+    session: AsyncSession,
+    game: PlayoffGame,
+    side: str,
+    guess: str,
+    solved: bool,
+    finished: bool,
+) -> PlayoffGame:
+    """side — 'a' или 'b', какая сторона пары делает ход."""
+    guesses_field = f"entry_{side}_guesses"
+    guesses = [*getattr(game, guesses_field), guess]
+    setattr(game, guesses_field, guesses)
+    if finished:
+        setattr(game, f"entry_{side}_attempts_used", len(guesses))
+        setattr(game, f"entry_{side}_solved", solved)
+    session.add(game)
+    await session.commit()
+    await session.refresh(game)
+    return game
