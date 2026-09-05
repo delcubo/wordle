@@ -15,12 +15,13 @@ from api.schemas import (
     EntryCreateRequest, EntryOut, EntryEditRequest,
     DailyWordOut, ConfirmWordRequest,
     StandingsResponse, StandingsRowOut, DailyCell,
+    TiebreakRoundOut, TiebreakParticipantOut, TiebreakStartResponse,
 )
 from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry
 from api.admin_auth import check_password, create_session_token, require_admin, COOKIE_NAME
 from api.dictionary import validate_manual_word
 from api.tournament_time import today, day_number_for_date
-from api import crud
+from api import crud, tiebreak
 from api.standings_view import compute_standings
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -261,3 +262,42 @@ async def get_standings(tournament_id: int, session: AsyncSession = Depends(get_
         total_days=tournament.duration_days,
         skip_flag_symbol=tournament.skip_flag_symbol,
     )
+
+
+# ---------- Тай-брейк (championship) ----------
+
+@router.post("/tournaments/{tournament_id}/tiebreak/start", response_model=TiebreakStartResponse)
+async def start_tiebreak(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    try:
+        rounds = await tiebreak.start_tiebreak(session, tournament)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return TiebreakStartResponse(started=len(rounds) > 0, rounds_created=len(rounds))
+
+
+@router.get("/tournaments/{tournament_id}/tiebreak", response_model=list[TiebreakRoundOut])
+async def get_tiebreak_state(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+
+    # тот же лениво-вычисляемый паттерн, что и у слова дня: раунды, чей дедлайн
+    # уже прошёл, разрешаются прямо при просмотре админом, без фоновых задач
+    await tiebreak.resolve_ready_rounds(session, tournament)
+
+    rounds = await tiebreak.get_rounds_view(session, tournament_id)
+    return [
+        TiebreakRoundOut(
+            id=r["id"],
+            round_number=r["round_number"],
+            previous_round_id=r["previous_round_id"],
+            completed=r["completed"],
+            word=r["word"],
+            calendar_date=r["calendar_date"],
+            participants=[TiebreakParticipantOut(**p) for p in r["participants"]],
+        )
+        for r in rounds
+    ]

@@ -4,11 +4,12 @@
 """
 import secrets
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models import (
     Tournament, TournamentStatus, TournamentEntry, User, DailyWord, DailyWordStatus, Attempt,
+    TiebreakRound, TiebreakParticipant,
 )
 from api.dictionary import pick_word_for_day, pick_alternative_word
 from api.tournament_time import today, day_number_for_date, date_for_day_number
@@ -141,6 +142,10 @@ async def edit_entry_callsign(session: AsyncSession, entry_id: int, callsign: st
 
 
 # ---------- Daily words (с подтверждением админом) ----------
+
+async def get_daily_word_by_id(session: AsyncSession, daily_word_id: int) -> DailyWord | None:
+    return await session.get(DailyWord, daily_word_id)
+
 
 async def get_daily_word_by_day(session: AsyncSession, tournament_id: int, day_number: int) -> DailyWord | None:
     result = await session.execute(
@@ -280,3 +285,101 @@ async def save_guess(
     await session.commit()
     await session.refresh(attempt)
     return attempt
+
+
+# ---------- Тай-брейк (championship) ----------
+
+async def _next_free_day_number(session: AsyncSession, tournament_id: int) -> int:
+    result = await session.execute(
+        select(func.max(DailyWord.day_number)).where(DailyWord.tournament_id == tournament_id)
+    )
+    return (result.scalar_one_or_none() or 0) + 1
+
+
+async def create_tiebreak_round(
+    session: AsyncSession, tournament: Tournament, entry_ids: list[int], previous_round_id: int | None = None
+) -> TiebreakRound:
+    """
+    Заводит новое слово (продолжает нумерацию дней розыгрыша дальше duration_days,
+    так что не конфликтует с обычными днями) и раунд тай-брейка на заданных
+    участников. previous_round_id — если это продолжение раунда, часть которого
+    осталась равна между собой после предыдущего слова.
+    """
+    already_used = await _get_used_words(session, tournament.id)
+    day_number = await _next_free_day_number(session, tournament.id)
+    word = pick_word_for_day(tournament.id, day_number, already_used)
+
+    daily_word = DailyWord(
+        tournament_id=tournament.id,
+        day_number=day_number,
+        word=word,
+        calendar_date=today(),
+        status=DailyWordStatus.suggested,
+    )
+    session.add(daily_word)
+    await session.flush()
+
+    round_number = 1
+    if previous_round_id is not None:
+        previous_round = await session.get(TiebreakRound, previous_round_id)
+        if previous_round is not None:
+            round_number = previous_round.round_number + 1
+
+    tiebreak_round = TiebreakRound(
+        tournament_id=tournament.id,
+        daily_word_id=daily_word.id,
+        round_number=round_number,
+        previous_round_id=previous_round_id,
+    )
+    session.add(tiebreak_round)
+    await session.flush()
+
+    for entry_id in entry_ids:
+        session.add(TiebreakParticipant(round_id=tiebreak_round.id, entry_id=entry_id))
+
+    await session.commit()
+    await session.refresh(tiebreak_round)
+    return tiebreak_round
+
+
+async def list_tiebreak_rounds(session: AsyncSession, tournament_id: int) -> list[TiebreakRound]:
+    result = await session.execute(
+        select(TiebreakRound)
+        .where(TiebreakRound.tournament_id == tournament_id)
+        .order_by(TiebreakRound.round_number, TiebreakRound.id)
+    )
+    return list(result.scalars().all())
+
+
+async def list_active_tiebreak_rounds(session: AsyncSession, tournament_id: int) -> list[TiebreakRound]:
+    result = await session.execute(
+        select(TiebreakRound).where(
+            TiebreakRound.tournament_id == tournament_id,
+            TiebreakRound.completed.is_(False),
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def list_tiebreak_participants(session: AsyncSession, round_id: int) -> list[TiebreakParticipant]:
+    result = await session.execute(
+        select(TiebreakParticipant).where(TiebreakParticipant.round_id == round_id)
+    )
+    return list(result.scalars().all())
+
+
+async def get_active_tiebreak_round_for_entry(
+    session: AsyncSession, tournament_id: int, entry_id: int
+) -> TiebreakRound | None:
+    """Раунд тай-брейка, в котором участвует entry и который ещё не завершён —
+    используется, чтобы отдать этому игроку слово тай-брейка как "слово дня"."""
+    result = await session.execute(
+        select(TiebreakRound)
+        .join(TiebreakParticipant, TiebreakParticipant.round_id == TiebreakRound.id)
+        .where(
+            TiebreakRound.tournament_id == tournament_id,
+            TiebreakRound.completed.is_(False),
+            TiebreakParticipant.entry_id == entry_id,
+        )
+    )
+    return result.scalars().first()

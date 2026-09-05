@@ -86,6 +86,7 @@ export default function AdminDashboard() {
                 <EntriesPanel tournament={selected} users={users} />
                 <WordConfirmPanel tournament={selected} />
                 {selected.duration_days != null && <StandingsPanel tournament={selected} />}
+                {selected.type === "championship" && <TiebreakPanel tournament={selected} />}
               </>
             ) : (
               <div style={{ opacity: 0.7 }}>Создайте розыгрыш, чтобы начать.</div>
@@ -477,6 +478,75 @@ function StandingsPanel({ tournament }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function TiebreakPanel({ tournament }) {
+  const [rounds, setRounds] = useState(null);
+  const [error, setError] = useState("");
+
+  async function refresh() {
+    try {
+      setRounds(await api(`/api/admin/tournaments/${tournament.id}/tiebreak`));
+      setError("");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id]);
+
+  async function handleStart() {
+    setError("");
+    try {
+      const res = await api(`/api/admin/tournaments/${tournament.id}/tiebreak/start`, { method: "POST" });
+      if (!res.started) setError("Тай-брейк не нужен — равных мест на границе сетки нет.");
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ marginTop: 0 }}>Тай-брейк</h3>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={handleStart} style={buttonStyle}>Запустить тай-брейк</button>
+          <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+        </div>
+      </div>
+      {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
+      {rounds && rounds.length === 0 && (
+        <div style={{ opacity: 0.7, fontSize: 13 }}>
+          Раундов пока нет — запустите тай-брейк после окончания основного этапа.
+        </div>
+      )}
+      {rounds && rounds.map((r) => (
+        <div key={r.id} style={{ border: "1px solid #3a3a3c", borderRadius: 6, padding: 10, marginTop: 8 }}>
+          <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 4 }}>
+            Раунд {r.round_number}{r.previous_round_id ? ` (продолжение раунда #${r.previous_round_id})` : ""} ·{" "}
+            слово: <b style={{ textTransform: "uppercase" }}>{r.word}</b> ·{" "}
+            {r.completed ? "завершён" : "идёт"}
+          </div>
+          <table style={{ borderCollapse: "collapse", fontSize: 13 }}>
+            <tbody>
+              {r.participants.map((p) => (
+                <tr key={p.entry_id}>
+                  <td style={tdStyle}>{p.callsign}</td>
+                  <td style={tdStyle}>
+                    {p.attempts_used == null ? "ещё не играл" : `${p.solved ? "угадал" : "не угадал"} за ${p.attempts_used}`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
     </div>
   );
 }

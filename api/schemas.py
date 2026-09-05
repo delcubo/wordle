@@ -153,3 +153,27 @@ class StandingsResponse(BaseModel):
     rows: list[StandingsRowOut]
     total_days: int
     skip_flag_symbol: str
+
+
+# ---------- Тай-брейк ----------
+
+class TiebreakParticipantOut(BaseModel):
+    entry_id: int
+    callsign: str
+    solved: bool | None = None
+    attempts_used: int | None = None
+
+
+class TiebreakRoundOut(BaseModel):
+    id: int
+    round_number: int
+    previous_round_id: int | None
+    completed: bool
+    word: str
+    calendar_date: date
+    participants: list[TiebreakParticipantOut]
+
+
+class TiebreakStartResponse(BaseModel):
+    started: bool
+    rounds_created: int

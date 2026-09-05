@@ -13,8 +13,8 @@ from api.wordle_logic import check_guess, is_solved
 from api.scoring import calculate_points
 from api.dictionary import is_valid_word
 from api.tournament_time import today, day_number_for_date
-from api.models import TournamentType
-from api import crud
+from api.models import TournamentType, TournamentStatus
+from api import crud, tiebreak
 
 router = APIRouter(prefix="/game", tags=["game"])
 
@@ -58,7 +58,9 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
     ещё не начался/уже закончился, или тип розыгрыша не подразумевает
     ежедневное слово вне пары (knockout — вне текущей реализации плей-офф).
     endless не имеет duration_days, но, в отличие от knockout, слово дня у него
-    есть всегда, без верхней границы.
+    есть всегда, без верхней границы. Пока розыгрыш в статусе tiebreak, слово
+    дня заменяется словом активного раунда тай-брейка (если участник в него
+    попал) — обычный цикл по duration_days в этот момент уже закончился.
     """
     user = await _authenticate_user(session, token)
     entry = await crud.get_entry(session, tournament_id, user.id)
@@ -72,6 +74,13 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
     if tournament.type == TournamentType.knockout:
         # обычного "слова дня" вне сетки нет — эта логика в следующем этапе
         return entry, tournament, None
+
+    if tournament.status == TournamentStatus.tiebreak:
+        round_ = await crud.get_active_tiebreak_round_for_entry(session, tournament.id, entry.id)
+        if round_ is None:
+            return entry, tournament, None  # не в тай-брейк-группе — просто ждёт итогов
+        daily_word = await crud.get_daily_word_by_id(session, round_.daily_word_id)
+        return entry, tournament, daily_word
 
     day_number = day_number_for_date(tournament.start_date, today())
     if day_number < 1:
@@ -142,6 +151,11 @@ async def submit_guess(payload: GuessRequest, session: AsyncSession = Depends(ge
         points = calculate_points(attempts_used, solved, tournament.scoring_rules)
 
     await crud.save_guess(session, attempt, guess, solved, game_over, points)
+
+    if game_over and tournament.status == TournamentStatus.tiebreak:
+        # как только все участники раунда доиграли — сразу разрешаем его, не дожидаясь
+        # дедлайна, чтобы продолжение (при остаточной ничьей) стало доступно тут же
+        await tiebreak.resolve_ready_rounds(session, tournament)
 
     return GuessResponse(
         result=[LetterState(letter=g, state=s) for g, s in zip(guess, statuses)],

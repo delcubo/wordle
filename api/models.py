@@ -39,11 +39,6 @@ class DailyWordStatus(str, enum.Enum):
     confirmed = "confirmed"   # админ явно подтвердил или заменил слово
 
 
-class PlayoffMatchType(str, enum.Enum):
-    tiebreak = "tiebreak"     # мини-плей-офф за распределение мест / посев (championship)
-    playoff = "playoff"       # основная сетка на выбывание (championship и knockout)
-
-
 class PlayoffMatchStatus(str, enum.Enum):
     pending = "pending"
     in_progress = "in_progress"
@@ -177,8 +172,10 @@ class Attempt(Base):
 
 class PlayoffMatch(Base):
     """
-    Универсальная "пара" сетки — используется и для тай-брейка (championship),
-    и для основной сетки на выбывание (championship и knockout).
+    Одна пара основной сетки на выбывание (championship после тай-брейка, и
+    knockout). Тай-брейк для посева использует отдельные модели ниже
+    (TiebreakRound/TiebreakParticipant) — это не пары "1 на 1", а общий раунд
+    на всю группу с равными результатами.
 
     round_number: 1 = первый раунд сетки (например, топ-16), растёт дальше
     (2 = топ-8, ...). Для knockout первый раунд создаёт вручную администратор
@@ -190,7 +187,6 @@ class PlayoffMatch(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     tournament_id: Mapped[int] = mapped_column(ForeignKey("tournaments.id"))
 
-    match_type: Mapped[PlayoffMatchType] = mapped_column(SAEnum(PlayoffMatchType))
     round_number: Mapped[int] = mapped_column(Integer)
 
     entry_a_id: Mapped[int | None] = mapped_column(ForeignKey("tournament_entries.id"), nullable=True)
@@ -229,3 +225,44 @@ class PlayoffGame(Base):
     entry_b_technical_loss: Mapped[bool] = mapped_column(Boolean, default=False)
 
     match: Mapped["PlayoffMatch"] = relationship(back_populates="games")
+
+
+class TiebreakRound(Base):
+    """
+    Общий раунд тай-брейка для группы участников championship, полностью
+    совпавших и по очкам, и по числу пропусков (см. scoring.groups_needing_tiebreak)
+    — один DailyWord, доступный только участникам этой группы (см.
+    TiebreakParticipant); место внутри группы определяется числом попыток на
+    это слово (обычные Attempt, как и для любого другого дня).
+
+    Если после раунда часть группы всё ещё равна, для этой подгруппы создаётся
+    новый TiebreakRound с previous_round_id, указывающим на текущий, и
+    round_number + 1 — рекурсия продолжается, пока порядок не определится
+    полностью.
+    """
+    __tablename__ = "tiebreak_rounds"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tournament_id: Mapped[int] = mapped_column(ForeignKey("tournaments.id"))
+    daily_word_id: Mapped[int] = mapped_column(ForeignKey("daily_words.id"))
+
+    round_number: Mapped[int] = mapped_column(Integer, default=1)
+    previous_round_id: Mapped[int | None] = mapped_column(ForeignKey("tiebreak_rounds.id"), nullable=True)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    daily_word: Mapped["DailyWord"] = relationship()
+    participants: Mapped[list["TiebreakParticipant"]] = relationship(back_populates="round")
+
+
+class TiebreakParticipant(Base):
+    """Один участник конкретного раунда тай-брейка — кто из группы решает это слово."""
+    __tablename__ = "tiebreak_participants"
+    __table_args__ = (
+        UniqueConstraint("round_id", "entry_id", name="uq_tiebreak_participant"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    round_id: Mapped[int] = mapped_column(ForeignKey("tiebreak_rounds.id"))
+    entry_id: Mapped[int] = mapped_column(ForeignKey("tournament_entries.id"))
+
+    round: Mapped["TiebreakRound"] = relationship(back_populates="participants")
