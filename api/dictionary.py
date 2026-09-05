@@ -1,17 +1,21 @@
 """
-Загрузка словаря и выбор слова дня.
+Загрузка словаря ответов и выбор слова дня.
 
-Источник словаря: https://github.com/mediahope/Wordle-Russian-Dictionary
-(открытый список 5-буквенных русских слов). Список содержит словоформы, включая
-падежные формы — этого достаточно для проверки ВВОДИМЫХ попыток (в реальном Wordle
-словарь допустимых слов всегда шире списка возможных ответов), но для более
-"чистого" выбора слова дня в будущем имеет смысл сузить список ответов до
-начальных форм существительных/прилагательных. TODO: curated answer list.
+Один и тот же отфильтрованный список (api/data/answer_words.txt) используется
+и для выбора слова дня, и для проверки вводимых попыток — игрок может ввести
+только то, что само могло бы оказаться загаданным словом (существительное в
+именительном падеже, без словоформ, других частей речи, имён собственных).
+
+Список получен из широкого исходного словаря (26 471 слово со всеми
+словоформами, источник — https://github.com/mediahope/Wordle-Russian-Dictionary)
+морфологическим анализом — см. scripts/build_answer_words.py и лежащий рядом
+с ним исходник scripts/data/russian_words.txt, если понадобится пересобрать
+список заново.
 """
 import os
 import random
 
-_DICT_PATH = os.path.join(os.path.dirname(__file__), "data", "russian_words.txt")
+_WORDS_PATH = os.path.join(os.path.dirname(__file__), "data", "answer_words.txt")
 
 _words_cache: list[str] | None = None
 _words_set_cache: set[str] | None = None
@@ -20,13 +24,13 @@ _words_set_cache: set[str] | None = None
 def load_words() -> list[str]:
     global _words_cache
     if _words_cache is None:
-        with open(_DICT_PATH, encoding="utf-8") as f:
+        with open(_WORDS_PATH, encoding="utf-8") as f:
             _words_cache = [line.strip() for line in f if line.strip()]
     return _words_cache
 
 
 def is_valid_word(word: str) -> bool:
-    """Проверка, что слово есть в словаре допустимых попыток."""
+    """Проверка и вводимой попытки, и кандидата на слово дня — один и тот же список."""
     global _words_set_cache
     if _words_set_cache is None:
         _words_set_cache = set(load_words())
@@ -86,7 +90,7 @@ def validate_manual_word(word: str, already_used: set[str]) -> str | None:
     if len(word) != 5:
         return "Слово должно быть из 5 букв"
     if not is_valid_word(word):
-        return "Такого слова нет в словаре"
+        return "Слово должно быть существительным в именительном падеже из словаря ответов"
     if word in already_used:
         return "Это слово уже использовалось в этом розыгрыше"
     return None
