@@ -91,12 +91,13 @@ async def create_tournament(
     if t_type == TournamentType.knockout and not payload.bracket_size:
         raise HTTPException(status_code=400, detail="Для розыгрыша на вылет нужно указать размер сетки")
 
+    no_duration_types = (TournamentType.knockout, TournamentType.endless)
     tournament = Tournament(
         title=payload.title,
         type=t_type,
         start_date=payload.start_date,
-        duration_days=payload.duration_days if t_type != TournamentType.knockout else None,
-        scoring_rules=payload.scoring_rules,
+        duration_days=payload.duration_days if t_type not in no_duration_types else None,
+        scoring_rules=payload.scoring_rules if t_type != TournamentType.endless else None,
         skip_flag_symbol=payload.skip_flag_symbol,
         bracket_size=payload.bracket_size,
         rounds_per_match=payload.rounds_per_match,
@@ -120,6 +121,11 @@ async def activate_tournament(tournament_id: int, session: AsyncSession = Depend
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
     # Несколько розыгрышей теперь МОГУТ быть активны одновременно — предыдущие
     # активные розыгрыши больше не завершаются автоматически при активации нового.
+    # Исключение — endless: бессрочная игра одна на всех.
+    if tournament.type == TournamentType.endless:
+        other = await crud.get_other_active_tournament_of_type(session, TournamentType.endless, tournament.id)
+        if other is not None:
+            raise HTTPException(status_code=400, detail=f"Уже идёт бессрочная игра «{other.title}» — сначала завершите её")
     tournament.status = TournamentStatus.active
     session.add(tournament)
     await session.commit()
@@ -238,7 +244,7 @@ async def get_standings(tournament_id: int, session: AsyncSession = Depends(get_
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
     if tournament.duration_days is None:
-        raise HTTPException(status_code=400, detail="Для этого типа розыгрыша обычная таблица не строится (см. плей-офф)")
+        raise HTTPException(status_code=400, detail="Для этого типа розыгрыша таблица не ведётся")
 
     rows = await compute_standings(session, tournament)
     return StandingsResponse(

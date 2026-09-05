@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 const DEFAULT_SCORING = { "1": 10, "2": 5, "3": 4, "4": 3, "5": 2, "6": 1 };
-const TYPE_LABEL = { standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат" };
+const TYPE_LABEL = { standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат", endless: "Бессрочная игра" };
 const STATUS_LABEL = { draft: "черновик", active: "идёт", tiebreak: "тай-брейк", playoff: "плей-офф", finished: "завершён" };
 
 async function api(path, options = {}) {
@@ -265,6 +265,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
             <option value="standard">Стандартный</option>
             <option value="championship">Чемпионат (+ плей-офф)</option>
             <option value="knockout">На вылет</option>
+            <option value="endless">Бессрочная игра (без очков и таблицы)</option>
           </select>
           <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={inputStyle} required />
           {needsDuration && (

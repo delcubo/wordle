@@ -13,6 +13,7 @@ from api.wordle_logic import check_guess, is_solved
 from api.scoring import calculate_points
 from api.dictionary import is_valid_word
 from api.tournament_time import today, day_number_for_date
+from api.models import TournamentType
 from api import crud
 
 router = APIRouter(prefix="/game", tags=["game"])
@@ -56,6 +57,8 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
     сегодняшний день этого розыгрыша. daily_word может быть None, если розыгрыш
     ещё не начался/уже закончился, или тип розыгрыша не подразумевает
     ежедневное слово вне пары (knockout — вне текущей реализации плей-офф).
+    endless не имеет duration_days, но, в отличие от knockout, слово дня у него
+    есть всегда, без верхней границы.
     """
     user = await _authenticate_user(session, token)
     entry = await crud.get_entry(session, tournament_id, user.id)
@@ -66,12 +69,14 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
 
-    if tournament.duration_days is None:
-        # knockout: обычного "слова дня" вне сетки нет — эта логика в следующем этапе
+    if tournament.type == TournamentType.knockout:
+        # обычного "слова дня" вне сетки нет — эта логика в следующем этапе
         return entry, tournament, None
 
     day_number = day_number_for_date(tournament.start_date, today())
-    if day_number < 1 or day_number > tournament.duration_days:
+    if day_number < 1:
+        return entry, tournament, None
+    if tournament.duration_days is not None and day_number > tournament.duration_days:
         return entry, tournament, None
 
     daily_word = await crud.get_or_suggest_daily_word(session, tournament, day_number)
@@ -133,7 +138,7 @@ async def submit_guess(payload: GuessRequest, session: AsyncSession = Depends(ge
     game_over = solved or attempts_used >= MAX_ATTEMPTS
 
     points = None
-    if game_over:
+    if game_over and tournament.scoring_rules is not None:
         points = calculate_points(attempts_used, solved, tournament.scoring_rules)
 
     await crud.save_guess(session, attempt, guess, solved, game_over, points)

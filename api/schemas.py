@@ -30,10 +30,10 @@ class UserEditRequest(BaseModel):
 
 class TournamentConfigRequest(BaseModel):
     title: str
-    type: str  # "standard" | "knockout" | "championship"
+    type: str  # "standard" | "knockout" | "championship" | "endless"
     start_date: date
-    duration_days: int | None = None  # обязателен для standard/championship, не используется для knockout
-    scoring_rules: dict[str, int]
+    duration_days: int | None = None  # обязателен для standard/championship, не используется для knockout/endless
+    scoring_rules: dict[str, int]  # игнорируется для endless — там нет очков
     skip_flag_symbol: str = "🚩"
     bracket_size: int | None = None       # championship: сколько мест проходит в плей-офф; knockout: общий размер сетки
     rounds_per_match: int = 1
@@ -46,7 +46,7 @@ class TournamentOut(BaseModel):
     start_date: date
     duration_days: int | None
     status: str
-    scoring_rules: dict[str, int]
+    scoring_rules: dict[str, int] | None
     skip_flag_symbol: str
     bracket_size: int | None
     rounds_per_match: int

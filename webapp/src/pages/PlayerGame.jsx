@@ -110,7 +110,7 @@ export default function PlayerGame() {
       setGameOver(true);
       setMessage(
         data.solved
-          ? `Угадано! +${data.points} очков`
+          ? (data.points != null ? `Угадано! +${data.points} очков` : "Угадано!")
           : "Попытки исчерпаны. В следующий раз повезёт!"
       );
     }

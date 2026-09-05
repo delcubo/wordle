@@ -23,6 +23,7 @@ class TournamentType(str, enum.Enum):
     standard = "standard"          # простое распределение мест по очкам за N дней
     knockout = "knockout"          # игра на вылет для 2^n игроков, сетка задаётся вручную
     championship = "championship"  # standard N дней + тай-брейк + плей-офф топ-2^n
+    endless = "endless"            # бессрочная игра без очков и таблицы — только слово дня
 
 
 class TournamentStatus(str, enum.Enum):
@@ -75,10 +76,12 @@ class Tournament(Base):
 
     # Для standard/championship — день 1 основного этапа.
     # Для knockout — дата первого раунда сетки (duration_days не используется).
+    # Для endless — день 1 бессрочной игры (duration_days тоже не используется — конца нет).
     start_date: Mapped[date] = mapped_column(Date)
     duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    scoring_rules: Mapped[dict] = mapped_column(JSON)  # {"1": 10, "2": 5, ...}
+    # None для endless — там нет очков и таблицы, только слово дня.
+    scoring_rules: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # {"1": 10, "2": 5, ...}
     skip_flag_symbol: Mapped[str] = mapped_column(String(8), default="🚩")
 
     # Общее число участников сетки (2^n). Для championship — сколько лучших мест

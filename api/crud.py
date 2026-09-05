@@ -61,6 +61,21 @@ async def list_active_tournaments(session: AsyncSession) -> list[Tournament]:
     return list(result.scalars().all())
 
 
+async def get_other_active_tournament_of_type(
+    session: AsyncSession, tournament_type, exclude_id: int
+) -> Tournament | None:
+    """Ищет уже активный розыгрыш того же типа, кроме самого exclude_id — используется,
+    чтобы не дать активировать вторую бессрочную игру, пока идёт текущая."""
+    result = await session.execute(
+        select(Tournament).where(
+            Tournament.type == tournament_type,
+            Tournament.status == TournamentStatus.active,
+            Tournament.id != exclude_id,
+        )
+    )
+    return result.scalars().first()
+
+
 # ---------- Tournament entries (участие User в Tournament) ----------
 
 async def callsign_taken(session: AsyncSession, tournament_id: int, callsign: str) -> bool:
