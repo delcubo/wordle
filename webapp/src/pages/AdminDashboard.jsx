@@ -194,6 +194,27 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   const [duration, setDuration] = useState(20);
   const [bracketSize, setBracketSize] = useState(16);
   const [error, setError] = useState("");
+  const [editingSettings, setEditingSettings] = useState(null); // id розыгрыша | null
+  const [settingsForm, setSettingsForm] = useState({ title: "", duration_days: "" });
+
+  function startEditSettings(t) {
+    setError("");
+    setEditingSettings(t.id);
+    setSettingsForm({ title: t.title, duration_days: t.duration_days ?? "" });
+  }
+
+  async function handleSaveSettings(t) {
+    setError("");
+    try {
+      const body = { title: settingsForm.title };
+      if (t.duration_days != null) body.duration_days = Number(settingsForm.duration_days);
+      await api(`/api/admin/tournaments/${t.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      setEditingSettings(null);
+      onCreated();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
 
   const needsDuration = type === "standard" || type === "championship";
   const needsBracket = type === "knockout" || type === "championship";
@@ -250,13 +271,45 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
             {TYPE_LABEL[t.type] || t.type} · {t.start_date}
             {t.duration_days != null ? ` · ${t.duration_days} дн.` : ""} · {STATUS_LABEL[t.status] || t.status}
           </div>
-          {t.status !== "active" && (
-            <button
-              onClick={(e) => { e.stopPropagation(); handleActivate(t.id); }}
-              style={{ ...ghostButtonStyle, marginTop: 6, fontSize: 12 }}
-            >
-              Активировать
-            </button>
+          {editingSettings === t.id ? (
+            <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+              <input
+                value={settingsForm.title}
+                onChange={(e) => setSettingsForm((f) => ({ ...f, title: e.target.value }))}
+                placeholder="Название ({day} — день, {stage} — стадия сетки)"
+                style={{ ...inputStyle, fontSize: 12, padding: "4px 6px" }}
+              />
+              {t.duration_days != null && (
+                <input
+                  type="number" min={1}
+                  value={settingsForm.duration_days}
+                  onChange={(e) => setSettingsForm((f) => ({ ...f, duration_days: e.target.value }))}
+                  placeholder="Длительность (дней)"
+                  style={{ ...inputStyle, fontSize: 12, padding: "4px 6px" }}
+                />
+              )}
+              <div style={{ display: "flex", gap: 4 }}>
+                <button onClick={() => handleSaveSettings(t)} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
+                <button onClick={() => setEditingSettings(null)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>Отмена</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              {t.status !== "active" && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleActivate(t.id); }}
+                  style={{ ...ghostButtonStyle, fontSize: 12 }}
+                >
+                  Активировать
+                </button>
+              )}
+              <button
+                onClick={(e) => { e.stopPropagation(); startEditSettings(t); }}
+                style={{ ...ghostButtonStyle, fontSize: 12 }}
+              >
+                Настройки
+              </button>
+            </div>
           )}
         </div>
       ))}
@@ -265,7 +318,10 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
         <button onClick={() => setShowForm(true)} style={buttonStyle}>+ Новый розыгрыш</button>
       ) : (
         <form onSubmit={handleCreate} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
-          <input placeholder="Название" value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} required />
+          <input
+            placeholder="Название ({day} — день, {stage} — стадия сетки)"
+            value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} required
+          />
           <select value={type} onChange={(e) => setType(e.target.value)} style={inputStyle}>
             <option value="standard">Стандартный</option>
             <option value="championship">Чемпионат (+ плей-офф)</option>
@@ -490,6 +546,7 @@ function StandingsPanel({ tournament }) {
   const [form, setForm] = useState({ attempts_used: 1, solved: true, note: "" });
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [viewingGuesses, setViewingGuesses] = useState(null); // {callsign, day, guesses} | null
 
   async function handleCopyStandings() {
     const lines = standings.rows.map((r) => `${r.place}. ${r.callsign} — ${r.total_points}`);
@@ -616,6 +673,15 @@ function StandingsPanel({ tournament }) {
                   >
                     {d.played ? d.points : (d.not_played_yet ? "—" : standings.skip_flag_symbol)}
                     {d.admin_note && <sup style={{ color: "#e5a94c" }}>✎</sup>}
+                    {d.guesses?.length > 0 && (
+                      <sup
+                        onClick={(e) => { e.stopPropagation(); setViewingGuesses({ callsign: r.callsign, day, guesses: d.guesses }); }}
+                        title="Посмотреть попытки"
+                        style={{ marginLeft: 2, cursor: "pointer" }}
+                      >
+                        👁
+                      </sup>
+                    )}
                   </td>
                 );
               })}
@@ -623,6 +689,22 @@ function StandingsPanel({ tournament }) {
           ))}
         </tbody>
       </table>
+      {viewingGuesses && (
+        <div
+          onClick={() => setViewingGuesses(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}
+        >
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "#1c1c1e", borderRadius: 10, padding: 20, minWidth: 200, color: "#fff" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <b>{viewingGuesses.callsign} · день {viewingGuesses.day}</b>
+              <button onClick={() => setViewingGuesses(null)} style={{ background: "transparent", border: "none", color: "#818384", fontSize: 18, cursor: "pointer" }}>×</button>
+            </div>
+            {viewingGuesses.guesses.map((g, i) => (
+              <div key={i} style={{ fontFamily: "monospace", fontSize: 16, letterSpacing: 2, textTransform: "uppercase" }}>{g}</div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

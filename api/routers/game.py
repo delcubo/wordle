@@ -14,6 +14,7 @@ from api.scoring import calculate_points
 from api.dictionary import is_valid_word
 from api.tournament_time import today, day_number_for_date
 from api.models import TournamentType, TournamentStatus, PlayoffMatchStatus
+from api.tournament_title import render_tournament_title
 from api import crud, tiebreak, bracket_game
 
 router = APIRouter(prefix="/game", tags=["game"])
@@ -42,7 +43,7 @@ async def my_tournaments(token: str, session: AsyncSession = Depends(get_session
         result.append(
             MyTournamentOut(
                 tournament_id=tournament.id,
-                title=tournament.title,
+                title=await render_tournament_title(session, tournament),
                 type=tournament.type,
                 callsign=entry.callsign,
                 status=tournament.status,
@@ -96,17 +97,18 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
 @router.get("/today", response_model=TodayWordStatus)
 async def get_today_status(token: str, tournament_id: int, session: AsyncSession = Depends(get_session)):
     entry, tournament, daily_word = await _resolve_context(session, token, tournament_id)
+    tournament_title = await render_tournament_title(session, tournament)
 
     if daily_word is None:
         return TodayWordStatus(
-            has_word_today=False, already_played=False, callsign=entry.callsign, tournament_title=tournament.title
+            has_word_today=False, already_played=False, callsign=entry.callsign, tournament_title=tournament_title
         )
 
     attempt = await crud.get_attempt(session, entry.id, daily_word.id)
     if attempt is None:
         return TodayWordStatus(
             has_word_today=True, already_played=False, day_number=daily_word.day_number, max_attempts=MAX_ATTEMPTS,
-            callsign=entry.callsign, tournament_title=tournament.title,
+            callsign=entry.callsign, tournament_title=tournament_title,
         )
 
     already_played = attempt.solved or attempt.attempts_used >= MAX_ATTEMPTS
@@ -124,7 +126,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         answer_word=daily_word.word if already_played and not attempt.solved else None,
         max_attempts=MAX_ATTEMPTS,
         callsign=entry.callsign,
-        tournament_title=tournament.title,
+        tournament_title=tournament_title,
     )
 
 
@@ -191,7 +193,8 @@ async def get_bracket_today(token: str, tournament_id: int, session: AsyncSessio
     await bracket_game.resolve_ready_matches(session, tournament)
 
     view = await bracket_game.get_player_view(session, tournament, entry)
-    return BracketTodayStatus(**view, callsign=entry.callsign, tournament_title=tournament.title)
+    tournament_title = await render_tournament_title(session, tournament)
+    return BracketTodayStatus(**view, callsign=entry.callsign, tournament_title=tournament_title)
 
 
 @router.post("/bracket/guess", response_model=GuessResponse)

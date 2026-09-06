@@ -55,6 +55,11 @@ class TournamentOut(BaseModel):
         from_attributes = True
 
 
+class TournamentSettingsUpdateRequest(BaseModel):
+    title: str | None = None  # можно использовать плейсхолдеры {day} (standard/championship) и {stage} (knockout)
+    duration_days: int | None = None  # только standard/championship; вниз — не меньше текущего дня
+
+
 # ---------- Tournament entries ----------
 
 class EntryCreateRequest(BaseModel):
@@ -166,6 +171,7 @@ class DailyCell(BaseModel):
     points: int | None
     admin_note: str | None = None
     not_played_yet: bool = False
+    guesses: list[str] = []
 
 
 class StandingsRowOut(BaseModel):

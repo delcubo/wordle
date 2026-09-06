@@ -11,7 +11,7 @@ from api.database import get_session
 from api.schemas import (
     AdminLoginRequest,
     UserCreateRequest, UserOut, UserEditRequest,
-    TournamentConfigRequest, TournamentOut,
+    TournamentConfigRequest, TournamentOut, TournamentSettingsUpdateRequest,
     EntryCreateRequest, EntryOut, EntryEditRequest,
     DailyWordOut, ConfirmWordRequest,
     StandingsResponse, StandingsRowOut, DailyCell,
@@ -116,6 +116,38 @@ async def create_tournament(
 @router.get("/tournaments", response_model=list[TournamentOut])
 async def get_tournaments(session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
     return await crud.list_tournaments(session)
+
+
+@router.patch("/tournaments/{tournament_id}", response_model=TournamentOut)
+async def update_tournament_settings(
+    tournament_id: int, payload: TournamentSettingsUpdateRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """Название (в т.ч. с плейсхолдерами {day}/{stage}) и, для standard/championship,
+    длительность в днях — можно и увеличить, и сократить, но не меньше текущего дня."""
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+
+    if payload.title is not None:
+        tournament.title = payload.title
+
+    if payload.duration_days is not None:
+        if tournament.duration_days is None:
+            raise HTTPException(status_code=400, detail="У этого типа розыгрыша нет длительности в днях")
+        current_day = day_number_for_date(tournament.start_date, today())
+        min_duration = max(current_day, 1)
+        if payload.duration_days < min_duration:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Нельзя сократить меньше {min_duration} дн. — сегодняшний день должен остаться в розыгрыше",
+            )
+        tournament.duration_days = payload.duration_days
+
+    session.add(tournament)
+    await session.commit()
+    await session.refresh(tournament)
+    return tournament
 
 
 @router.post("/tournaments/{tournament_id}/activate", response_model=TournamentOut)
@@ -259,7 +291,10 @@ async def get_standings(tournament_id: int, session: AsyncSession = Depends(get_
                 total_points=r.total_points,
                 place=r.place,
                 daily=[
-                    DailyCell(played=d.played, points=d.points, admin_note=d.admin_note, not_played_yet=d.not_played_yet)
+                    DailyCell(
+                        played=d.played, points=d.points, admin_note=d.admin_note,
+                        not_played_yet=d.not_played_yet, guesses=d.guesses,
+                    )
                     for d in r.daily
                 ],
             )

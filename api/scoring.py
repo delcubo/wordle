@@ -26,6 +26,7 @@ class ParticipantDayResult:
     points: int | None    # None означает "пропуск" (флаг), не 0
     admin_note: str | None = None  # заполнено, только если результат дня скорректирован админом вручную
     not_played_yet: bool = False  # день ещё не наступил/не закончился — это не пропуск, флаг не нужен
+    guesses: list = field(default_factory=list)  # введённые слова — для просмотра админом
 
 
 @dataclass
