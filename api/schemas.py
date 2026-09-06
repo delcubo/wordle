@@ -165,6 +165,7 @@ class DailyCell(BaseModel):
     played: bool
     points: int | None
     admin_note: str | None = None
+    not_played_yet: bool = False
 
 
 class StandingsRowOut(BaseModel):
@@ -228,6 +229,7 @@ class PlayoffMatchOut(BaseModel):
     entry_b_solved: bool | None = None
     game_number: int | None = None
     is_sudden_death: bool = False
+    word: str | None = None
     winner_entry_id: int | None
     status: str
     scheduled_date: date | None

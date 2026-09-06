@@ -25,6 +25,7 @@ class ParticipantDayResult:
     played: bool          # делал ли попытку в этот день
     points: int | None    # None означает "пропуск" (флаг), не 0
     admin_note: str | None = None  # заполнено, только если результат дня скорректирован админом вручную
+    not_played_yet: bool = False  # день ещё не наступил/не закончился — это не пропуск, флаг не нужен
 
 
 @dataclass
@@ -63,7 +64,7 @@ def build_standings(
             result = daily_results.get(day, {}).get(pid)
             if result and result.played and result.points is not None:
                 total += result.points
-            else:
+            elif not (result and result.not_played_yet):
                 skip_count += 1
         totals[pid] = total
         skips[pid] = skip_count

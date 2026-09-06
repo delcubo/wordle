@@ -136,6 +136,7 @@ async def get_bracket_view(session: AsyncSession, tournament_id: int) -> list[di
             "entry_b_solved": game.entry_b_solved if game else None,
             "game_number": game.game_number if game else None,
             "is_sudden_death": game.is_sudden_death if game else False,
+            "word": game.word if game else None,
             "winner_entry_id": m.winner_entry_id,
             "status": m.status,
             "scheduled_date": m.scheduled_date,

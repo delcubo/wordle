@@ -85,6 +85,7 @@ export default function AdminDashboard() {
               <>
                 <EntriesPanel tournament={selected} users={users} />
                 <WordConfirmPanel tournament={selected} />
+                {selected.type !== "knockout" && <WordHistoryPanel tournament={selected} />}
                 {selected.duration_days != null && <StandingsPanel tournament={selected} />}
                 {selected.type === "championship" && <TiebreakPanel tournament={selected} />}
                 {(selected.type === "championship" || selected.type === "knockout") && (
@@ -435,11 +436,72 @@ function WordConfirmPanel({ tournament }) {
   );
 }
 
+function WordHistoryPanel({ tournament }) {
+  const [words, setWords] = useState(null);
+  const [open, setOpen] = useState(false);
+
+  async function refresh() {
+    setWords(await api(`/api/admin/tournaments/${tournament.id}/words`));
+  }
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id]);
+
+  if (!words) return null;
+  const sorted = [...words].sort((a, b) => b.day_number - a.day_number);
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => setOpen((o) => !o)}>
+        <h3 style={{ margin: 0 }}>История слов {open ? "▾" : "▸"}</h3>
+        <button onClick={(e) => { e.stopPropagation(); refresh(); }} style={ghostButtonStyle}>Обновить</button>
+      </div>
+      {open && (
+        <table style={{ borderCollapse: "collapse", fontSize: 13, marginTop: 8, width: "100%" }}>
+          <thead>
+            <tr style={{ textAlign: "left", opacity: 0.7 }}>
+              <th style={thStyle}>День</th>
+              <th style={thStyle}>Дата</th>
+              <th style={thStyle}>Слово</th>
+              <th style={thStyle}>Статус</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((w) => (
+              <tr key={w.id} style={{ borderTop: "1px solid #2a2a2c" }}>
+                <td style={tdStyle}>{w.day_number}</td>
+                <td style={tdStyle}>{w.calendar_date}</td>
+                <td style={{ ...tdStyle, textTransform: "uppercase" }}>{w.word}</td>
+                <td style={{ ...tdStyle, opacity: 0.7 }}>{w.status === "confirmed" ? "подтверждено" : "предложено"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function StandingsPanel({ tournament }) {
   const [standings, setStandings] = useState(null);
   const [editing, setEditing] = useState(null); // {participantId, day} | null
   const [form, setForm] = useState({ attempts_used: 1, solved: true, note: "" });
   const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopyStandings() {
+    const lines = standings.rows.map((r) => `${r.place}. ${r.callsign} — ${r.total_points}`);
+    const text = `${tournament.title}\n\n${lines.join("\n")}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      setCopied(false);
+    }
+  }
 
   async function refresh() {
     setStandings(await api(`/api/admin/tournaments/${tournament.id}/standings`));
@@ -484,7 +546,12 @@ function StandingsPanel({ tournament }) {
     <div style={{ ...panelStyle, marginTop: 20, overflowX: "auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h3 style={{ marginTop: 0 }}>Таблица</h3>
-        <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={handleCopyStandings} style={ghostButtonStyle}>
+            {copied ? "Скопировано!" : "Скопировать таблицу"}
+          </button>
+          <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+        </div>
       </div>
       <p style={{ fontSize: 12, opacity: 0.6, marginTop: -4 }}>
         Клик по ячейке дня — ручная корректировка результата (исключительные случаи).
@@ -547,7 +614,7 @@ function StandingsPanel({ tournament }) {
                     title={d.admin_note ? `Скорректировано: ${d.admin_note}` : "Клик — скорректировать"}
                     style={{ ...tdStyle, textAlign: "center", cursor: "pointer" }}
                   >
-                    {d.played ? d.points : standings.skip_flag_symbol}
+                    {d.played ? d.points : (d.not_played_yet ? "—" : standings.skip_flag_symbol)}
                     {d.admin_note && <sup style={{ color: "#e5a94c" }}>✎</sup>}
                   </td>
                 );
@@ -818,6 +885,9 @@ function BracketPanel({ tournament }) {
                   <td style={tdStyle}>
                     Р{m.round_number} · пара {m.position + 1}
                     {m.is_sudden_death && <span style={{ opacity: 0.6 }}> (доп. раунд)</span>}
+                    {m.word && (
+                      <div style={{ opacity: 0.6, fontSize: 11, textTransform: "uppercase" }}>слово: {m.word}</div>
+                    )}
                   </td>
                   <td style={tdStyle}>{m.entry_a_callsign || "?"} {formatAttempts(m.entry_a_attempts_used, m.entry_a_solved)}</td>
                   <td style={tdStyle}>—</td>

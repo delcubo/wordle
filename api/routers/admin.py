@@ -258,7 +258,10 @@ async def get_standings(tournament_id: int, session: AsyncSession = Depends(get_
                 callsign=r.callsign,
                 total_points=r.total_points,
                 place=r.place,
-                daily=[DailyCell(played=d.played, points=d.points, admin_note=d.admin_note) for d in r.daily],
+                daily=[
+                    DailyCell(played=d.played, points=d.points, admin_note=d.admin_note, not_played_yet=d.not_played_yet)
+                    for d in r.daily
+                ],
             )
             for r in rows
         ],
