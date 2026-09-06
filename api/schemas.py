@@ -53,7 +53,7 @@ class UserArchiveRequest(BaseModel):
 # ---------- Tournaments ----------
 
 class TournamentConfigRequest(BaseModel):
-    title: str
+    title: str  # чистое название, без плейсхолдеров — день/стадия добавляются автоматически при показе
     type: str  # "standard" | "knockout" | "championship" | "endless"
     start_date: date
     duration_days: int | None = None  # обязателен для standard/championship, не используется для knockout/endless
@@ -61,6 +61,7 @@ class TournamentConfigRequest(BaseModel):
     skip_flag_symbol: str = "🚩"
     bracket_size: int | None = None       # championship: сколько мест проходит в плей-офф; knockout: общий размер сетки
     rounds_per_match: int = 1
+    hashtag: str | None = None  # для копируемого результата (ResultModal)
 
 
 class TournamentOut(BaseModel):
@@ -74,14 +75,16 @@ class TournamentOut(BaseModel):
     skip_flag_symbol: str
     bracket_size: int | None
     rounds_per_match: int
+    hashtag: str | None = None
 
     class Config:
         from_attributes = True
 
 
 class TournamentSettingsUpdateRequest(BaseModel):
-    title: str | None = None  # можно использовать плейсхолдеры {day} (standard/championship) и {stage} (knockout)
+    title: str | None = None  # чистое название — день/стадия подставляются автоматически при показе
     duration_days: int | None = None  # только standard/championship; вниз — не меньше текущего дня
+    hashtag: str | None = None
 
 
 # ---------- Tournament entries ----------
@@ -149,6 +152,7 @@ class TodayWordStatus(BaseModel):
     max_attempts: int = 6
     callsign: str | None = None
     tournament_title: str | None = None
+    hashtag: str | None = None
 
 
 class BracketTodayStatus(BaseModel):
@@ -171,6 +175,7 @@ class BracketTodayStatus(BaseModel):
     waiting_for_opponent: bool = False
     callsign: str | None = None
     tournament_title: str | None = None
+    hashtag: str | None = None
 
 
 class GuessRequest(BaseModel):

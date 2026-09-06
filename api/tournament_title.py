@@ -1,30 +1,36 @@
 """
-Подстановка динамических плейсхолдеров в название розыгрыша перед показом
-игрокам/админу — сам title в БД хранится с плейсхолдерами как есть.
+Формирование отображаемого названия розыгрыша перед показом игрокам/админу —
+в БД title хранится "чистым", без каких-либо плейсхолдеров, админ вводит его
+как обычное название. День/стадия добавляются автоматически по правилам:
 
-{day}   — текущий день розыгрыша (standard/championship), зажат в границы
-          [1, duration_days], чтобы не показывать нелепые числа до старта
-          или после окончания.
-{stage} — текущая стадия сетки (knockout) — "1/4 финала", "финал" и т.п.,
-          по последнему существующему раунду; до генерации сетки — заглушка.
+- knockout — всегда "{title} {стадия}" ("1/4 финала", "финал" и т.п., по
+  последнему существующему раунду; до генерации сетки — заглушка);
+- championship в тай-брейке/плей-офф — так же, как knockout (сетка уже идёт);
+- standard, а также championship до тай-брейка/плей-офф — "{title} день #N"
+  (N зажат в границы [1, duration_days], чтобы не показывать нелепые числа
+  до старта или после окончания);
+- endless — просто "{title}" без добавок (ни дней, ни стадий у неё нет).
 """
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.models import Tournament, TournamentType
+from api.models import Tournament, TournamentType, TournamentStatus
 from api.tournament_time import today, day_number_for_date
 from api import crud
 
 
 async def render_tournament_title(session: AsyncSession, tournament: Tournament) -> str:
     title = tournament.title
+    bracket_phase = tournament.type == TournamentType.knockout or tournament.status in (
+        TournamentStatus.tiebreak, TournamentStatus.playoff,
+    )
 
-    if "{day}" in title and tournament.duration_days is not None:
+    if bracket_phase:
+        return f"{title} {await _current_stage_label(session, tournament)}"
+
+    if tournament.duration_days is not None:
         day_number = day_number_for_date(tournament.start_date, today())
         day_number = max(1, min(day_number, tournament.duration_days))
-        title = title.replace("{day}", str(day_number))
-
-    if "{stage}" in title and tournament.type == TournamentType.knockout:
-        title = title.replace("{stage}", await _current_stage_label(session, tournament))
+        return f"{title} день #{day_number}"
 
     return title
 

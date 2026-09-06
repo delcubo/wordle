@@ -153,6 +153,7 @@ async def create_tournament(
         skip_flag_symbol=payload.skip_flag_symbol,
         bracket_size=payload.bracket_size,
         rounds_per_match=payload.rounds_per_match,
+        hashtag=(payload.hashtag or "").strip() or None,
         status=TournamentStatus.draft,
     )
     session.add(tournament)
@@ -171,14 +172,18 @@ async def update_tournament_settings(
     tournament_id: int, payload: TournamentSettingsUpdateRequest,
     session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
 ):
-    """Название (в т.ч. с плейсхолдерами {day}/{stage}) и, для standard/championship,
-    длительность в днях — можно и увеличить, и сократить, но не меньше текущего дня."""
+    """Название (чистое, без плейсхолдеров — день/стадия подставляются автоматически),
+    хэштег для результата и, для standard/championship, длительность в днях —
+    можно и увеличить, и сократить, но не меньше текущего дня."""
     tournament = await crud.get_tournament(session, tournament_id)
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
 
     if payload.title is not None:
         tournament.title = payload.title
+
+    if payload.hashtag is not None:
+        tournament.hashtag = payload.hashtag.strip() or None
 
     if payload.duration_days is not None:
         if tournament.duration_days is None:
@@ -305,6 +310,29 @@ async def get_upcoming_word(tournament_id: int, session: AsyncSession = Depends(
 
     daily_word = await crud.get_or_suggest_daily_word(session, tournament, next_day)
     return daily_word
+
+
+@router.get("/tournaments/{tournament_id}/words/today", response_model=DailyWordOut)
+async def get_today_word(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    """
+    Слово сегодняшнего (уже идущего) дня — чисто для справки админу (см. пункт
+    #3 бэклога: "upcoming" всегда прыгает на день вперёд и никогда не показывает
+    день, который уже наступил, включая самый первый день розыгрыша). Ничего
+    менять тут нельзя — день уже идёт, участники уже могут по нему играть.
+    """
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    if tournament.type == TournamentType.knockout:
+        raise HTTPException(status_code=400, detail="У этого типа розыгрыша нет слова дня")
+
+    current_day = day_number_for_date(tournament.start_date, today())
+    if current_day < 1:
+        raise HTTPException(status_code=400, detail="Розыгрыш ещё не начался")
+    if tournament.duration_days is not None and current_day > tournament.duration_days:
+        raise HTTPException(status_code=400, detail="Розыгрыш уже завершился")
+
+    return await crud.get_or_suggest_daily_word(session, tournament, current_day)
 
 
 @router.post("/words/{daily_word_id}/confirm", response_model=DailyWordOut)

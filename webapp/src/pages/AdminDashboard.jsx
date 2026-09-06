@@ -100,6 +100,7 @@ export default function AdminDashboard() {
             {selected ? (
               <>
                 <EntriesPanel tournament={selected} users={users} />
+                {selected.type !== "knockout" && <TodayWordPanel tournament={selected} />}
                 <WordConfirmPanel tournament={selected} />
                 {selected.type !== "knockout" && <WordHistoryPanel tournament={selected} />}
                 {selected.duration_days != null && <StandingsPanel tournament={selected} />}
@@ -139,6 +140,8 @@ function UsersPanel({ users, onChanged }) {
   const [error, setError] = useState("");
   const [copiedId, setCopiedId] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState(null);
+  const [noteForm, setNoteForm] = useState("");
 
   async function handleAdd(e) {
     e.preventDefault();
@@ -163,6 +166,20 @@ function UsersPanel({ users, onChanged }) {
     setTimeout(() => setCopiedId(null), 1500);
   }
 
+  async function saveNote(u) {
+    setError("");
+    try {
+      await api(`/api/admin/users/${u.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ admin_note: noteForm.trim() || null }),
+      });
+      setEditingNoteId(null);
+      onChanged();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   async function toggleArchived(u) {
     if (!u.archived && !window.confirm(
       `Удалить «${u.admin_note || `Игрок #${u.id}`}»? Игрок переместится в папку «Удалённые», ` +
@@ -178,14 +195,38 @@ function UsersPanel({ users, onChanged }) {
   }
 
   function renderRow(u) {
+    const isEditingNote = editingNoteId === u.id;
     return (
       <tr key={u.id} style={{ borderTop: "1px solid #2a2a2c" }}>
         <td style={tdStyle}>
-          {u.admin_note || `Игрок #${u.id}`}
-          {u.is_test && (
-            <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>
-              тест
-            </span>
+          {isEditingNote ? (
+            <div style={{ display: "flex", gap: 4 }}>
+              <input
+                autoFocus
+                value={noteForm}
+                onChange={(e) => setNoteForm(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") saveNote(u); if (e.key === "Escape") setEditingNoteId(null); }}
+                style={{ ...inputStyle, padding: "2px 6px", fontSize: 13 }}
+              />
+              <button onClick={() => saveNote(u)} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
+              <button onClick={() => setEditingNoteId(null)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>Отмена</button>
+            </div>
+          ) : (
+            <>
+              {u.admin_note || `Игрок #${u.id}`}
+              {u.is_test && (
+                <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>
+                  тест
+                </span>
+              )}
+              <button
+                onClick={() => { setEditingNoteId(u.id); setNoteForm(u.admin_note || ""); }}
+                title="Изменить заметку"
+                style={{ ...ghostButtonStyle, marginLeft: 6, padding: "0px 6px", fontSize: 11 }}
+              >
+                ✎
+              </button>
+            </>
           )}
         </td>
         <td style={{ ...tdStyle, fontSize: 12 }}>
@@ -281,21 +322,22 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   const [startDate, setStartDate] = useState("");
   const [duration, setDuration] = useState(20);
   const [bracketSize, setBracketSize] = useState(16);
+  const [hashtag, setHashtag] = useState("");
   const [error, setError] = useState("");
   const [editingSettings, setEditingSettings] = useState(null); // id розыгрыша | null
-  const [settingsForm, setSettingsForm] = useState({ title: "", duration_days: "" });
+  const [settingsForm, setSettingsForm] = useState({ title: "", duration_days: "", hashtag: "" });
   const [showArchive, setShowArchive] = useState(false);
 
   function startEditSettings(t) {
     setError("");
     setEditingSettings(t.id);
-    setSettingsForm({ title: t.title, duration_days: t.duration_days ?? "" });
+    setSettingsForm({ title: t.title, duration_days: t.duration_days ?? "", hashtag: t.hashtag || "" });
   }
 
   async function handleSaveSettings(t) {
     setError("");
     try {
-      const body = { title: settingsForm.title };
+      const body = { title: settingsForm.title, hashtag: settingsForm.hashtag };
       if (t.duration_days != null) body.duration_days = Number(settingsForm.duration_days);
       await api(`/api/admin/tournaments/${t.id}`, { method: "PATCH", body: JSON.stringify(body) });
       setEditingSettings(null);
@@ -323,11 +365,13 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           skip_flag_symbol: "🚩",
           bracket_size: needsBracket ? Number(bracketSize) : null,
           rounds_per_match: 1,
+          hashtag: hashtag.trim() || null,
         }),
       });
       setShowForm(false);
       setTitle("");
       setStartDate("");
+      setHashtag("");
       onCreated();
     } catch (e) {
       setError(e.message);
@@ -363,7 +407,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
             <input
               value={settingsForm.title}
               onChange={(e) => setSettingsForm((f) => ({ ...f, title: e.target.value }))}
-              placeholder="Название ({day} — день, {stage} — стадия сетки)"
+              placeholder="Название (день/стадия добавляются автоматически)"
               style={{ ...inputStyle, fontSize: 12, padding: "4px 6px" }}
             />
             {t.duration_days != null && (
@@ -375,6 +419,12 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                 style={{ ...inputStyle, fontSize: 12, padding: "4px 6px" }}
               />
             )}
+            <input
+              value={settingsForm.hashtag}
+              onChange={(e) => setSettingsForm((f) => ({ ...f, hashtag: e.target.value }))}
+              placeholder="Хэштег для результата (например #вордли)"
+              style={{ ...inputStyle, fontSize: 12, padding: "4px 6px" }}
+            />
             <div style={{ display: "flex", gap: 4 }}>
               <button onClick={() => handleSaveSettings(t)} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
               <button onClick={() => setEditingSettings(null)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>Отмена</button>
@@ -438,7 +488,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
       ) : (
         <form onSubmit={handleCreate} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
           <input
-            placeholder="Название ({day} — день, {stage} — стадия сетки)"
+            placeholder="Название (день/стадия добавляются автоматически)"
             value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} required
           />
           <select value={type} onChange={(e) => setType(e.target.value)} style={inputStyle}>
@@ -454,6 +504,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           {needsBracket && (
             <input type="number" placeholder="Размер сетки (степень двойки)" value={bracketSize} onChange={(e) => setBracketSize(e.target.value)} style={inputStyle} required min={2} />
           )}
+          <input placeholder="Хэштег для результата (например #вордли), опционально" value={hashtag} onChange={(e) => setHashtag(e.target.value)} style={inputStyle} />
           {error && <div style={{ color: "#e5484d" }}>{error}</div>}
           <div style={{ display: "flex", gap: 8 }}>
             <button type="submit" style={buttonStyle}>Создать</button>
@@ -557,6 +608,37 @@ function EntriesPanel({ tournament, users }) {
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function TodayWordPanel({ tournament }) {
+  const [word, setWord] = useState(null);
+  const [notApplicable, setNotApplicable] = useState(false);
+
+  async function refresh() {
+    try {
+      setWord(await api(`/api/admin/tournaments/${tournament.id}/words/today`));
+      setNotApplicable(false);
+    } catch (e) {
+      setNotApplicable(true);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id]);
+
+  if (notApplicable || !word) return null;
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20 }}>
+      <h3 style={{ marginTop: 0 }}>Слово сегодня — день {word.day_number} ({word.calendar_date})</h3>
+      <p style={{ fontSize: 13, opacity: 0.7, marginTop: -4 }}>
+        День уже идёт, менять слово поздно — это просто справка для админа.
+      </p>
+      <span style={{ fontSize: 22, fontWeight: 700, textTransform: "uppercase", letterSpacing: 2 }}>{word.word}</span>
     </div>
   );
 }
@@ -689,7 +771,7 @@ function StandingsPanel({ tournament }) {
   const [form, setForm] = useState({ attempts_used: 1, solved: true, note: "" });
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
-  const [viewingGuesses, setViewingGuesses] = useState(null); // {callsign, day, guesses} | null
+  const [hoveredCell, setHoveredCell] = useState(null); // {participantId, day} | null
 
   async function handleCopyStandings() {
     const lines = standings.rows.map((r) => `${r.place}. ${r.callsign} — ${r.total_points}`);
@@ -754,7 +836,7 @@ function StandingsPanel({ tournament }) {
         </div>
       </div>
       <p style={{ fontSize: 12, opacity: 0.6, marginTop: -4 }}>
-        Клик по ячейке дня — ручная корректировка результата (исключительные случаи).
+        Клик по ячейке дня — ручная корректировка результата (исключительные случаи). Наведите на цифру — покажутся попытки этого дня.
       </p>
       {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
       <table style={{ borderCollapse: "collapse", fontSize: 13, minWidth: 400 }}>
@@ -807,23 +889,32 @@ function StandingsPanel({ tournament }) {
                     </td>
                   );
                 }
+                const isHovered = hoveredCell?.participantId === r.participant_id && hoveredCell?.day === day;
                 return (
                   <td
                     key={i}
                     onClick={() => startEdit(r.participant_id, day, d)}
+                    onMouseEnter={() => { if (d.guesses?.length > 0) setHoveredCell({ participantId: r.participant_id, day }); }}
+                    onMouseLeave={() => setHoveredCell(null)}
                     title={d.admin_note ? `Скорректировано: ${d.admin_note}` : "Клик — скорректировать"}
-                    style={{ ...tdStyle, textAlign: "center", cursor: "pointer" }}
+                    style={{ ...tdStyle, textAlign: "center", cursor: "pointer", position: "relative" }}
                   >
                     {d.played ? d.points : (d.not_played_yet ? "—" : standings.skip_flag_symbol)}
                     {d.admin_note && <sup style={{ color: "#e5a94c" }}>✎</sup>}
-                    {d.guesses?.length > 0 && (
-                      <sup
-                        onClick={(e) => { e.stopPropagation(); setViewingGuesses({ callsign: r.callsign, day, guesses: d.guesses }); }}
-                        title="Посмотреть попытки"
-                        style={{ marginLeft: 2, cursor: "pointer" }}
+                    {isHovered && (
+                      <div
+                        style={{
+                          position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)",
+                          background: "#1c1c1e", border: "1px solid #3a3a3c", borderRadius: 6, padding: "6px 10px",
+                          whiteSpace: "nowrap", zIndex: 10, marginBottom: 4, textAlign: "left", pointerEvents: "none",
+                        }}
                       >
-                        👁
-                      </sup>
+                        {d.guesses.map((g, gi) => (
+                          <div key={gi} style={{ fontFamily: "monospace", fontSize: 13, letterSpacing: 1, textTransform: "uppercase" }}>
+                            {g}
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </td>
                 );
@@ -832,22 +923,6 @@ function StandingsPanel({ tournament }) {
           ))}
         </tbody>
       </table>
-      {viewingGuesses && (
-        <div
-          onClick={() => setViewingGuesses(null)}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}
-        >
-          <div onClick={(e) => e.stopPropagation()} style={{ background: "#1c1c1e", borderRadius: 10, padding: 20, minWidth: 200, color: "#fff" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <b>{viewingGuesses.callsign} · день {viewingGuesses.day}</b>
-              <button onClick={() => setViewingGuesses(null)} style={{ background: "transparent", border: "none", color: "#818384", fontSize: 18, cursor: "pointer" }}>×</button>
-            </div>
-            {viewingGuesses.guesses.map((g, i) => (
-              <div key={i} style={{ fontFamily: "monospace", fontSize: 16, letterSpacing: 2, textTransform: "uppercase" }}>{g}</div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

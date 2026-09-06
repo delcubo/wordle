@@ -109,14 +109,15 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
 
     if daily_word is None:
         return TodayWordStatus(
-            has_word_today=False, already_played=False, callsign=entry.callsign, tournament_title=tournament_title
+            has_word_today=False, already_played=False, callsign=entry.callsign, tournament_title=tournament_title,
+            hashtag=tournament.hashtag,
         )
 
     attempt = await crud.get_attempt(session, entry.id, daily_word.id)
     if attempt is None:
         return TodayWordStatus(
             has_word_today=True, already_played=False, day_number=daily_word.day_number, max_attempts=MAX_ATTEMPTS,
-            callsign=entry.callsign, tournament_title=tournament_title,
+            callsign=entry.callsign, tournament_title=tournament_title, hashtag=tournament.hashtag,
         )
 
     already_played = attempt.solved or attempt.attempts_used >= MAX_ATTEMPTS
@@ -135,6 +136,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         max_attempts=MAX_ATTEMPTS,
         callsign=entry.callsign,
         tournament_title=tournament_title,
+        hashtag=tournament.hashtag,
     )
 
 
@@ -202,7 +204,7 @@ async def get_bracket_today(token: str, tournament_id: int, session: AsyncSessio
 
     view = await bracket_game.get_player_view(session, tournament, entry)
     tournament_title = await render_tournament_title(session, tournament)
-    return BracketTodayStatus(**view, callsign=entry.callsign, tournament_title=tournament_title)
+    return BracketTodayStatus(**view, callsign=entry.callsign, tournament_title=tournament_title, hashtag=tournament.hashtag)
 
 
 @router.post("/bracket/guess", response_model=GuessResponse)

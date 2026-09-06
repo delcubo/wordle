@@ -76,6 +76,9 @@ class Tournament(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(200), default="")
     type: Mapped[TournamentType] = mapped_column(SAEnum(TournamentType))
+    # Хэштег для копируемого результата (см. ResultModal) — задаётся админом,
+    # необязателен: если не задан, строка с хэштегом просто не добавляется.
+    hashtag: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     # Для standard/championship — день 1 основного этапа.
     # Для knockout — дата первого раунда сетки (duration_days не используется).

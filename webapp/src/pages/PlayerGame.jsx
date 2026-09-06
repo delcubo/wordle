@@ -42,6 +42,7 @@ export default function PlayerGame() {
   const [isError, setIsError] = useState(false);
   const [callsign, setCallsign] = useState("");
   const [tournamentTitle, setTournamentTitle] = useState("");
+  const [hashtag, setHashtag] = useState(null);
   const [invalidLink, setInvalidLink] = useState(false);
   // "standard" — обычное слово дня (standard/championship/endless, тай-брейк тоже сюда же);
   // "bracket" — матч сетки на выбывание (championship после посева, knockout всегда)
@@ -57,6 +58,7 @@ export default function PlayerGame() {
   function applyStandardStatus(data) {
     setCallsign(data.callsign || "");
     setTournamentTitle(data.tournament_title || "");
+    setHashtag(data.hashtag || null);
 
     if (!data.has_word_today) {
       setGameOver(true);
@@ -75,7 +77,9 @@ export default function PlayerGame() {
     if (finished) {
       setMessage(data.solved ? "Вы уже угадали слово сегодня!" : "Попытки на сегодня исчерпаны.");
       setModal({
-        title: `Вордли дня #${data.day_number ?? "?"}`,
+        title: data.tournament_title,
+        callsign: data.callsign,
+        hashtag: data.hashtag,
         attemptsUsed: data.attempts_used,
         solved: data.solved,
         grid: data.previous_results,
@@ -90,6 +94,7 @@ export default function PlayerGame() {
   function applyBracketStatus(data, { announceTie } = {}) {
     setCallsign(data.callsign || "");
     setTournamentTitle(data.tournament_title || "");
+    setHashtag(data.hashtag || null);
 
     if (!data.has_match) {
       setGameOver(true);
@@ -114,7 +119,9 @@ export default function PlayerGame() {
       setMessage((data.won ? `Победа в раунде ${data.round_number}!` : `Поражение в раунде ${data.round_number}.`) + opponentNote);
       if (!announceTie) {
         setModal({
-          title: `Матч, раунд ${data.round_number}`,
+          title: data.tournament_title,
+          callsign: data.callsign,
+          hashtag: data.hashtag,
           attemptsUsed: data.attempts_used,
           solved: data.solved,
           grid: data.previous_results,
@@ -132,7 +139,9 @@ export default function PlayerGame() {
       );
       if (!announceTie) {
         setModal({
-          title: `Матч, раунд ${data.round_number}`,
+          title: data.tournament_title,
+          callsign: data.callsign,
+          hashtag: data.hashtag,
           attemptsUsed: data.attempts_used,
           solved: data.solved,
           grid: data.previous_results,
@@ -260,7 +269,9 @@ export default function PlayerGame() {
       setTimeout(() => {
         if (isTie) {
           setModal({
-            title: `Матч, раунд ${fresh.round_number}`,
+            title: fresh.tournament_title,
+            callsign: fresh.callsign,
+            hashtag: fresh.hashtag,
             attemptsUsed: data.attempts_used,
             solved: data.solved,
             grid: roundGrid,
@@ -308,6 +319,8 @@ export default function PlayerGame() {
       {modal && (
         <ResultModal
           title={modal.title}
+          callsign={modal.callsign ?? callsign}
+          hashtag={modal.hashtag !== undefined ? modal.hashtag : hashtag}
           attemptsUsed={modal.attemptsUsed}
           solved={modal.solved}
           grid={modal.grid}

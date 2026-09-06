@@ -6,21 +6,28 @@ const CELL_COLOR = { correct: "var(--correct)", present: "var(--present)", absen
 /**
  * Всплывающее окно результата — и для обычного слова дня, и для матча сетки.
  * props:
- *  - title: "Вордли дня #12" / "Матч, раунд 2"
+ *  - title: отрендеренное название розыгрыша (уже с "день #N" / стадией сетки —
+ *    см. api/tournament_title.py)
+ *  - callsign: позывной игрока — показывается и попадает в копируемый текст
+ *  - hashtag: хэштег розыгрыша, заданный админом; если не задан — просто не
+ *    добавляется в копируемый текст (не подставляется дефолт)
  *  - attemptsUsed, solved, grid (list[list["correct"|"present"|"absent"]])
  *  - answerWord: показывается, только если игра завершена и не разгадана
  *  - message: доп. текст под заголовком (ничья/победа/поражение/ожидание соперника)
  *  - onClose
  */
-export default function ResultModal({ title, attemptsUsed, solved, grid, answerWord, message, onClose }) {
+export default function ResultModal({ title, callsign, hashtag, attemptsUsed, solved, grid, answerWord, message, onClose }) {
   const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
     const attemptsLabel = solved ? `${attemptsUsed}/6` : "X/6";
     const emojiGrid = grid.map((row) => row.map((s) => EMOJI[s] || "⬜").join("")).join("\n");
-    const text = `${title} ${attemptsLabel}\n\n${emojiGrid}\n\n#вордли`;
+    const lines = [`${title} ${attemptsLabel}`];
+    if (callsign) lines.push(`Игрок: ${callsign}`);
+    lines.push("", emojiGrid);
+    if (hashtag) lines.push("", hashtag);
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(lines.join("\n"));
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (e) {
@@ -53,6 +60,7 @@ export default function ResultModal({ title, attemptsUsed, solved, grid, answerW
           </button>
         </div>
 
+        {callsign && <div style={{ marginTop: 4, fontSize: 13, opacity: 0.7 }}>Игрок: {callsign}</div>}
         {message && <div style={{ marginTop: 10, fontSize: 14, opacity: 0.9 }}>{message}</div>}
 
         {answerWord && (
@@ -70,6 +78,8 @@ export default function ResultModal({ title, attemptsUsed, solved, grid, answerW
             </div>
           ))}
         </div>
+
+        {hashtag && <div style={{ marginBottom: 10, fontSize: 13, opacity: 0.6 }}>{hashtag}</div>}
 
         <button
           onClick={handleCopy}
