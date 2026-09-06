@@ -196,34 +196,51 @@ async def get_player_view(session: AsyncSession, tournament: Tournament, entry) 
         return {"has_match": False}
 
     side = _side_for_entry(match, entry.id)
+    opponent_side = "b" if side == "a" else "a"
     opponent_entry_id = match.entry_b_id if side == "a" else match.entry_a_id
     opponent = await session.get(TournamentEntry, opponent_entry_id) if opponent_entry_id else None
-
-    if match.status == PlayoffMatchStatus.finished:
-        return {
-            "has_match": True,
-            "match_finished": True,
-            "won": match.winner_entry_id == entry.id,
-            "opponent_callsign": opponent.callsign if opponent else None,
-            "round_number": match.round_number,
-        }
 
     game = await get_current_game(session, match)
     if game is None:
         return {"has_match": False}
 
-    opponent_side = "b" if side == "a" else "a"
+    my_guesses = getattr(game, f"entry_{side}_guesses")
+    my_attempts_used = getattr(game, f"entry_{side}_attempts_used")
+    my_solved = getattr(game, f"entry_{side}_solved")
+    my_previous_results = [check_guess(g, game.word) for g in my_guesses]
+
+    if match.status == PlayoffMatchStatus.finished:
+        # матч решён этой (последней сыгранной) игрой — здесь уже можно показать
+        # и мой, и соперника результат целиком, включая слово, если я не угадал
+        return {
+            "has_match": True,
+            "match_finished": True,
+            "won": match.winner_entry_id == entry.id,
+            "opponent_callsign": opponent.callsign if opponent else None,
+            "opponent_attempts_used": getattr(game, f"entry_{opponent_side}_attempts_used"),
+            "opponent_solved": getattr(game, f"entry_{opponent_side}_solved"),
+            "round_number": match.round_number,
+            "game_number": game.game_number,
+            "is_sudden_death": game.is_sudden_death,
+            "already_played": True,
+            "attempts_used": my_attempts_used,
+            "solved": my_solved,
+            "previous_guesses": my_guesses,
+            "previous_results": my_previous_results,
+            "answer_word": None if my_solved else game.word,
+        }
+
     return {
         "has_match": True,
         "match_finished": False,
         "opponent_callsign": opponent.callsign if opponent else None,
         "round_number": match.round_number,
-        "already_played": getattr(game, f"entry_{side}_attempts_used") is not None,
-        "attempts_used": getattr(game, f"entry_{side}_attempts_used"),
-        "solved": getattr(game, f"entry_{side}_solved"),
-        "previous_guesses": getattr(game, f"entry_{side}_guesses"),
-        "waiting_for_opponent": (
-            getattr(game, f"entry_{side}_attempts_used") is not None
-            and _result_key(game, opponent_side) is None
-        ),
+        "game_number": game.game_number,
+        "is_sudden_death": game.is_sudden_death,
+        "already_played": my_attempts_used is not None,
+        "attempts_used": my_attempts_used,
+        "solved": my_solved,
+        "previous_guesses": my_guesses,
+        "previous_results": my_previous_results,
+        "waiting_for_opponent": my_attempts_used is not None and _result_key(game, opponent_side) is None,
     }

@@ -2,113 +2,183 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import WordGrid from "../components/WordGrid.jsx";
 import Keyboard from "../components/Keyboard.jsx";
+import ResultModal from "../components/ResultModal.jsx";
 
 const MAX_ATTEMPTS = 6;
 const WORD_LENGTH = 5;
+const LETTER_PRIORITY = { correct: 3, present: 2, absent: 1 };
+
+function buildRows(guesses, results) {
+  const rows = Array.from({ length: MAX_ATTEMPTS }, () => ({ letters: null, statuses: null }));
+  (guesses || []).forEach((g, i) => {
+    rows[i] = { letters: g.split(""), statuses: (results && results[i]) || null };
+  });
+  return rows;
+}
+
+function buildLetterStates(guesses, results) {
+  const map = {};
+  (guesses || []).forEach((guess, i) => {
+    const statuses = (results && results[i]) || [];
+    guess.split("").forEach((letter, j) => {
+      const state = statuses[j];
+      if (!state) return;
+      if (!map[letter] || LETTER_PRIORITY[state] > LETTER_PRIORITY[map[letter]]) map[letter] = state;
+    });
+  });
+  return map;
+}
 
 export default function PlayerGame() {
   const { token, tournamentId } = useParams();
 
-  const [rows, setRows] = useState(
-    Array.from({ length: MAX_ATTEMPTS }, () => ({ letters: null, statuses: null }))
-  );
+  const [rows, setRows] = useState(buildRows([], []));
   const [currentGuess, setCurrentGuess] = useState("");
   const [activeRowIndex, setActiveRowIndex] = useState(0);
   const [letterStates, setLetterStates] = useState({});
   const [gameOver, setGameOver] = useState(false);
   const [message, setMessage] = useState("Загрузка...");
+  const [isError, setIsError] = useState(false);
   const [callsign, setCallsign] = useState("");
   const [tournamentTitle, setTournamentTitle] = useState("");
   const [invalidLink, setInvalidLink] = useState(false);
   // "standard" — обычное слово дня (standard/championship/endless, тай-брейк тоже сюда же);
   // "bracket" — матч сетки на выбывание (championship после посева, knockout всегда)
   const [mode, setMode] = useState("standard");
+  const [modal, setModal] = useState(null);
 
-  function fillPreviousGuesses(guesses) {
-    if (!guesses?.length) return;
-    setRows((prev) => {
-      const next = [...prev];
-      guesses.forEach((g, i) => {
-        next[i] = { letters: g.split(""), statuses: null };
+  function applyStandardStatus(data) {
+    setCallsign(data.callsign || "");
+    setTournamentTitle(data.tournament_title || "");
+
+    if (!data.has_word_today) {
+      setGameOver(true);
+      setMessage("Слово дня сегодня недоступно — розыгрыш ещё не начался или уже завершён.");
+      setIsError(false);
+      return;
+    }
+
+    const finished = data.already_played;
+    setRows(buildRows(data.previous_guesses, data.previous_results));
+    setLetterStates(buildLetterStates(data.previous_guesses, data.previous_results));
+    setActiveRowIndex(finished ? -1 : (data.previous_guesses || []).length);
+    setGameOver(finished);
+    setIsError(false);
+
+    if (finished) {
+      setMessage(data.solved ? "Вы уже угадали слово сегодня!" : "Попытки на сегодня исчерпаны.");
+      setModal({
+        title: `Вордли дня #${data.day_number ?? "?"}`,
+        attemptsUsed: data.attempts_used,
+        solved: data.solved,
+        grid: data.previous_results,
+        answerWord: data.answer_word,
       });
-      return next;
-    });
+    } else {
+      setMessage("");
+      setModal(null);
+    }
+  }
+
+  function applyBracketStatus(data, { announceTie } = {}) {
+    setCallsign(data.callsign || "");
+    setTournamentTitle(data.tournament_title || "");
+
+    if (!data.has_match) {
+      setGameOver(true);
+      setMessage("Слово дня сегодня недоступно — розыгрыш ещё не начался или уже завершён.");
+      setIsError(false);
+      return;
+    }
+
+    const finished = data.already_played || data.match_finished;
+    setRows(buildRows(data.previous_guesses, data.previous_results));
+    setLetterStates(buildLetterStates(data.previous_guesses, data.previous_results));
+    setActiveRowIndex(finished ? -1 : (data.previous_guesses || []).length);
+    setGameOver(finished);
+    setIsError(false);
+
+    const opponentNote = data.opponent_callsign ? ` Соперник: ${data.opponent_callsign}.` : "";
+
+    if (data.match_finished) {
+      const oppResult = data.opponent_attempts_used == null
+        ? ""
+        : ` Соперник ${data.opponent_solved ? "угадал" : "не угадал"} за ${data.opponent_attempts_used}/6.`;
+      setMessage((data.won ? `Победа в раунде ${data.round_number}!` : `Поражение в раунде ${data.round_number}.`) + opponentNote);
+      if (!announceTie) {
+        setModal({
+          title: `Матч, раунд ${data.round_number}`,
+          attemptsUsed: data.attempts_used,
+          solved: data.solved,
+          grid: data.previous_results,
+          answerWord: data.answer_word,
+          message: (data.won ? "Победа!" : "Поражение.") + oppResult,
+        });
+      }
+      return;
+    }
+
+    if (data.already_played) {
+      setMessage(
+        (data.solved ? "Вы угадали слово этой игры." : "Попытки в этой игре исчерпаны.") +
+          " Ждём соперника." + opponentNote
+      );
+      if (!announceTie) {
+        setModal({
+          title: `Матч, раунд ${data.round_number}`,
+          attemptsUsed: data.attempts_used,
+          solved: data.solved,
+          grid: data.previous_results,
+          message: "Вы сыграли, ждём соперника." + opponentNote,
+        });
+      }
+    } else {
+      setMessage(
+        `Матч сетки, раунд ${data.round_number}${data.is_sudden_death ? " (доп. раунд после ничьей)" : ""}.${opponentNote}`
+      );
+      if (!announceTie) setModal(null);
+    }
+  }
+
+  async function fetchStandardStatus() {
+    const res = await fetch(`/api/game/today?token=${encodeURIComponent(token)}&tournament_id=${tournamentId}`);
+    if (res.status === 404 || res.status === 403) {
+      setInvalidLink(true);
+      return null;
+    }
+    return res.json();
+  }
+
+  async function fetchBracketStatus() {
+    const res = await fetch(`/api/game/bracket/today?token=${encodeURIComponent(token)}&tournament_id=${tournamentId}`);
+    return res.json();
   }
 
   useEffect(() => {
     async function load() {
-      let standardData;
       try {
-        const res = await fetch(`/api/game/today?token=${encodeURIComponent(token)}&tournament_id=${tournamentId}`);
-        if (res.status === 404 || res.status === 403) {
-          setInvalidLink(true);
+        const standardData = await fetchStandardStatus();
+        if (standardData === null) return; // invalidLink уже выставлен
+
+        if (standardData.has_word_today) {
+          setMode("standard");
+          applyStandardStatus(standardData);
           return;
         }
-        standardData = await res.json();
-      } catch (e) {
-        setMessage("Не удалось загрузить статус игры.");
-        return;
-      }
 
-      setCallsign(standardData.callsign || "");
-      setTournamentTitle(standardData.tournament_title || "");
-
-      if (standardData.has_word_today) {
-        setMode("standard");
-        if (standardData.already_played) {
-          setMessage(standardData.solved ? "Вы уже угадали слово сегодня!" : "Попытки на сегодня исчерпаны.");
-          setGameOver(true);
-          fillPreviousGuesses(standardData.previous_guesses);
+        // нет обычного слова дня — возможно, это розыгрыш на вылет
+        // или championship уже в плей-офф: проверяем матч сетки
+        const bracketData = await fetchBracketStatus();
+        if (bracketData.has_match) {
+          setMode("bracket");
+          applyBracketStatus(bracketData);
         } else {
-          setMessage("");
+          setMode("standard");
+          applyStandardStatus(standardData);
         }
-        return;
-      }
-
-      // не оказалось обычного слова дня — возможно, это розыгрыш на вылет
-      // или championship уже в плей-офф: проверяем матч сетки
-      let bracketData;
-      try {
-        const res = await fetch(`/api/game/bracket/today?token=${encodeURIComponent(token)}&tournament_id=${tournamentId}`);
-        bracketData = await res.json();
       } catch (e) {
         setMessage("Не удалось загрузить статус игры.");
-        return;
-      }
-
-      if (bracketData.callsign) setCallsign(bracketData.callsign);
-      if (bracketData.tournament_title) setTournamentTitle(bracketData.tournament_title);
-
-      if (!bracketData.has_match) {
-        setMode("standard");
-        setMessage("Слово дня сегодня недоступно — розыгрыш ещё не начался или уже завершён.");
-        setGameOver(true);
-        return;
-      }
-
-      setMode("bracket");
-      const opponentNote = bracketData.opponent_callsign ? ` Соперник: ${bracketData.opponent_callsign}.` : "";
-
-      if (bracketData.match_finished) {
-        setGameOver(true);
-        setMessage(
-          (bracketData.won
-            ? `Победа в раунде ${bracketData.round_number}!`
-            : `Поражение в раунде ${bracketData.round_number}.`) + opponentNote
-        );
-        return;
-      }
-
-      if (bracketData.already_played) {
-        setGameOver(true);
-        setMessage(
-          (bracketData.solved ? "Вы угадали слово этой игры." : "Попытки в этой игре исчерпаны.") +
-            (bracketData.waiting_for_opponent ? " Ждём соперника." : "") +
-            opponentNote
-        );
-        fillPreviousGuesses(bracketData.previous_guesses);
-      } else {
-        setMessage(`Матч сетки, раунд ${bracketData.round_number}.${opponentNote}`);
+        setIsError(true);
       }
     }
 
@@ -138,31 +208,33 @@ export default function PlayerGame() {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       setMessage(err.detail || "Слово не найдено в словаре.");
+      setIsError(true);
       return;
     }
 
     const data = await res.json();
     const statuses = data.result.map((r) => r.state);
 
+    // грид "этого раунда" на момент прямо сейчас — до любых дальнейших фетчей,
+    // пригодится, если матч сетки уйдёт в sudden death (там прошлый раунд уже
+    // не будет виден в свежем статусе — там будет уже новый, пустой)
+    const roundGrid = [...rows.slice(0, activeRowIndex).map((r) => r.statuses), statuses];
+
     setRows((prev) => {
       const next = [...prev];
       next[activeRowIndex] = { letters: currentGuess.split(""), statuses };
       return next;
     });
-
     setLetterStates((prev) => {
       const next = { ...prev };
       data.result.forEach(({ letter, state }) => {
-        const priority = { correct: 3, present: 2, absent: 1 };
-        if (!next[letter] || priority[state] > priority[next[letter]]) {
-          next[letter] = state;
-        }
+        if (!next[letter] || LETTER_PRIORITY[state] > LETTER_PRIORITY[next[letter]]) next[letter] = state;
       });
       return next;
     });
-
     setCurrentGuess("");
     setActiveRowIndex((i) => i + 1);
+    setIsError(false);
 
     if (!data.game_over) {
       setMessage("");
@@ -170,19 +242,25 @@ export default function PlayerGame() {
     }
 
     setGameOver(true);
+
     if (mode === "bracket") {
-      setMessage(
-        data.solved
-          ? "Угадано! Ждём, чем закончит соперник."
-          : "Попытки в этой игре исчерпаны. Ждём соперника."
-      );
-    } else {
-      setMessage(
-        data.solved
-          ? (data.points != null ? `Угадано! +${data.points} очков` : "Угадано!")
-          : "Попытки исчерпаны. В следующий раз повезёт!"
-      );
+      const fresh = await fetchBracketStatus();
+      const isTie = !fresh.match_finished && !fresh.already_played;
+      if (isTie) {
+        setModal({
+          title: `Матч, раунд ${fresh.round_number}`,
+          attemptsUsed: data.attempts_used,
+          solved: data.solved,
+          grid: roundGrid,
+          message: "Ничья! У соперника такой же результат — начинается дополнительный раунд (sudden death).",
+        });
+      }
+      applyBracketStatus(fresh, { announceTie: isTie });
+      return;
     }
+
+    const fresh = await fetchStandardStatus();
+    if (fresh) applyStandardStatus(fresh);
   }
 
   if (invalidLink) {
@@ -200,7 +278,11 @@ export default function PlayerGame() {
       </Link>
       {tournamentTitle && <h2 style={{ margin: "0 0 4px" }}>{tournamentTitle}</h2>}
       {callsign && <div style={{ opacity: 0.6, marginBottom: 8 }}>Игрок: {callsign}</div>}
-      {message && <div style={{ marginBottom: 8, opacity: 0.8, textAlign: "center" }}>{message}</div>}
+      {message && (
+        <div style={{ marginBottom: 8, opacity: isError ? 1 : 0.8, textAlign: "center", color: isError ? "#e5484d" : "#fff" }}>
+          {message}
+        </div>
+      )}
       <WordGrid rows={rows} currentGuess={currentGuess} activeRowIndex={activeRowIndex} />
       <Keyboard
         letterStates={letterStates}
@@ -208,6 +290,17 @@ export default function PlayerGame() {
         onEnter={handleEnter}
         onBackspace={handleBackspace}
       />
+      {modal && (
+        <ResultModal
+          title={modal.title}
+          attemptsUsed={modal.attemptsUsed}
+          solved={modal.solved}
+          grid={modal.grid}
+          answerWord={modal.answerWord}
+          message={modal.message}
+          onClose={() => setModal(null)}
+        />
+      )}
     </Centered>
   );
 }

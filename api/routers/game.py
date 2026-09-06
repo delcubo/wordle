@@ -105,17 +105,23 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
     attempt = await crud.get_attempt(session, entry.id, daily_word.id)
     if attempt is None:
         return TodayWordStatus(
-            has_word_today=True, already_played=False, max_attempts=MAX_ATTEMPTS,
+            has_word_today=True, already_played=False, day_number=daily_word.day_number, max_attempts=MAX_ATTEMPTS,
             callsign=entry.callsign, tournament_title=tournament.title,
         )
 
     already_played = attempt.solved or attempt.attempts_used >= MAX_ATTEMPTS
+    # Раскраску прошлых попыток и (при поражении) сам ответ отдаём всегда, когда
+    # есть попытка — не только по завершении: иначе при возврате в недоигранную
+    # игру клиент не может восстановить ни цвета, ни номер текущей строки.
     return TodayWordStatus(
         has_word_today=True,
         already_played=already_played,
+        day_number=daily_word.day_number,
         attempts_used=attempt.attempts_used,
         solved=attempt.solved,
         previous_guesses=attempt.guesses,
+        previous_results=[check_guess(g, daily_word.word) for g in attempt.guesses],
+        answer_word=daily_word.word if already_played and not attempt.solved else None,
         max_attempts=MAX_ATTEMPTS,
         callsign=entry.callsign,
         tournament_title=tournament.title,

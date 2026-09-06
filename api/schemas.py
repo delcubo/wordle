@@ -106,9 +106,12 @@ class MyTournamentOut(BaseModel):
 class TodayWordStatus(BaseModel):
     has_word_today: bool
     already_played: bool
+    day_number: int | None = None
     attempts_used: int | None = None
     solved: bool | None = None
     previous_guesses: list[str] = []
+    previous_results: list[list[str]] = []  # раскраска каждой прошлой попытки, по буквам
+    answer_word: str | None = None  # раскрывается только если игра завершена и не разгадана
     max_attempts: int = 6
     callsign: str | None = None
     tournament_title: str | None = None
@@ -119,11 +122,17 @@ class BracketTodayStatus(BaseModel):
     match_finished: bool = False
     won: bool | None = None
     opponent_callsign: str | None = None
+    opponent_attempts_used: int | None = None
+    opponent_solved: bool | None = None
     round_number: int | None = None
+    game_number: int | None = None
+    is_sudden_death: bool = False
     already_played: bool = False
     attempts_used: int | None = None
     solved: bool | None = None
     previous_guesses: list[str] = []
+    previous_results: list[list[str]] = []
+    answer_word: str | None = None
     max_attempts: int = 6
     waiting_for_opponent: bool = False
     callsign: str | None = None
@@ -211,8 +220,14 @@ class PlayoffMatchOut(BaseModel):
     position: int
     entry_a_id: int | None
     entry_a_callsign: str | None
+    entry_a_attempts_used: int | None = None
+    entry_a_solved: bool | None = None
     entry_b_id: int | None
     entry_b_callsign: str | None
+    entry_b_attempts_used: int | None = None
+    entry_b_solved: bool | None = None
+    game_number: int | None = None
+    is_sudden_death: bool = False
     winner_entry_id: int | None
     status: str
     scheduled_date: date | None

@@ -694,6 +694,11 @@ function TiebreakPanel({ tournament }) {
 
 const MATCH_STATUS_LABEL = { pending: "ожидает", in_progress: "идёт", finished: "завершён" };
 
+function formatAttempts(attemptsUsed, solved) {
+  if (attemptsUsed == null) return "";
+  return `(${solved ? attemptsUsed : "X"}/6)`;
+}
+
 function BracketPanel({ tournament }) {
   const [entries, setEntries] = useState([]);
   const [matches, setMatches] = useState(null);
@@ -810,10 +815,13 @@ function BracketPanel({ tournament }) {
             <tbody>
               {matches.map((m) => (
                 <tr key={m.id} style={{ borderTop: "1px solid #2a2a2c" }}>
-                  <td style={tdStyle}>Р{m.round_number} · пара {m.position + 1}</td>
-                  <td style={tdStyle}>{m.entry_a_callsign || "?"}</td>
+                  <td style={tdStyle}>
+                    Р{m.round_number} · пара {m.position + 1}
+                    {m.is_sudden_death && <span style={{ opacity: 0.6 }}> (доп. раунд)</span>}
+                  </td>
+                  <td style={tdStyle}>{m.entry_a_callsign || "?"} {formatAttempts(m.entry_a_attempts_used, m.entry_a_solved)}</td>
                   <td style={tdStyle}>—</td>
-                  <td style={tdStyle}>{m.entry_b_callsign || "?"}</td>
+                  <td style={tdStyle}>{m.entry_b_callsign || "?"} {formatAttempts(m.entry_b_attempts_used, m.entry_b_solved)}</td>
                   <td style={{ ...tdStyle, opacity: 0.7 }}>
                     {m.winner_entry_id
                       ? <>победил: {m.winner_entry_id === m.entry_a_id ? m.entry_a_callsign : m.entry_b_callsign}
@@ -970,6 +978,8 @@ function BracketImage({ tournament, matches }) {
                   const nameB = m?.entry_b_callsign || "?";
                   const winnerA = m?.winner_entry_id != null && m.winner_entry_id === m.entry_a_id;
                   const winnerB = m?.winner_entry_id != null && m.winner_entry_id === m.entry_b_id;
+                  const attemptsA = formatAttempts(m?.entry_a_attempts_used, m?.entry_a_solved);
+                  const attemptsB = formatAttempts(m?.entry_b_attempts_used, m?.entry_b_solved);
                   return (
                     <g key={`box-${rIdx}-${i}`}>
                       <rect x={x} y={y} width={BOX_W} height={BOX_H} rx={6} fill="#1c1c1e" stroke="#3a3a3c" />
@@ -977,8 +987,14 @@ function BracketImage({ tournament, matches }) {
                       <text x={x + 8} y={y + BOX_H / 2 - 6} fontSize="13" fill={winnerA ? "#6aaa64" : "#fff"} fontWeight={winnerA ? "700" : "400"}>
                         {nameA}
                       </text>
+                      <text x={x + BOX_W - 8} y={y + BOX_H / 2 - 6} fontSize="11" textAnchor="end" fill={winnerA ? "#6aaa64" : "#818384"}>
+                        {attemptsA}
+                      </text>
                       <text x={x + 8} y={y + BOX_H - 6} fontSize="13" fill={winnerB ? "#6aaa64" : "#fff"} fontWeight={winnerB ? "700" : "400"}>
                         {nameB}
+                      </text>
+                      <text x={x + BOX_W - 8} y={y + BOX_H - 6} fontSize="11" textAnchor="end" fill={winnerB ? "#6aaa64" : "#818384"}>
+                        {attemptsB}
                       </text>
                     </g>
                   );

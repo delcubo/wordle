@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models import Tournament, TournamentType, TournamentStatus, PlayoffMatch
 from api.tournament_time import today, day_number_for_date
 from api.tiebreak import compute_final_order
-from api import crud
+from api import crud, bracket_game
 
 
 async def generate_championship_bracket(session: AsyncSession, tournament: Tournament) -> list[PlayoffMatch]:
@@ -107,7 +107,11 @@ async def _create_round(
 
 
 async def get_bracket_view(session: AsyncSession, tournament_id: int) -> list[dict]:
-    """Список пар сетки с позывными — для админ-панели."""
+    """
+    Список пар сетки с позывными — для админ-панели. Число попыток каждой
+    стороны берётся из текущей (последней) игры пары и видно сразу, как только
+    сторона доиграла — не только после того, как решится вся пара.
+    """
     matches = await crud.list_playoff_matches(session, tournament_id)
     entry_by_id = {e.id: e for e in await crud.list_entries(session, tournament_id)}
 
@@ -115,19 +119,26 @@ async def get_bracket_view(session: AsyncSession, tournament_id: int) -> list[di
         entry = entry_by_id.get(entry_id) if entry_id is not None else None
         return entry.callsign if entry else None
 
-    return [
-        {
+    result = []
+    for m in matches:
+        game = await bracket_game.get_current_game(session, m)
+        result.append({
             "id": m.id,
             "round_number": m.round_number,
             "position": m.position,
             "entry_a_id": m.entry_a_id,
             "entry_a_callsign": callsign(m.entry_a_id),
+            "entry_a_attempts_used": game.entry_a_attempts_used if game else None,
+            "entry_a_solved": game.entry_a_solved if game else None,
             "entry_b_id": m.entry_b_id,
             "entry_b_callsign": callsign(m.entry_b_id),
+            "entry_b_attempts_used": game.entry_b_attempts_used if game else None,
+            "entry_b_solved": game.entry_b_solved if game else None,
+            "game_number": game.game_number if game else None,
+            "is_sudden_death": game.is_sudden_death if game else False,
             "winner_entry_id": m.winner_entry_id,
             "status": m.status,
             "scheduled_date": m.scheduled_date,
             "admin_note": m.admin_note,
-        }
-        for m in matches
-    ]
+        })
+    return result
