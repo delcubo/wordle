@@ -19,6 +19,7 @@ from api.schemas import (
     PlayoffMatchOut, BracketRound1Request, MatchOverrideRequest,
     DayResultOverrideRequest, DayResultOverrideResponse,
     ThemeOut, ThemeUpdateRequest,
+    ExcludedWordOut, ExcludedWordCreateRequest,
 )
 from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry, PlayoffMatch, TiebreakRound
 from api.admin_auth import check_password, create_session_token, require_admin, COOKIE_NAME
@@ -71,6 +72,38 @@ async def update_theme_setting(
         raise HTTPException(status_code=400, detail="Тема может быть только 'dark' или 'light'")
     settings = await crud.set_theme(session, payload.theme)
     return ThemeOut(theme=settings.theme)
+
+
+# ---------- Словарь: слова, исключённые админом вручную ----------
+
+@router.get("/dictionary/excluded", response_model=list[ExcludedWordOut])
+async def get_excluded_words(session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    words = await crud.list_excluded_words(session)
+    return [ExcludedWordOut(id=w.id, word=w.word, excluded_at=str(w.excluded_at)) for w in words]
+
+
+@router.post("/dictionary/excluded", response_model=ExcludedWordOut)
+async def add_excluded_word(
+    payload: ExcludedWordCreateRequest, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
+):
+    """Исключить слово из выбора будущих слов дня (см. обсуждение источника
+    словаря — способ точечно убирать странные/архаичные находки по факту игры).
+    На уже назначенные слова (в т.ч. сегодняшнее) и на проверку вводимых
+    попыток не влияет — см. ExcludedWord."""
+    word = payload.word.strip().lower()
+    if len(word) != 5:
+        raise HTTPException(status_code=400, detail="Слово должно быть из 5 букв")
+    canonical = canonical_word(word) or word  # приводим е/ё к варианту из словаря, если слово там есть
+    excluded = await crud.exclude_word(session, canonical)
+    return ExcludedWordOut(id=excluded.id, word=excluded.word, excluded_at=str(excluded.excluded_at))
+
+
+@router.delete("/dictionary/excluded/{excluded_id}")
+async def remove_excluded_word(excluded_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    ok = await crud.unexclude_word(session, excluded_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Не найдено")
+    return {"ok": True}
 
 
 # ---------- Users (глобальный список игроков) ----------

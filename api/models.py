@@ -325,3 +325,19 @@ class AppSettings(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     theme: Mapped[str] = mapped_column(String(10), default="dark")  # "dark" | "light"
+
+
+class ExcludedWord(Base):
+    """
+    Слово, которое админ вручную исключил из словаря (нашёл странным/архаичным/
+    неуместным по факту игры — см. обсуждение источника словаря). Влияет только
+    на выбор БУДУЩИХ слов дня (pick_word_for_day/pick_alternative_word/
+    pick_word_for_match) — уже назначенные слова текущих/прошлых дней не
+    трогает, и проверку вводимых попыток (is_valid_word) тоже не трогает, чтобы
+    случайно не заблокировать игрокам ввод уже загаданного на сегодня слова.
+    """
+    __tablename__ = "excluded_words"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    word: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    excluded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

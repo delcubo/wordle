@@ -16,6 +16,21 @@ class ThemeUpdateRequest(BaseModel):
     theme: str  # "dark" | "light"
 
 
+# ---------- Словарь: исключённые слова ----------
+
+class ExcludedWordOut(BaseModel):
+    id: int
+    word: str
+    excluded_at: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class ExcludedWordCreateRequest(BaseModel):
+    word: str
+
+
 # ---------- Users ----------
 
 class UserCreateRequest(BaseModel):

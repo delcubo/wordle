@@ -81,9 +81,11 @@ export default function AdminDashboard() {
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
         <TabButton active={tab === "tournaments"} onClick={() => setTab("tournaments")}>Розыгрыши</TabButton>
         <TabButton active={tab === "users"} onClick={() => setTab("users")}>Игроки</TabButton>
+        <TabButton active={tab === "dictionary"} onClick={() => setTab("dictionary")}>Словарь</TabButton>
       </div>
 
       {tab === "users" && <UsersPanel users={users} onChanged={refreshUsers} />}
+      {tab === "dictionary" && <DictionaryPanel />}
 
       {tab === "tournaments" && (
         <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
@@ -310,6 +312,83 @@ function UsersPanel({ users, onChanged }) {
             </table>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+function DictionaryPanel() {
+  const [words, setWords] = useState([]);
+  const [newWord, setNewWord] = useState("");
+  const [error, setError] = useState("");
+
+  async function refresh() {
+    setWords(await api("/api/admin/dictionary/excluded"));
+  }
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleAdd(e) {
+    e.preventDefault();
+    setError("");
+    try {
+      await api("/api/admin/dictionary/excluded", {
+        method: "POST",
+        body: JSON.stringify({ word: newWord.trim().toLowerCase() }),
+      });
+      setNewWord("");
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function handleRemove(id) {
+    await api(`/api/admin/dictionary/excluded/${id}`, { method: "DELETE" });
+    refresh();
+  }
+
+  return (
+    <div style={{ ...panelStyle, maxWidth: 500 }}>
+      <h3 style={{ marginTop: 0 }}>Словарь — исключённые слова</h3>
+      <p style={{ opacity: 0.7, fontSize: 13, marginTop: -4 }}>
+        Слова из этого списка больше не будут предлагаться как новое слово дня —
+        удобно вычищать странные/архаичные находки по факту игры. На уже
+        назначенные слова (в т.ч. сегодняшнее) и на проверку вводимых попыток
+        не влияет.
+      </p>
+      <form onSubmit={handleAdd} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input
+          placeholder="Слово из 5 букв"
+          value={newWord}
+          onChange={(e) => setNewWord(e.target.value)}
+          maxLength={20}
+          style={{ ...inputStyle, flex: 1 }}
+        />
+        <button type="submit" style={buttonStyle}>Исключить</button>
+      </form>
+      {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
+
+      {words.length === 0 ? (
+        <div style={{ opacity: 0.5, fontSize: 13 }}>Список пуст.</div>
+      ) : (
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <tbody>
+            {words.map((w) => (
+              <tr key={w.id} style={{ borderTop: "1px solid #2a2a2c" }}>
+                <td style={{ ...tdStyle, textTransform: "uppercase", letterSpacing: 1 }}>{w.word}</td>
+                <td style={tdStyle}>
+                  <button onClick={() => handleRemove(w.id)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                    Вернуть в словарь
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );
@@ -615,10 +694,13 @@ function EntriesPanel({ tournament, users }) {
 function TodayWordPanel({ tournament }) {
   const [word, setWord] = useState(null);
   const [notApplicable, setNotApplicable] = useState(false);
+  const [excluded, setExcluded] = useState(false);
 
   async function refresh() {
     try {
-      setWord(await api(`/api/admin/tournaments/${tournament.id}/words/today`));
+      const data = await api(`/api/admin/tournaments/${tournament.id}/words/today`);
+      setWord(data);
+      setExcluded(false);
       setNotApplicable(false);
     } catch (e) {
       setNotApplicable(true);
@@ -630,6 +712,11 @@ function TodayWordPanel({ tournament }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tournament.id]);
 
+  async function handleExclude() {
+    await api("/api/admin/dictionary/excluded", { method: "POST", body: JSON.stringify({ word: word.word }) });
+    setExcluded(true);
+  }
+
   if (notApplicable || !word) return null;
 
   return (
@@ -638,7 +725,17 @@ function TodayWordPanel({ tournament }) {
       <p style={{ fontSize: 13, opacity: 0.7, marginTop: -4 }}>
         День уже идёт, менять слово поздно — это просто справка для админа.
       </p>
-      <span style={{ fontSize: 22, fontWeight: 700, textTransform: "uppercase", letterSpacing: 2 }}>{word.word}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <span style={{ fontSize: 22, fontWeight: 700, textTransform: "uppercase", letterSpacing: 2 }}>{word.word}</span>
+        <button
+          onClick={handleExclude}
+          disabled={excluded}
+          title="Больше не предлагать это слово в будущем — на сегодняшнее слово не влияет"
+          style={{ ...ghostButtonStyle, fontSize: 12 }}
+        >
+          {excluded ? "Исключено из будущих слов" : "🚫 Исключить из словаря"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -690,6 +787,16 @@ function WordConfirmPanel({ tournament }) {
     }
   }
 
+  async function handleExcludeAndReroll() {
+    setError("");
+    try {
+      await api("/api/admin/dictionary/excluded", { method: "POST", body: JSON.stringify({ word: word.word }) });
+      await handleReroll();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   if (notApplicable) return null;
   if (!word) return null;
 
@@ -709,6 +816,13 @@ function WordConfirmPanel({ tournament }) {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button onClick={() => handleConfirm(false)} style={buttonStyle}>Согласиться с этим словом</button>
         <button onClick={handleReroll} style={ghostButtonStyle}>Предложить другое слово</button>
+        <button
+          onClick={handleExcludeAndReroll}
+          title="Исключить это слово из будущих предложений и сразу показать другое"
+          style={ghostButtonStyle}
+        >
+          🚫 Исключить и предложить другое
+        </button>
         <input placeholder="Или ввести своё слово" value={override} onChange={(e) => setOverride(e.target.value)} style={inputStyle} maxLength={5} />
         <button onClick={() => handleConfirm(true)} disabled={override.trim().length !== 5} style={ghostButtonStyle}>Заменить</button>
       </div>

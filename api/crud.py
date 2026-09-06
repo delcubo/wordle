@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models import (
     Tournament, TournamentStatus, TournamentEntry, User, DailyWord, DailyWordStatus, Attempt,
-    TiebreakRound, TiebreakParticipant, PlayoffMatch, PlayoffGame, AppSettings,
+    TiebreakRound, TiebreakParticipant, PlayoffMatch, PlayoffGame, AppSettings, ExcludedWord,
 )
 from api.dictionary import pick_word_for_day, pick_alternative_word, pick_word_for_match
 from api.tournament_time import today, day_number_for_date, date_for_day_number
@@ -227,8 +227,13 @@ async def get_daily_word_by_day(session: AsyncSession, tournament_id: int, day_n
 
 
 async def _get_used_words(session: AsyncSession, tournament_id: int) -> set[str]:
+    """Слова, уже сыгранные в этом розыгрыше, ПЛЮС слова, исключённые админом
+    глобально (см. ExcludedWord) — оба множества одинаково не годятся в
+    кандидаты для нового слова, так что удобно отдавать их одним набором
+    везде, где already_used передаётся в pick_word_for_day/_alternative/_match."""
     result = await session.execute(select(DailyWord.word).where(DailyWord.tournament_id == tournament_id))
-    return {row[0] for row in result.all()}
+    used = {row[0] for row in result.all()}
+    return used | await get_excluded_words(session)
 
 
 async def get_or_suggest_daily_word(session: AsyncSession, tournament: Tournament, day_number: int) -> DailyWord:
@@ -634,6 +639,39 @@ async def set_theme(session: AsyncSession, theme: str) -> AppSettings:
     await session.commit()
     await session.refresh(settings)
     return settings
+
+
+# ---------- Словарь: слова, исключённые админом вручную ----------
+
+async def get_excluded_words(session: AsyncSession) -> set[str]:
+    result = await session.execute(select(ExcludedWord.word))
+    return {row[0] for row in result.all()}
+
+
+async def list_excluded_words(session: AsyncSession) -> list[ExcludedWord]:
+    result = await session.execute(select(ExcludedWord).order_by(ExcludedWord.excluded_at.desc()))
+    return list(result.scalars().all())
+
+
+async def exclude_word(session: AsyncSession, word: str) -> ExcludedWord:
+    result = await session.execute(select(ExcludedWord).where(ExcludedWord.word == word))
+    existing = result.scalar_one_or_none()
+    if existing is not None:
+        return existing
+    excluded = ExcludedWord(word=word)
+    session.add(excluded)
+    await session.commit()
+    await session.refresh(excluded)
+    return excluded
+
+
+async def unexclude_word(session: AsyncSession, excluded_id: int) -> bool:
+    excluded = await session.get(ExcludedWord, excluded_id)
+    if excluded is None:
+        return False
+    await session.delete(excluded)
+    await session.commit()
+    return True
 
 
 async def save_playoff_guess(
