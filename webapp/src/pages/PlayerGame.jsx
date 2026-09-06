@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import WordGrid from "../components/WordGrid.jsx";
+import WordGrid, { FLIP_TOTAL_MS } from "../components/WordGrid.jsx";
 import Keyboard from "../components/Keyboard.jsx";
 import ResultModal from "../components/ResultModal.jsx";
+import { fetchTheme, themeVars } from "../theme.js";
 
 const MAX_ATTEMPTS = 6;
 const WORD_LENGTH = 5;
@@ -46,6 +47,12 @@ export default function PlayerGame() {
   // "bracket" — матч сетки на выбывание (championship после посева, knockout всегда)
   const [mode, setMode] = useState("standard");
   const [modal, setModal] = useState(null);
+  const [theme, setTheme] = useState("dark");
+  const [animateRowIndex, setAnimateRowIndex] = useState(null);
+
+  useEffect(() => {
+    fetchTheme().then(setTheme);
+  }, []);
 
   function applyStandardStatus(data) {
     setCallsign(data.callsign || "");
@@ -225,6 +232,7 @@ export default function PlayerGame() {
       next[activeRowIndex] = { letters: currentGuess.split(""), statuses };
       return next;
     });
+    setAnimateRowIndex(activeRowIndex);
     setLetterStates((prev) => {
       const next = { ...prev };
       data.result.forEach(({ letter, state }) => {
@@ -243,47 +251,54 @@ export default function PlayerGame() {
 
     setGameOver(true);
 
+    // Итоговую модалку и любые UI-обновления, перекрывающие грид, откладываем
+    // до конца анимации переворота последней строки — иначе она перекроет
+    // грид раньше, чем игрок увидит цвет своей последней попытки.
     if (mode === "bracket") {
       const fresh = await fetchBracketStatus();
       const isTie = !fresh.match_finished && !fresh.already_played;
-      if (isTie) {
-        setModal({
-          title: `Матч, раунд ${fresh.round_number}`,
-          attemptsUsed: data.attempts_used,
-          solved: data.solved,
-          grid: roundGrid,
-          message: "Ничья! У соперника такой же результат — начинается дополнительный раунд (sudden death).",
-        });
-      }
-      applyBracketStatus(fresh, { announceTie: isTie });
+      setTimeout(() => {
+        if (isTie) {
+          setModal({
+            title: `Матч, раунд ${fresh.round_number}`,
+            attemptsUsed: data.attempts_used,
+            solved: data.solved,
+            grid: roundGrid,
+            message: "Ничья! У соперника такой же результат — начинается дополнительный раунд (sudden death).",
+          });
+        }
+        applyBracketStatus(fresh, { announceTie: isTie });
+      }, FLIP_TOTAL_MS);
       return;
     }
 
     const fresh = await fetchStandardStatus();
-    if (fresh) applyStandardStatus(fresh);
+    setTimeout(() => {
+      if (fresh) applyStandardStatus(fresh);
+    }, FLIP_TOTAL_MS);
   }
 
   if (invalidLink) {
     return (
-      <Centered>
+      <Centered theme={theme}>
         <p>Эта ссылка недействительна, или вы не участвуете в этом розыгрыше.</p>
       </Centered>
     );
   }
 
   return (
-    <Centered>
-      <Link to={`/play/${token}`} style={{ color: "#818384", fontSize: 13, marginBottom: 8 }}>
+    <Centered theme={theme}>
+      <Link to={`/play/${token}`} style={{ color: "var(--muted)", fontSize: 13, marginBottom: 8 }}>
         ← Мои розыгрыши
       </Link>
       {tournamentTitle && <h2 style={{ margin: "0 0 4px" }}>{tournamentTitle}</h2>}
       {callsign && <div style={{ opacity: 0.6, marginBottom: 8 }}>Игрок: {callsign}</div>}
       {message && (
-        <div style={{ marginBottom: 8, opacity: isError ? 1 : 0.8, textAlign: "center", color: isError ? "#e5484d" : "#fff" }}>
+        <div style={{ marginBottom: 8, opacity: isError ? 1 : 0.8, textAlign: "center", color: isError ? "var(--error)" : "var(--fg)" }}>
           {message}
         </div>
       )}
-      <WordGrid rows={rows} currentGuess={currentGuess} activeRowIndex={activeRowIndex} />
+      <WordGrid rows={rows} currentGuess={currentGuess} activeRowIndex={activeRowIndex} animateRowIndex={animateRowIndex} />
       <Keyboard
         letterStates={letterStates}
         onLetter={handleLetter}
@@ -305,13 +320,14 @@ export default function PlayerGame() {
   );
 }
 
-function Centered({ children }) {
+function Centered({ children, theme = "dark" }) {
   return (
     <div
       style={{
+        ...themeVars(theme),
         minHeight: "100vh",
-        background: "#121213",
-        color: "#fff",
+        background: "var(--bg)",
+        color: "var(--fg)",
         fontFamily: "system-ui, sans-serif",
         display: "flex",
         flexDirection: "column",

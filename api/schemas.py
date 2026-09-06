@@ -6,6 +6,16 @@ class AdminLoginRequest(BaseModel):
     password: str
 
 
+# ---------- Общие настройки сайта ----------
+
+class ThemeOut(BaseModel):
+    theme: str  # "dark" | "light"
+
+
+class ThemeUpdateRequest(BaseModel):
+    theme: str  # "dark" | "light"
+
+
 # ---------- Users ----------
 
 class UserCreateRequest(BaseModel):

@@ -18,6 +18,7 @@ from api.schemas import (
     TiebreakRoundOut, TiebreakParticipantOut, TiebreakStartResponse, TiebreakOverrideRequest,
     PlayoffMatchOut, BracketRound1Request, MatchOverrideRequest,
     DayResultOverrideRequest, DayResultOverrideResponse,
+    ThemeOut, ThemeUpdateRequest,
 )
 from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry, PlayoffMatch, TiebreakRound
 from api.admin_auth import check_password, create_session_token, require_admin, COOKIE_NAME
@@ -50,6 +51,26 @@ async def logout(response: Response):
 @router.get("/me")
 async def me(_: None = Depends(require_admin)):
     return {"ok": True}
+
+
+# ---------- Общие настройки сайта ----------
+
+@router.get("/settings/theme", response_model=ThemeOut)
+async def get_theme_setting(session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    settings = await crud.get_app_settings(session)
+    return ThemeOut(theme=settings.theme)
+
+
+@router.patch("/settings/theme", response_model=ThemeOut)
+async def update_theme_setting(
+    payload: ThemeUpdateRequest, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
+):
+    """Переключатель темы оформления для игроков — применяется сразу ко всем
+    (см. пункт #9 бэклога), не привязан к конкретному розыгрышу."""
+    if payload.theme not in ("dark", "light"):
+        raise HTTPException(status_code=400, detail="Тема может быть только 'dark' или 'light'")
+    settings = await crud.set_theme(session, payload.theme)
+    return ThemeOut(theme=settings.theme)
 
 
 # ---------- Users (глобальный список игроков) ----------

@@ -5,10 +5,10 @@ const ROWS = [
 ];
 
 const COLORS = {
-  correct: "#538d4e",
-  present: "#b59f3b",
-  absent: "#3a3a3c",
-  default: "#818384",
+  correct: "var(--correct)",
+  present: "var(--present)",
+  absent: "var(--absent)",
+  default: "var(--key-default)",
 };
 
 export default function Keyboard({ letterStates, onLetter, onEnter, onBackspace }) {
@@ -28,21 +28,25 @@ export default function Keyboard({ letterStates, onLetter, onEnter, onBackspace 
       {ROWS.map((row, i) => (
         <div key={i} style={{ display: "flex", gap: "clamp(3px, 1vw, 6px)", width: "100%" }}>
           {i === 2 && (
-            <KeyButton wide onClick={onEnter}>
+            <KeyButton wide onClick={onEnter} color="var(--key-default-fg)">
               ввод
             </KeyButton>
           )}
-          {row.split("").map((letter) => (
-            <KeyButton
-              key={letter}
-              onClick={() => onLetter(letter)}
-              background={COLORS[letterStates[letter]] ?? COLORS.default}
-            >
-              {letter}
-            </KeyButton>
-          ))}
+          {row.split("").map((letter) => {
+            const state = letterStates[letter];
+            return (
+              <KeyButton
+                key={letter}
+                onClick={() => onLetter(letter)}
+                background={state ? COLORS[state] : COLORS.default}
+                color={state ? "#fff" : "var(--key-default-fg)"}
+              >
+                {letter}
+              </KeyButton>
+            );
+          })}
           {i === 2 && (
-            <KeyButton wide onClick={onBackspace}>
+            <KeyButton wide onClick={onBackspace} color="var(--key-default-fg)">
               ⌫
             </KeyButton>
           )}
@@ -52,7 +56,7 @@ export default function Keyboard({ letterStates, onLetter, onEnter, onBackspace 
   );
 }
 
-function KeyButton({ children, onClick, background = "#818384", wide = false }) {
+function KeyButton({ children, onClick, background = "var(--key-default)", color = "#fff", wide = false }) {
   return (
     <button
       onClick={onClick}
@@ -61,7 +65,7 @@ function KeyButton({ children, onClick, background = "#818384", wide = false }) 
         minWidth: 0,
         height: "clamp(38px, 11vw, 58px)",
         background,
-        color: "#fff",
+        color,
         border: "none",
         borderRadius: 4,
         fontSize: wide ? "clamp(9px, 2.8vw, 13px)" : "clamp(11px, 3.6vw, 16px)",

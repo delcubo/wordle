@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
+import { fetchTheme, themeVars } from "../theme.js";
 
 const STATUS_LABEL = { draft: "не начался", active: "идёт", tiebreak: "тай-брейк", playoff: "плей-офф", finished: "завершён" };
 const TYPE_LABEL = { standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат", endless: "Бессрочная игра" };
@@ -8,6 +9,7 @@ export default function MyTournaments() {
   const { token } = useParams();
   const [tournaments, setTournaments] = useState(null);
   const [error, setError] = useState("");
+  const [theme, setTheme] = useState("dark");
 
   useEffect(() => {
     fetch(`/api/game/my-tournaments?token=${encodeURIComponent(token)}`)
@@ -19,10 +21,14 @@ export default function MyTournaments() {
       .catch((e) => setError(e.message));
   }, [token]);
 
+  useEffect(() => {
+    fetchTheme().then(setTheme);
+  }, []);
+
   return (
-    <div style={pageStyle}>
+    <div style={{ ...pageStyle, ...themeVars(theme) }}>
       <h2>Мои розыгрыши</h2>
-      {error && <div style={{ color: "#e5484d" }}>{error}</div>}
+      {error && <div style={{ color: "var(--error)" }}>{error}</div>}
       {tournaments && tournaments.length === 0 && <div style={{ opacity: 0.7 }}>Вы пока не подключены ни к одному розыгрышу.</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 10, width: 320 }}>
         {tournaments?.map((t) => (
@@ -44,8 +50,8 @@ export default function MyTournaments() {
 
 const pageStyle = {
   minHeight: "100vh",
-  background: "#121213",
-  color: "#fff",
+  background: "var(--bg)",
+  color: "var(--fg)",
   fontFamily: "system-ui, sans-serif",
   display: "flex",
   flexDirection: "column",
@@ -58,8 +64,8 @@ const cardStyle = {
   display: "block",
   padding: 12,
   borderRadius: 8,
-  border: "1px solid #3a3a3c",
-  background: "#1c1c1e",
-  color: "#fff",
+  border: "1px solid var(--border)",
+  background: "var(--bg-secondary)",
+  color: "var(--fg)",
   textDecoration: "none",
 };

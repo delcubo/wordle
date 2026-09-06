@@ -310,3 +310,15 @@ class TiebreakParticipant(Base):
     entry_id: Mapped[int] = mapped_column(ForeignKey("tournament_entries.id"))
 
     round: Mapped["TiebreakRound"] = relationship(back_populates="participants")
+
+
+class AppSettings(Base):
+    """
+    Единственная строка (id=1) с общими настройками сайта, не привязанными
+    к конкретному розыгрышу — сейчас только тема оформления для игроков
+    (см. пункт #9 бэклога: переключатель у админа, применяется ко всем сразу).
+    """
+    __tablename__ = "app_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    theme: Mapped[str] = mapped_column(String(10), default="dark")  # "dark" | "light"

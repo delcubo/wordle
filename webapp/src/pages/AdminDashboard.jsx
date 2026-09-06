@@ -29,6 +29,7 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState([]);
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [theme, setTheme] = useState("dark");
 
   async function refreshTournaments() {
     const data = await api("/api/admin/tournaments");
@@ -40,9 +41,13 @@ export default function AdminDashboard() {
     setUsers(await api("/api/admin/users"));
   }
 
+  async function refreshTheme() {
+    setTheme((await api("/api/admin/settings/theme")).theme);
+  }
+
   useEffect(() => {
     api("/api/admin/me")
-      .then(() => Promise.all([refreshTournaments(), refreshUsers()]))
+      .then(() => Promise.all([refreshTournaments(), refreshUsers(), refreshTheme()]))
       .catch(() => {})
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -53,13 +58,24 @@ export default function AdminDashboard() {
     navigate("/login");
   }
 
+  async function handleToggleTheme() {
+    const next = theme === "dark" ? "light" : "dark";
+    await api("/api/admin/settings/theme", { method: "PATCH", body: JSON.stringify({ theme: next }) });
+    setTheme(next);
+  }
+
   if (loading) return <Centered>Загрузка...</Centered>;
 
   return (
     <div style={{ minHeight: "100vh", background: "#121213", color: "#fff", fontFamily: "system-ui, sans-serif", padding: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <h1 style={{ margin: 0 }}>Админ-панель · Вордли</h1>
-        <button onClick={handleLogout} style={ghostButtonStyle}>Выйти</button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button onClick={handleToggleTheme} style={ghostButtonStyle} title="Тема оформления для игроков (не влияет на саму админ-панель)">
+            Тема игроков: {theme === "dark" ? "тёмная" : "светлая"}
+          </button>
+          <button onClick={handleLogout} style={ghostButtonStyle}>Выйти</button>
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>

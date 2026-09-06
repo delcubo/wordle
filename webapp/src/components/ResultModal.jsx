@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 const EMOJI = { correct: "🟩", present: "🟨", absent: "⬜" };
-const CELL_COLOR = { correct: "#538d4e", present: "#b59f3b", absent: "#3a3a3c" };
+const CELL_COLOR = { correct: "var(--correct)", present: "var(--present)", absent: "var(--absent)" };
 
 /**
  * Всплывающее окно результата — и для обычного слова дня, и для матча сетки.
@@ -39,15 +39,15 @@ export default function ResultModal({ title, attemptsUsed, solved, grid, answerW
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: "#1c1c1e", borderRadius: 10, padding: 20, width: 320,
-          maxWidth: "90vw", color: "#fff", textAlign: "center",
+          background: "var(--bg-secondary)", borderRadius: 10, padding: 20, width: 320,
+          maxWidth: "90vw", color: "var(--fg)", textAlign: "center",
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h3 style={{ margin: 0, fontSize: 16 }}>{title} {solved ? `${attemptsUsed}/6` : "X/6"}</h3>
           <button
             onClick={onClose}
-            style={{ background: "transparent", border: "none", color: "#818384", fontSize: 20, cursor: "pointer", lineHeight: 1 }}
+            style={{ background: "transparent", border: "none", color: "var(--muted)", fontSize: 20, cursor: "pointer", lineHeight: 1 }}
           >
             ×
           </button>
@@ -65,7 +65,7 @@ export default function ResultModal({ title, attemptsUsed, solved, grid, answerW
           {grid.map((row, i) => (
             <div key={i} style={{ display: "flex", gap: 4 }}>
               {row.map((s, j) => (
-                <div key={j} style={{ width: 26, height: 26, borderRadius: 3, background: CELL_COLOR[s] || "#3a3a3c" }} />
+                <div key={j} style={{ width: 26, height: 26, borderRadius: 3, background: CELL_COLOR[s] || "var(--absent)" }} />
               ))}
             </div>
           ))}
@@ -75,7 +75,7 @@ export default function ResultModal({ title, attemptsUsed, solved, grid, answerW
           onClick={handleCopy}
           style={{
             width: "100%", padding: "10px 0", borderRadius: 6, border: "none",
-            background: "#538d4e", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
+            background: "var(--correct)", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
           }}
         >
           {copied ? "Скопировано!" : "Скопировать результат"}

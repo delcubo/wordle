@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models import (
     Tournament, TournamentStatus, TournamentEntry, User, DailyWord, DailyWordStatus, Attempt,
-    TiebreakRound, TiebreakParticipant, PlayoffMatch, PlayoffGame,
+    TiebreakRound, TiebreakParticipant, PlayoffMatch, PlayoffGame, AppSettings,
 )
 from api.dictionary import pick_word_for_day, pick_alternative_word, pick_word_for_match
 from api.tournament_time import today, day_number_for_date, date_for_day_number
@@ -19,7 +19,12 @@ from api.tournament_time import today, day_number_for_date, date_for_day_number
 # ---------- Users (глобальная личность) ----------
 
 async def create_user(session: AsyncSession, admin_note: str | None = None, is_test: bool = False) -> User:
-    user = User(access_token=secrets.token_urlsafe(24), admin_note=admin_note, is_test=is_test)
+    # 8 байт (~11 символов base64url) — короче старых 32-символьных ссылок для
+    # удобства, но 64 бита энтропии всё ещё практически не подобрать перебором
+    # (см. пункт #17 бэклога: 5 символов, как изначально просили, было бы
+    # подобрать перебором реально при отсутствии rate-limit, поэтому выбрана
+    # умеренная длина). Уже выданные более длинные токены не трогаем.
+    user = User(access_token=secrets.token_urlsafe(8), admin_note=admin_note, is_test=is_test)
     session.add(user)
     await session.commit()
     await session.refresh(user)
@@ -607,6 +612,28 @@ async def create_playoff_game(
     await session.commit()
     await session.refresh(game)
     return game
+
+
+# ---------- Общие настройки сайта ----------
+
+async def get_app_settings(session: AsyncSession) -> AppSettings:
+    """Единственная строка настроек (id=1) — заводится лениво при первом обращении."""
+    settings = await session.get(AppSettings, 1)
+    if settings is None:
+        settings = AppSettings(id=1, theme="dark")
+        session.add(settings)
+        await session.commit()
+        await session.refresh(settings)
+    return settings
+
+
+async def set_theme(session: AsyncSession, theme: str) -> AppSettings:
+    settings = await get_app_settings(session)
+    settings.theme = theme
+    session.add(settings)
+    await session.commit()
+    await session.refresh(settings)
+    return settings
 
 
 async def save_playoff_guess(

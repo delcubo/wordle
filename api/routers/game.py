@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_session
-from api.schemas import TodayWordStatus, GuessRequest, GuessResponse, LetterState, MyTournamentOut, BracketTodayStatus
+from api.schemas import TodayWordStatus, GuessRequest, GuessResponse, LetterState, MyTournamentOut, BracketTodayStatus, ThemeOut
 from api.wordle_logic import check_guess, is_solved
 from api.scoring import calculate_points
 from api.dictionary import is_valid_word
@@ -20,6 +20,14 @@ from api import crud, tiebreak, bracket_game
 router = APIRouter(prefix="/game", tags=["game"])
 
 MAX_ATTEMPTS = 6
+
+
+@router.get("/theme", response_model=ThemeOut)
+async def get_theme(session: AsyncSession = Depends(get_session)):
+    """Публичная (без токена) — тема оформления, которую задаёт админ для всех
+    игроков сразу (см. пункт #9 бэклога)."""
+    settings = await crud.get_app_settings(session)
+    return ThemeOut(theme=settings.theme)
 
 
 async def _authenticate_user(session: AsyncSession, token: str):
