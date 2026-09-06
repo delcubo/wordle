@@ -57,6 +57,14 @@ class User(Base):
     access_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     admin_note: Mapped[str | None] = mapped_column(String(200), nullable=True)  # для админа: кто это
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # "Удалить игрока совсем" — на деле перемещение в папку "Удалённые" во
+    # вкладке "Игроки" (см. пункт #12 бэклога), без потери исторических данных.
+    # Прячет игрока из основного списка админки, но ни на что игровое не влияет.
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Личный тестовый игрок админа (см. пункт #25 бэклога) — играет как обычно
+    # и подключается к любым розыгрышам, но исключается из подсчёта таблиц
+    # результатов, чтобы не искажать лидерборд для остальных участников.
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False)
 
     entries: Mapped[list["TournamentEntry"]] = relationship(back_populates="user")
 
@@ -112,6 +120,12 @@ class TournamentEntry(Base):
     # день розыгрыша (1-based), с которого подключён — дни ДО этого числа всё равно
     # помечаются флагом пропуска (см. ранее согласованные правила).
     joined_on_day: Mapped[int] = mapped_column(Integer)
+
+    # Мягкое отключение игрока от розыгрыша админом (не удаляет запись и её
+    # Attempt'ы — статистика остаётся в таблице): False = не может больше играть
+    # и не видит розыгрыш в "моих розыгрышах", но продолжает учитываться
+    # в лидерборде своими уже набранными результатами.
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     tournament: Mapped["Tournament"] = relationship(back_populates="entries")
     user: Mapped["User"] = relationship(back_populates="entries")

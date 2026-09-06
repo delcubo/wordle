@@ -10,9 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.database import get_session
 from api.schemas import (
     AdminLoginRequest,
-    UserCreateRequest, UserOut, UserEditRequest,
+    UserCreateRequest, UserOut, UserEditRequest, UserTournamentInfo, UserArchiveRequest,
     TournamentConfigRequest, TournamentOut, TournamentSettingsUpdateRequest,
-    EntryCreateRequest, EntryOut, EntryEditRequest,
+    EntryCreateRequest, EntryOut, EntryEditRequest, EntryActiveRequest,
     DailyWordOut, ConfirmWordRequest,
     StandingsResponse, StandingsRowOut, DailyCell,
     TiebreakRoundOut, TiebreakParticipantOut, TiebreakStartResponse, TiebreakOverrideRequest,
@@ -21,7 +21,7 @@ from api.schemas import (
 )
 from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry, PlayoffMatch, TiebreakRound
 from api.admin_auth import check_password, create_session_token, require_admin, COOKIE_NAME
-from api.dictionary import validate_manual_word
+from api.dictionary import validate_manual_word, canonical_word
 from api.scoring import calculate_points
 from api.tournament_time import today, day_number_for_date
 from api import crud, tiebreak, bracket, bracket_game
@@ -54,16 +54,31 @@ async def me(_: None = Depends(require_admin)):
 
 # ---------- Users (глобальный список игроков) ----------
 
+async def _user_tournaments(session: AsyncSession, user_id: int) -> list[UserTournamentInfo]:
+    pairs = await crud.list_entries_with_tournament_for_user(session, user_id)
+    return [
+        UserTournamentInfo(tournament_id=t.id, title=t.title, active=e.active)
+        for e, t in pairs
+    ]
+
+
+async def _user_out(session: AsyncSession, user: User) -> UserOut:
+    return UserOut(
+        id=user.id, access_token=user.access_token, admin_note=user.admin_note, created_at=str(user.created_at),
+        archived=user.archived, is_test=user.is_test, tournaments=await _user_tournaments(session, user.id),
+    )
+
+
 @router.post("/users", response_model=UserOut)
 async def create_user(payload: UserCreateRequest, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
-    user = await crud.create_user(session, payload.admin_note)
-    return UserOut(id=user.id, access_token=user.access_token, admin_note=user.admin_note, created_at=str(user.created_at))
+    user = await crud.create_user(session, payload.admin_note, payload.is_test)
+    return await _user_out(session, user)
 
 
 @router.get("/users", response_model=list[UserOut])
 async def get_users(session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
     users = await crud.list_users(session)
-    return [UserOut(id=u.id, access_token=u.access_token, admin_note=u.admin_note, created_at=str(u.created_at)) for u in users]
+    return [await _user_out(session, u) for u in users]
 
 
 @router.patch("/users/{user_id}", response_model=UserOut)
@@ -71,7 +86,19 @@ async def edit_user(user_id: int, payload: UserEditRequest, session: AsyncSessio
     user = await crud.edit_user_note(session, user_id, payload.admin_note)
     if user is None:
         raise HTTPException(status_code=404, detail="Игрок не найден")
-    return UserOut(id=user.id, access_token=user.access_token, admin_note=user.admin_note, created_at=str(user.created_at))
+    return await _user_out(session, user)
+
+
+@router.patch("/users/{user_id}/archive", response_model=UserOut)
+async def archive_user(
+    user_id: int, payload: UserArchiveRequest, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
+):
+    """"Удалить" игрока (переместить в папку "Удалённые") или восстановить его
+    обратно — см. пункт #12 бэклога. Ничего не удаляется физически."""
+    user = await crud.set_user_archived(session, user_id, payload.archived)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Игрок не найден")
+    return await _user_out(session, user)
 
 
 # ---------- Tournaments ----------
@@ -181,12 +208,26 @@ async def add_entry(
     user = await session.get(User, payload.user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Игрок не найден")
-    if await crud.get_entry(session, tournament_id, payload.user_id) is not None:
+    if user.archived:
+        raise HTTPException(status_code=400, detail="Этот игрок удалён — сначала восстановите его во вкладке «Игроки»")
+
+    existing = await crud.get_entry_including_inactive(session, tournament_id, payload.user_id)
+    if existing is not None and existing.active:
         raise HTTPException(status_code=400, detail="Этот игрок уже подключён к розыгрышу")
-    if await crud.callsign_taken(session, tournament_id, payload.callsign):
+
+    if (
+        (existing is None or payload.callsign != existing.callsign)
+        and await crud.callsign_taken(session, tournament_id, payload.callsign)
+    ):
         raise HTTPException(status_code=400, detail="Этот позывной уже занят в текущем розыгрыше")
 
-    entry = await crud.create_entry(session, tournament, payload.user_id, payload.callsign)
+    if existing is not None:
+        # игрок раньше был отключён от этого розыгрыша — подключаем обратно ту же
+        # запись (и её историю попыток), а не заводим вторую
+        await crud.edit_entry_callsign(session, existing.id, payload.callsign)
+        entry = await crud.set_entry_active(session, existing.id, True)
+    else:
+        entry = await crud.create_entry(session, tournament, payload.user_id, payload.callsign)
     return entry
 
 
@@ -204,6 +245,18 @@ async def edit_entry(entry_id: int, payload: EntryEditRequest, session: AsyncSes
         raise HTTPException(status_code=400, detail="Этот позывной уже занят")
     updated = await crud.edit_entry_callsign(session, entry_id, payload.callsign)
     return updated
+
+
+@router.patch("/entries/{entry_id}/active", response_model=EntryOut)
+async def set_entry_active(
+    entry_id: int, payload: EntryActiveRequest, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
+):
+    """Отключить игрока от розыгрыша (или подключить обратно) без удаления
+    записи и накопленной статистики — см. пункт #11 бэклога."""
+    entry = await crud.set_entry_active(session, entry_id, payload.active)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Участие не найдено")
+    return entry
 
 
 # ---------- Подтверждение слова дня ----------
@@ -250,7 +303,9 @@ async def confirm_word(
         error = validate_manual_word(payload.override_word, already_used)
         if error:
             raise HTTPException(status_code=400, detail=error)
-        override = payload.override_word.strip().lower()
+        # приводим к каноническому написанию из словаря (с ё, если оно там есть) —
+        # админ мог набрать вариант с е, см. dictionary.canonical_word
+        override = canonical_word(payload.override_word)
     else:
         override = None
 

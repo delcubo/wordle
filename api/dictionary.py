@@ -16,25 +16,56 @@ import os
 import random
 
 _WORDS_PATH = os.path.join(os.path.dirname(__file__), "data", "answer_words.txt")
+_EXTRA_WORDS_PATH = os.path.join(os.path.dirname(__file__), "data", "answer_words_extra.txt")
 
 _words_cache: list[str] | None = None
-_words_set_cache: set[str] | None = None
+_normalized_index_cache: dict[str, str] | None = None
+
+
+def _read_word_list(path: str) -> list[str]:
+    with open(path, encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
 
 def load_words() -> list[str]:
+    """
+    Основной автособранный список (answer_words.txt) плюс ручные точечные
+    дополнения (answer_words_extra.txt) — слова, которых не было в исходных
+    26 471 и которые обнаружились по факту игры (см. пункт бэклога про
+    неполноту словаря). Пересобирать answer_words.txt заново из-за одного
+    найденного слова не нужно — достаточно дописать строку в extra-файл.
+    """
     global _words_cache
     if _words_cache is None:
-        with open(_WORDS_PATH, encoding="utf-8") as f:
-            _words_cache = [line.strip() for line in f if line.strip()]
+        _words_cache = _read_word_list(_WORDS_PATH) + _read_word_list(_EXTRA_WORDS_PATH)
     return _words_cache
+
+
+def normalize_yo(word: str) -> str:
+    """ё и е при вводе и сравнении считаются одной и той же буквой — почти
+    никто не набирает ё намеренно, и с точки зрения игры это не должно считаться
+    ошибкой (см. пункт бэклога про 'желоб'/'жёлоб')."""
+    return word.replace("ё", "е")
+
+
+def _normalized_index() -> dict[str, str]:
+    """normalize_yo(слово) -> каноническое написание из словаря (то, что реально
+    хранится и показывается игроку как ответ)."""
+    global _normalized_index_cache
+    if _normalized_index_cache is None:
+        _normalized_index_cache = {normalize_yo(w): w for w in load_words()}
+    return _normalized_index_cache
 
 
 def is_valid_word(word: str) -> bool:
     """Проверка и вводимой попытки, и кандидата на слово дня — один и тот же список."""
-    global _words_set_cache
-    if _words_set_cache is None:
-        _words_set_cache = set(load_words())
-    return word.lower() in _words_set_cache
+    return normalize_yo(word.lower()) in _normalized_index()
+
+
+def canonical_word(word: str) -> str | None:
+    """Каноническое написание словарного слова (с ё, если оно у него есть) для
+    введённого варианта (с е или ё) — None, если такого слова в словаре нет."""
+    return _normalized_index().get(normalize_yo(word.lower()))
 
 
 def pick_word_for_day(tournament_id: int, day_number: int, already_used: set[str]) -> str:
@@ -91,6 +122,7 @@ def validate_manual_word(word: str, already_used: set[str]) -> str | None:
         return "Слово должно быть из 5 букв"
     if not is_valid_word(word):
         return "Слово должно быть существительным в именительном падеже из словаря ответов"
-    if word in already_used:
+    already_used_normalized = {normalize_yo(w) for w in already_used}
+    if normalize_yo(word) in already_used_normalized:
         return "Это слово уже использовалось в этом розыгрыше"
     return None

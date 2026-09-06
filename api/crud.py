@@ -18,8 +18,8 @@ from api.tournament_time import today, day_number_for_date, date_for_day_number
 
 # ---------- Users (глобальная личность) ----------
 
-async def create_user(session: AsyncSession, admin_note: str | None = None) -> User:
-    user = User(access_token=secrets.token_urlsafe(24), admin_note=admin_note)
+async def create_user(session: AsyncSession, admin_note: str | None = None, is_test: bool = False) -> User:
+    user = User(access_token=secrets.token_urlsafe(24), admin_note=admin_note, is_test=is_test)
     session.add(user)
     await session.commit()
     await session.refresh(user)
@@ -29,6 +29,13 @@ async def create_user(session: AsyncSession, admin_note: str | None = None) -> U
 async def list_users(session: AsyncSession) -> list[User]:
     result = await session.execute(select(User).order_by(User.created_at))
     return list(result.scalars().all())
+
+
+async def get_test_user_ids(session: AsyncSession) -> set[int]:
+    """Игроки, помеченные как личный тестовый аккаунт админа — исключаются из
+    подсчёта таблиц результатов (см. standings_view.compute_standings)."""
+    result = await session.execute(select(User.id).where(User.is_test.is_(True)))
+    return {row[0] for row in result.all()}
 
 
 async def get_user_by_token(session: AsyncSession, access_token: str) -> User | None:
@@ -42,6 +49,25 @@ async def edit_user_note(session: AsyncSession, user_id: int, admin_note: str | 
         return None
     user.admin_note = admin_note
     session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+async def set_user_archived(session: AsyncSession, user_id: int, archived: bool) -> User | None:
+    """"Удаление" игрока = перемещение в папку "Удалённые" (см. #12 бэклога).
+    При архивации заодно отключает все его текущие активные участия (иначе
+    "удалённый" игрок мог бы продолжать играть по своей ссылке) — восстановление
+    из архива их обратно не подключает, это отдельное решение админа."""
+    user = await session.get(User, user_id)
+    if user is None:
+        return None
+    user.archived = archived
+    session.add(user)
+    if archived:
+        for entry in await list_entries_for_user(session, user_id):
+            entry.active = False
+            session.add(entry)
     await session.commit()
     await session.refresh(user)
     return user
@@ -91,6 +117,20 @@ async def callsign_taken(session: AsyncSession, tournament_id: int, callsign: st
 
 
 async def get_entry(session: AsyncSession, tournament_id: int, user_id: int) -> TournamentEntry | None:
+    """Только активное участие — отключённый (active=False) игрок для игровых
+    эндпоинтов выглядит так, будто он не участвует. Для админских случаев, где
+    нужно найти участие независимо от статуса, см. get_entry_including_inactive."""
+    result = await session.execute(
+        select(TournamentEntry).where(
+            TournamentEntry.tournament_id == tournament_id,
+            TournamentEntry.user_id == user_id,
+            TournamentEntry.active.is_(True),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_entry_including_inactive(session: AsyncSession, tournament_id: int, user_id: int) -> TournamentEntry | None:
     result = await session.execute(
         select(TournamentEntry).where(
             TournamentEntry.tournament_id == tournament_id,
@@ -98,6 +138,17 @@ async def get_entry(session: AsyncSession, tournament_id: int, user_id: int) -> 
         )
     )
     return result.scalar_one_or_none()
+
+
+async def set_entry_active(session: AsyncSession, entry_id: int, active: bool) -> TournamentEntry | None:
+    entry = await session.get(TournamentEntry, entry_id)
+    if entry is None:
+        return None
+    entry.active = active
+    session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+    return entry
 
 
 async def create_entry(
@@ -124,11 +175,23 @@ async def list_entries(session: AsyncSession, tournament_id: int) -> list[Tourna
 
 
 async def list_entries_for_user(session: AsyncSession, user_id: int) -> list[TournamentEntry]:
-    """Розыгрыши, в которых участвует данный пользователь — для экрана 'мои розыгрыши'."""
+    """Розыгрыши, в которых участвует данный пользователь — для экрана 'мои розыгрыши'.
+    Отключённые (active=False) участия не показываются — игрок для них "не подключён"."""
     result = await session.execute(
-        select(TournamentEntry).where(TournamentEntry.user_id == user_id)
+        select(TournamentEntry).where(TournamentEntry.user_id == user_id, TournamentEntry.active.is_(True))
     )
     return list(result.scalars().all())
+
+
+async def list_entries_with_tournament_for_user(session: AsyncSession, user_id: int) -> list[tuple[TournamentEntry, Tournament]]:
+    """Все участия пользователя (активные и отключённые) вместе с их розыгрышами —
+    для отображения в админской вкладке 'Игроки' (см. пункт #13 бэклога)."""
+    result = await session.execute(
+        select(TournamentEntry, Tournament)
+        .join(Tournament, TournamentEntry.tournament_id == Tournament.id)
+        .where(TournamentEntry.user_id == user_id)
+    )
+    return list(result.all())
 
 
 async def edit_entry_callsign(session: AsyncSession, entry_id: int, callsign: str) -> TournamentEntry | None:

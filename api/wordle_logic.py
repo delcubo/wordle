@@ -9,8 +9,12 @@ def check_guess(guess: str, answer: str) -> list[str]:
     Возвращает список статусов длиной len(answer): "correct" | "present" | "absent".
     guess и answer должны быть одной длины и в нижнем регистре.
     """
-    guess = guess.lower()
-    answer = answer.lower()
+    from api.dictionary import normalize_yo
+
+    # ё и е считаются одной буквой при сравнении (см. dictionary.normalize_yo) —
+    # только для подсчёта статусов, сами буквы попытки при отрисовке не трогаются.
+    guess = normalize_yo(guess.lower())
+    answer = normalize_yo(answer.lower())
     n = len(answer)
     result = ["absent"] * n
 

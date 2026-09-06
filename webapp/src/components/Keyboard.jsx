@@ -13,9 +13,20 @@ const COLORS = {
 
 export default function Keyboard({ letterStates, onLetter, onEnter, onBackspace }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "center" }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "clamp(4px, 1vw, 8px)",
+        width: "100%",
+        maxWidth: 500,
+        margin: "0 auto",
+        padding: "0 4px",
+        boxSizing: "border-box",
+      }}
+    >
       {ROWS.map((row, i) => (
-        <div key={i} style={{ display: "flex", gap: 4 }}>
+        <div key={i} style={{ display: "flex", gap: "clamp(3px, 1vw, 6px)", width: "100%" }}>
           {i === 2 && (
             <KeyButton wide onClick={onEnter}>
               ввод
@@ -46,16 +57,19 @@ function KeyButton({ children, onClick, background = "#818384", wide = false }) 
     <button
       onClick={onClick}
       style={{
-        minWidth: wide ? 52 : 28,
-        height: 42,
+        flex: wide ? "1.6 1 0%" : "1 1 0%",
+        minWidth: 0,
+        height: "clamp(38px, 11vw, 58px)",
         background,
         color: "#fff",
         border: "none",
         borderRadius: 4,
-        fontSize: 13,
+        fontSize: wide ? "clamp(9px, 2.8vw, 13px)" : "clamp(11px, 3.6vw, 16px)",
         fontWeight: 600,
         textTransform: "uppercase",
         cursor: "pointer",
+        touchAction: "manipulation",
+        whiteSpace: "nowrap",
       }}
     >
       {children}

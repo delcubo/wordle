@@ -10,6 +10,13 @@ class AdminLoginRequest(BaseModel):
 
 class UserCreateRequest(BaseModel):
     admin_note: str | None = None
+    is_test: bool = False
+
+
+class UserTournamentInfo(BaseModel):
+    tournament_id: int
+    title: str
+    active: bool
 
 
 class UserOut(BaseModel):
@@ -17,6 +24,9 @@ class UserOut(BaseModel):
     access_token: str
     admin_note: str | None
     created_at: str | None = None
+    archived: bool = False
+    is_test: bool = False
+    tournaments: list[UserTournamentInfo] = []
 
     class Config:
         from_attributes = True
@@ -24,6 +34,10 @@ class UserOut(BaseModel):
 
 class UserEditRequest(BaseModel):
     admin_note: str | None = None
+
+
+class UserArchiveRequest(BaseModel):
+    archived: bool
 
 
 # ---------- Tournaments ----------
@@ -72,6 +86,7 @@ class EntryOut(BaseModel):
     user_id: int
     callsign: str
     joined_on_day: int
+    active: bool = True
 
     class Config:
         from_attributes = True
@@ -79,6 +94,10 @@ class EntryOut(BaseModel):
 
 class EntryEditRequest(BaseModel):
     callsign: str
+
+
+class EntryActiveRequest(BaseModel):
+    active: bool
 
 
 # ---------- Daily word confirmation ----------

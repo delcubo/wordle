@@ -316,7 +316,9 @@ function Centered({ children }) {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        paddingTop: 12,
+        padding: "12px 8px 0",
+        boxSizing: "border-box",
+        width: "100%",
       }}
     >
       {children}

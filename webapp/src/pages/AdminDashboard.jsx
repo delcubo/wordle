@@ -119,15 +119,18 @@ function TabButton({ active, onClick, children }) {
 
 function UsersPanel({ users, onChanged }) {
   const [note, setNote] = useState("");
+  const [isTest, setIsTest] = useState(false);
   const [error, setError] = useState("");
   const [copiedId, setCopiedId] = useState(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   async function handleAdd(e) {
     e.preventDefault();
     setError("");
     try {
-      await api("/api/admin/users", { method: "POST", body: JSON.stringify({ admin_note: note || null }) });
+      await api("/api/admin/users", { method: "POST", body: JSON.stringify({ admin_note: note || null, is_test: isTest }) });
       setNote("");
+      setIsTest(false);
       onChanged();
     } catch (e) {
       setError(e.message);
@@ -144,20 +147,82 @@ function UsersPanel({ users, onChanged }) {
     setTimeout(() => setCopiedId(null), 1500);
   }
 
+  async function toggleArchived(u) {
+    if (!u.archived && !window.confirm(
+      `Удалить «${u.admin_note || `Игрок #${u.id}`}»? Игрок переместится в папку «Удалённые», ` +
+      `отключится от всех текущих розыгрышей, но набранная статистика сохранится.`
+    )) {
+      return;
+    }
+    await api(`/api/admin/users/${u.id}/archive`, {
+      method: "PATCH",
+      body: JSON.stringify({ archived: !u.archived }),
+    });
+    onChanged();
+  }
+
+  function renderRow(u) {
+    return (
+      <tr key={u.id} style={{ borderTop: "1px solid #2a2a2c" }}>
+        <td style={tdStyle}>
+          {u.admin_note || `Игрок #${u.id}`}
+          {u.is_test && (
+            <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>
+              тест
+            </span>
+          )}
+        </td>
+        <td style={{ ...tdStyle, fontSize: 12 }}>
+          {u.tournaments.length === 0 ? (
+            <span style={{ opacity: 0.5 }}>—</span>
+          ) : (
+            u.tournaments.map((t, i) => (
+              <span key={t.tournament_id}>
+                {i > 0 && ", "}
+                <span style={{ opacity: t.active ? 1 : 0.5 }}>
+                  {t.title}{!t.active && " (отключён)"}
+                </span>
+              </span>
+            ))
+          )}
+        </td>
+        <td style={tdStyle}>
+          {!u.archived && (
+            <button onClick={() => copyLink(u)} style={ghostButtonStyle}>
+              {copiedId === u.id ? "Скопировано!" : "Копировать ссылку"}
+            </button>
+          )}
+        </td>
+        <td style={tdStyle}>
+          <button onClick={() => toggleArchived(u)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+            {u.archived ? "Восстановить" : "Удалить"}
+          </button>
+        </td>
+      </tr>
+    );
+  }
+
+  const activeUsers = users.filter((u) => !u.archived);
+  const archivedUsers = users.filter((u) => u.archived);
+
   return (
-    <div style={{ ...panelStyle, maxWidth: 600 }}>
+    <div style={{ ...panelStyle, maxWidth: 700 }}>
       <h3 style={{ marginTop: 0 }}>Игроки</h3>
       <p style={{ opacity: 0.7, fontSize: 13, marginTop: -4 }}>
         Каждый игрок регистрируется один раз и получает одну постоянную ссылку —
         дальше его можно подключать к любому числу розыгрышей.
       </p>
-      <form onSubmit={handleAdd} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+      <form onSubmit={handleAdd} style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
         <input
           placeholder="Заметка (кто это), опционально"
           value={note}
           onChange={(e) => setNote(e.target.value)}
           style={{ ...inputStyle, flex: 1 }}
         />
+        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, opacity: 0.8, cursor: "pointer" }}>
+          <input type="checkbox" checked={isTest} onChange={(e) => setIsTest(e.target.checked)} />
+          тестовый (не в таблице)
+        </label>
         <button type="submit" style={buttonStyle}>+ Новый игрок</button>
       </form>
       {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
@@ -166,22 +231,29 @@ function UsersPanel({ users, onChanged }) {
         <thead>
           <tr style={{ textAlign: "left", opacity: 0.7, fontSize: 13 }}>
             <th style={thStyle}>Заметка</th>
+            <th style={thStyle}>Розыгрыши</th>
             <th style={thStyle}>Ссылка</th>
+            <th style={thStyle}></th>
           </tr>
         </thead>
-        <tbody>
-          {users.map((u) => (
-            <tr key={u.id} style={{ borderTop: "1px solid #2a2a2c" }}>
-              <td style={tdStyle}>{u.admin_note || `Игрок #${u.id}`}</td>
-              <td style={tdStyle}>
-                <button onClick={() => copyLink(u)} style={ghostButtonStyle}>
-                  {copiedId === u.id ? "Скопировано!" : "Копировать ссылку"}
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
+        <tbody>{activeUsers.map(renderRow)}</tbody>
       </table>
+
+      {archivedUsers.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <button
+            onClick={() => setShowArchived((v) => !v)}
+            style={{ ...ghostButtonStyle, fontSize: 13 }}
+          >
+            {showArchived ? "▾" : "▸"} Удалённые ({archivedUsers.length})
+          </button>
+          {showArchived && (
+            <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 8 }}>
+              <tbody>{archivedUsers.map(renderRow)}</tbody>
+            </table>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -196,6 +268,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   const [error, setError] = useState("");
   const [editingSettings, setEditingSettings] = useState(null); // id розыгрыша | null
   const [settingsForm, setSettingsForm] = useState({ title: "", duration_days: "" });
+  const [showArchive, setShowArchive] = useState(false);
 
   function startEditSettings(t) {
     setError("");
@@ -250,69 +323,99 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
     onActivated();
   }
 
+  function renderCard(t) {
+    return (
+      <div
+        key={t.id}
+        onClick={() => onSelect(t)}
+        style={{
+          padding: 8,
+          borderRadius: 6,
+          marginBottom: 6,
+          cursor: "pointer",
+          background: selected?.id === t.id ? "#2a2a2c" : "transparent",
+          border: "1px solid #3a3a3c",
+        }}
+      >
+        <div style={{ fontWeight: 600 }}>{t.title}</div>
+        <div style={{ fontSize: 13, opacity: 0.7 }}>
+          {TYPE_LABEL[t.type] || t.type} · {t.start_date}
+          {t.duration_days != null ? ` · ${t.duration_days} дн.` : ""} · {STATUS_LABEL[t.status] || t.status}
+        </div>
+        {editingSettings === t.id ? (
+          <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+            <input
+              value={settingsForm.title}
+              onChange={(e) => setSettingsForm((f) => ({ ...f, title: e.target.value }))}
+              placeholder="Название ({day} — день, {stage} — стадия сетки)"
+              style={{ ...inputStyle, fontSize: 12, padding: "4px 6px" }}
+            />
+            {t.duration_days != null && (
+              <input
+                type="number" min={1}
+                value={settingsForm.duration_days}
+                onChange={(e) => setSettingsForm((f) => ({ ...f, duration_days: e.target.value }))}
+                placeholder="Длительность (дней)"
+                style={{ ...inputStyle, fontSize: 12, padding: "4px 6px" }}
+              />
+            )}
+            <div style={{ display: "flex", gap: 4 }}>
+              <button onClick={() => handleSaveSettings(t)} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
+              <button onClick={() => setEditingSettings(null)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>Отмена</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+            {t.status !== "active" && (
+              <button
+                onClick={(e) => { e.stopPropagation(); handleActivate(t.id); }}
+                style={{ ...ghostButtonStyle, fontSize: 12 }}
+              >
+                Активировать
+              </button>
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); startEditSettings(t); }}
+              style={{ ...ghostButtonStyle, fontSize: 12 }}
+            >
+              Настройки
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const liveTournaments = tournaments.filter((t) => t.status !== "finished");
+  const archivedTournaments = tournaments.filter((t) => t.status === "finished");
+  const archivedByYear = {};
+  for (const t of archivedTournaments) {
+    const year = t.start_date ? t.start_date.slice(0, 4) : "—";
+    (archivedByYear[year] ||= []).push(t);
+  }
+  const archivedYears = Object.keys(archivedByYear).sort((a, b) => b.localeCompare(a));
+
   return (
     <div style={panelStyle}>
       <h3 style={{ marginTop: 0 }}>Розыгрыши</h3>
-      {tournaments.map((t) => (
-        <div
-          key={t.id}
-          onClick={() => onSelect(t)}
-          style={{
-            padding: 8,
-            borderRadius: 6,
-            marginBottom: 6,
-            cursor: "pointer",
-            background: selected?.id === t.id ? "#2a2a2c" : "transparent",
-            border: "1px solid #3a3a3c",
-          }}
-        >
-          <div style={{ fontWeight: 600 }}>{t.title}</div>
-          <div style={{ fontSize: 13, opacity: 0.7 }}>
-            {TYPE_LABEL[t.type] || t.type} · {t.start_date}
-            {t.duration_days != null ? ` · ${t.duration_days} дн.` : ""} · {STATUS_LABEL[t.status] || t.status}
-          </div>
-          {editingSettings === t.id ? (
-            <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
-              <input
-                value={settingsForm.title}
-                onChange={(e) => setSettingsForm((f) => ({ ...f, title: e.target.value }))}
-                placeholder="Название ({day} — день, {stage} — стадия сетки)"
-                style={{ ...inputStyle, fontSize: 12, padding: "4px 6px" }}
-              />
-              {t.duration_days != null && (
-                <input
-                  type="number" min={1}
-                  value={settingsForm.duration_days}
-                  onChange={(e) => setSettingsForm((f) => ({ ...f, duration_days: e.target.value }))}
-                  placeholder="Длительность (дней)"
-                  style={{ ...inputStyle, fontSize: 12, padding: "4px 6px" }}
-                />
-              )}
-              <div style={{ display: "flex", gap: 4 }}>
-                <button onClick={() => handleSaveSettings(t)} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
-                <button onClick={() => setEditingSettings(null)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>Отмена</button>
-              </div>
+      {liveTournaments.map(renderCard)}
+
+      {archivedTournaments.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <button
+            onClick={() => setShowArchive((v) => !v)}
+            style={{ ...ghostButtonStyle, fontSize: 13, width: "100%" }}
+          >
+            {showArchive ? "▾" : "▸"} Архив ({archivedTournaments.length})
+          </button>
+          {showArchive && archivedYears.map((year) => (
+            <div key={year} style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 4 }}>{year}</div>
+              {archivedByYear[year].map(renderCard)}
             </div>
-          ) : (
-            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-              {t.status !== "active" && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleActivate(t.id); }}
-                  style={{ ...ghostButtonStyle, fontSize: 12 }}
-                >
-                  Активировать
-                </button>
-              )}
-              <button
-                onClick={(e) => { e.stopPropagation(); startEditSettings(t); }}
-                style={{ ...ghostButtonStyle, fontSize: 12 }}
-              >
-                Настройки
-              </button>
-            </div>
-          )}
+          ))}
         </div>
-      ))}
+      )}
 
       {!showForm ? (
         <button onClick={() => setShowForm(true)} style={buttonStyle}>+ Новый розыгрыш</button>
@@ -361,8 +464,10 @@ function EntriesPanel({ tournament, users }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tournament.id]);
 
-  const connectedUserIds = new Set(entries.map((e) => e.user_id));
-  const availableUsers = users.filter((u) => !connectedUserIds.has(u.id));
+  const connectedUserIds = new Set(entries.filter((e) => e.active).map((e) => e.user_id));
+  const availableUsers = users.filter((u) => !connectedUserIds.has(u.id) && !u.archived);
+  const activeCount = entries.filter((e) => e.active).length;
+  const inactiveCount = entries.length - activeCount;
 
   async function handleAdd(e) {
     e.preventDefault();
@@ -380,9 +485,23 @@ function EntriesPanel({ tournament, users }) {
     }
   }
 
+  async function toggleActive(entry) {
+    if (entry.active && !window.confirm(`Отключить «${entry.callsign}» от розыгрыша? Набранная статистика останется в таблице.`)) {
+      return;
+    }
+    await api(`/api/admin/entries/${entry.id}/active`, {
+      method: "PATCH",
+      body: JSON.stringify({ active: !entry.active }),
+    });
+    refresh();
+  }
+
   return (
     <div style={panelStyle}>
       <h3 style={{ marginTop: 0 }}>Участники «{tournament.title}»</h3>
+      <p style={{ opacity: 0.7, fontSize: 13, marginTop: -4 }}>
+        Подключено: {activeCount}{inactiveCount > 0 ? ` · Отключено: ${inactiveCount}` : ""}
+      </p>
       <form onSubmit={handleAdd} style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         <select value={userId} onChange={(e) => setUserId(e.target.value)} style={inputStyle} required>
           <option value="" disabled>Выберите игрока</option>
@@ -400,15 +519,23 @@ function EntriesPanel({ tournament, users }) {
           <tr style={{ textAlign: "left", opacity: 0.7, fontSize: 13 }}>
             <th style={thStyle}>Позывной</th>
             <th style={thStyle}>Игрок</th>
+            <th style={thStyle}>Статус</th>
+            <th style={thStyle}></th>
           </tr>
         </thead>
         <tbody>
           {entries.map((e) => {
             const u = users.find((x) => x.id === e.user_id);
             return (
-              <tr key={e.id} style={{ borderTop: "1px solid #2a2a2c" }}>
+              <tr key={e.id} style={{ borderTop: "1px solid #2a2a2c", opacity: e.active ? 1 : 0.5 }}>
                 <td style={tdStyle}>{e.callsign}</td>
                 <td style={{ ...tdStyle, opacity: 0.7 }}>{u?.admin_note || `Игрок #${e.user_id}`}</td>
+                <td style={tdStyle}>{e.active ? "Подключён" : "Отключён"}</td>
+                <td style={tdStyle}>
+                  <button onClick={() => toggleActive(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                    {e.active ? "Отключить" : "Подключить"}
+                  </button>
+                </td>
               </tr>
             );
           })}
