@@ -140,6 +140,10 @@ function TabButton({ active, onClick, children }) {
   );
 }
 
+function userLabel(u) {
+  return u.admin_note || `Игрок #${u.id}`;
+}
+
 function UsersPanel({ users, onChanged }) {
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
@@ -147,6 +151,7 @@ function UsersPanel({ users, onChanged }) {
   const [showArchived, setShowArchived] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState(null);
   const [noteForm, setNoteForm] = useState("");
+  const [search, setSearch] = useState("");
 
   async function handleAdd(e) {
     e.preventDefault();
@@ -299,15 +304,19 @@ function UsersPanel({ users, onChanged }) {
     );
   }
 
-  const activeUsers = users.filter((u) => !u.archived);
-  const archivedUsers = users.filter((u) => u.archived);
+  const query = search.trim().toLowerCase();
+  const matchesSearch = (u) => !query || userLabel(u).toLowerCase().includes(query);
+  const byLabel = (a, b) => userLabel(a).localeCompare(userLabel(b), "ru");
+
+  const activeUsers = users.filter((u) => !u.archived && matchesSearch(u)).sort(byLabel);
+  const archivedUsers = users.filter((u) => u.archived && matchesSearch(u)).sort(byLabel);
 
   return (
     <div style={{ ...panelStyle, maxWidth: 700 }}>
       <h3 style={{ marginTop: 0 }}>Игроки</h3>
       <p style={{ opacity: 0.7, fontSize: 13, marginTop: -4 }}>
         Каждый игрок регистрируется один раз и получает одну постоянную ссылку —
-        дальше его можно подключать к любому числу розыгрышей.
+        дальше его можно подключать к любому числу розыгрышей. Список отсортирован по алфавиту.
       </p>
       <form onSubmit={handleAdd} style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
         <input
@@ -318,6 +327,12 @@ function UsersPanel({ users, onChanged }) {
         />
         <button type="submit" style={buttonStyle}>+ Новый игрок</button>
       </form>
+      <input
+        placeholder="🔎 Поиск по заметке..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        style={{ ...inputStyle, width: "100%", marginBottom: 12, boxSizing: "border-box" }}
+      />
       {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
 
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -331,6 +346,9 @@ function UsersPanel({ users, onChanged }) {
         </thead>
         <tbody>{activeUsers.map(renderRow)}</tbody>
       </table>
+      {query && activeUsers.length === 0 && (
+        <div style={{ opacity: 0.5, fontSize: 13, marginTop: 8 }}>Никого не найдено.</div>
+      )}
 
       {archivedUsers.length > 0 && (
         <div style={{ marginTop: 16 }}>
