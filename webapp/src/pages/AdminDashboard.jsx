@@ -1720,10 +1720,44 @@ function BracketImage({ tournament, matches }) {
   const totalRounds = Math.round(Math.log2(tournament.bracket_size));
   const matchByKey = new Map(matches.map((m) => [`${m.round_number}:${m.position}`, m]));
 
+  function feederWinnerName(feeder) {
+    if (!feeder || feeder.winner_entry_id == null) return null;
+    return feeder.winner_entry_id === feeder.entry_a_id ? feeder.entry_a_callsign : feeder.entry_b_callsign;
+  }
+
+  // Победитель пары проходит дальше по сетке сразу, не дожидаясь, пока решится
+  // соседняя пара (реальная запись следующего раунда появляется в БД только
+  // когда решены ОБЕ пары половины) — здесь для отображения строим "виртуальную"
+  // пару из уже известных победителей, пока настоящей записи ещё нет.
   const rounds = [];
   for (let r = 1; r <= totalRounds; r++) {
     const count = tournament.bracket_size / 2 ** r;
-    rounds.push(Array.from({ length: count }, (_, p) => matchByKey.get(`${r}:${p}`) || null));
+    const slots = [];
+    for (let p = 0; p < count; p++) {
+      const real = matchByKey.get(`${r}:${p}`);
+      if (real) {
+        slots.push(real);
+        continue;
+      }
+      if (r === 1) {
+        slots.push(null);
+        continue;
+      }
+      const prevRound = rounds[r - 2];
+      const nameA = feederWinnerName(prevRound[2 * p]);
+      const nameB = feederWinnerName(prevRound[2 * p + 1]);
+      slots.push(
+        nameA || nameB
+          ? {
+              entry_a_callsign: nameA, entry_b_callsign: nameB,
+              entry_a_id: null, entry_b_id: null, winner_entry_id: null,
+              entry_a_attempts_used: null, entry_a_solved: null,
+              entry_b_attempts_used: null, entry_b_solved: null,
+            }
+          : null
+      );
+    }
+    rounds.push(slots);
   }
 
   const centers = [rounds[0].map((_, i) => PAD + i * (BOX_H + GAP_Y) + BOX_H / 2)];
