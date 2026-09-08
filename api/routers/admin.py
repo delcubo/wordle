@@ -11,7 +11,7 @@ from api.database import get_session
 from api.schemas import (
     AdminLoginRequest,
     UserCreateRequest, UserOut, UserEditRequest, UserTournamentInfo, UserArchiveRequest,
-    TournamentConfigRequest, TournamentOut, TournamentSettingsUpdateRequest, TournamentPauseRequest,
+    TournamentConfigRequest, TournamentOut, TournamentSettingsUpdateRequest, TournamentPauseRequest, TournamentArchiveRequest,
     EntryCreateRequest, EntryOut, EntryEditRequest, EntryActiveRequest, EntryHiddenRequest,
     DailyWordOut, ConfirmWordRequest,
     StandingsResponse, StandingsRowOut, DailyCell,
@@ -306,6 +306,19 @@ async def pause_tournament(
     return tournament
 
 
+@router.patch("/tournaments/{tournament_id}/archive", response_model=TournamentOut)
+async def archive_tournament(
+    tournament_id: int, payload: TournamentArchiveRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """Вручную переместить розыгрыш в архив (или вернуть обратно) — независимо
+    от статуса, обычно применяется к приостановленным или завершённым."""
+    tournament = await crud.set_tournament_archived(session, tournament_id, payload.archived)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    return tournament
+
+
 # ---------- Tournament entries (подключение игрока к розыгрышу) ----------
 
 @router.post("/tournaments/{tournament_id}/entries", response_model=EntryOut)
@@ -395,16 +408,18 @@ async def get_words(tournament_id: int, session: AsyncSession = Depends(get_sess
 async def get_upcoming_word(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
     """
     Слово на ближайший ещё не наступивший день — то, что админ может подтвердить
-    или заменить. Если розыгрыш уже полностью прошёл или сегодняшний день ещё не
-    сыгран, возвращает соответствующую ошибку.
+    или заменить. Работает и для endless (там просто нет верхней границы дней —
+    см. пункт бэклога), но не для knockout — там нет слова дня вне пар сетки.
     """
     tournament = await crud.get_tournament(session, tournament_id)
-    if tournament is None or tournament.duration_days is None:
-        raise HTTPException(status_code=400, detail="У этого розыгрыша нет ежедневного слова")
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    if tournament.type == TournamentType.knockout:
+        raise HTTPException(status_code=400, detail="У этого типа розыгрыша нет ежедневного слова")
 
     current_day = day_number_for_date(tournament.start_date, today())
     next_day = max(current_day, 0) + 1  # ближайший день, который ещё не наступил
-    if next_day > tournament.duration_days:
+    if tournament.duration_days is not None and next_day > tournament.duration_days:
         raise HTTPException(status_code=400, detail="Розыгрыш уже завершается — новых дней не осталось")
 
     daily_word = await crud.get_or_suggest_daily_word(session, tournament, next_day)
@@ -504,7 +519,9 @@ async def get_standings(tournament_id: int, session: AsyncSession = Depends(get_
             for r in rows
         ],
         total_days=tournament.duration_days,
+        current_day=max(1, min(day_number_for_date(tournament.start_date, today()), tournament.duration_days)),
         skip_flag_symbol=tournament.skip_flag_symbol,
+        hashtag=tournament.hashtag,
     )
 
 
@@ -714,6 +731,29 @@ async def set_bracket_word(
         await crud.set_playoff_game_word(session, existing, word)
     else:
         await crud.set_playoff_word_override(session, match, game_number, word)
+
+    queue = await bracket_game.get_word_queue(session, match)
+    return PlayoffWordQueueEntry(**next(q for q in queue if q["game_number"] == game_number))
+
+
+@router.post("/bracket/matches/{match_id}/words/{game_number}/reroll", response_model=PlayoffWordQueueEntry)
+async def reroll_bracket_word(
+    match_id: int, game_number: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """"Предложить другое слово" для пары сетки — то же, что реролл обычного
+    слова дня, только для слота очереди (см. пункт бэклога)."""
+    if game_number not in (1, 2, 3):
+        raise HTTPException(status_code=400, detail="Слово можно задать только для игр 1-3 этой пары")
+    match = await session.get(PlayoffMatch, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Пара не найдена")
+
+    games = await crud.list_playoff_games(session, match.id)
+    existing = next((g for g in games if g.game_number == game_number), None)
+    if existing is not None and existing.calendar_date <= today():
+        raise HTTPException(status_code=400, detail="Эта игра уже наступила — слово менять поздно")
+
+    await bracket_game.reroll_word_queue_slot(session, match, game_number)
 
     queue = await bracket_game.get_word_queue(session, match)
     return PlayoffWordQueueEntry(**next(q for q in queue if q["game_number"] == game_number))

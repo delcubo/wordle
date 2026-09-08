@@ -151,6 +151,19 @@ async def set_tournament_paused(session: AsyncSession, tournament_id: int, pause
     return tournament
 
 
+async def set_tournament_archived(session: AsyncSession, tournament_id: int, archived: bool) -> Tournament | None:
+    """Ручное перемещение розыгрыша в архив (или обратно) — см. пункт бэклога:
+    админ сам решает, когда убрать приостановленный/завершённый розыгрыш."""
+    tournament = await get_tournament(session, tournament_id)
+    if tournament is None:
+        return None
+    tournament.archived = archived
+    session.add(tournament)
+    await session.commit()
+    await session.refresh(tournament)
+    return tournament
+
+
 # ---------- Tournament entries (участие User в Tournament) ----------
 
 async def callsign_taken(session: AsyncSession, tournament_id: int, callsign: str) -> bool:

@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models import Tournament, TournamentStatus, TournamentEntry, PlayoffMatch, PlayoffMatchStatus, PlayoffGame
 from api.tournament_time import today
 from api.wordle_logic import check_guess, is_solved
-from api.dictionary import pick_word_for_match
+from api.dictionary import pick_word_for_match, pick_alternative_word
 from api import crud
 
 MAX_ATTEMPTS = 6
@@ -314,3 +314,23 @@ async def get_word_queue(session: AsyncSession, match: PlayoffMatch) -> list[dic
             editable = True
         queue.append({"game_number": game_number, "word": word, "editable": editable})
     return queue
+
+
+async def reroll_word_queue_slot(session: AsyncSession, match: PlayoffMatch, game_number: int) -> str:
+    """"Предложить другое слово" для слота очереди (см. пункт бэклога — раньше
+    в сетке можно было только вручную задать своё слово, без реролла, в
+    отличие от обычного слова дня). Если игра уже реально существует (не
+    наступила — иначе сюда и не попадём, см. editable в get_word_queue),
+    меняет её слово; иначе просто перезаписывает превью-оверрайд."""
+    games = await crud.list_playoff_games(session, match.id)
+    existing = next((g for g in games if g.game_number == game_number), None)
+    already_used = await crud.get_all_used_words(session, match.tournament_id)
+
+    if existing is not None:
+        new_word = pick_alternative_word(already_used, exclude=existing.word)
+        await crud.set_playoff_game_word(session, existing, new_word)
+    else:
+        current = (match.word_overrides or {}).get(str(game_number))
+        new_word = pick_alternative_word(already_used, exclude=current)
+        await crud.set_playoff_word_override(session, match, game_number, new_word)
+    return new_word

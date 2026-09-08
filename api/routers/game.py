@@ -56,7 +56,7 @@ async def my_tournaments(token: str, session: AsyncSession = Depends(get_session
     result = []
     for entry in entries:
         tournament = await crud.get_tournament(session, entry.tournament_id)
-        if tournament is None:
+        if tournament is None or tournament.paused:
             continue
         result.append(
             MyTournamentOut(

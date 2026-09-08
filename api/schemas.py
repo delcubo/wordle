@@ -91,6 +91,7 @@ class TournamentOut(BaseModel):
     rounds_per_match: int
     hashtag: str | None = None
     paused: bool = False
+    archived: bool = False
     note: str | None = None
 
     class Config:
@@ -107,6 +108,10 @@ class TournamentSettingsUpdateRequest(BaseModel):
 
 class TournamentPauseRequest(BaseModel):
     paused: bool
+
+
+class TournamentArchiveRequest(BaseModel):
+    archived: bool
 
 
 # ---------- Tournament entries ----------
@@ -251,7 +256,9 @@ class StandingsRowOut(BaseModel):
 class StandingsResponse(BaseModel):
     rows: list[StandingsRowOut]
     total_days: int
+    current_day: int
     skip_flag_symbol: str
+    hashtag: str | None = None
 
 
 # ---------- Тай-брейк ----------

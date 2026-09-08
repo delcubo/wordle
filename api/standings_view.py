@@ -11,7 +11,7 @@ from api.tournament_time import today, day_number_for_date
 
 
 async def compute_standings(session: AsyncSession, tournament: Tournament) -> list[StandingsRow]:
-    entries = [e for e in await crud.list_entries(session, tournament.id) if not e.hidden_from_standings]
+    all_entries = [e for e in await crud.list_entries(session, tournament.id) if not e.hidden_from_standings]
     daily_words = await crud.list_daily_words(session, tournament.id)
     attempts = await crud.list_attempts_for_tournament(session, tournament.id)
 
@@ -22,6 +22,13 @@ async def compute_standings(session: AsyncSession, tournament: Tournament) -> li
         if dw is None:
             continue
         attempts_by_entry_and_day.setdefault(a.entry_id, {})[dw.day_number] = a
+
+    # Пока участник ни разу не отгадывал слово (ни одной попытки ни за один
+    # день), в таблице его вообще нет — не показываем строку из одних красных
+    # флагов тому, кто просто ещё не начал играть. Как только он сыграл хотя
+    # бы один день, строка появляется целиком, включая пропуски за более
+    # ранние (уже прошедшие) дни, которые он действительно пропустил.
+    entries = [e for e in all_entries if e.id in attempts_by_entry_and_day]
 
     current_day = day_number_for_date(tournament.start_date, today())
 

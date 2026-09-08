@@ -492,6 +492,11 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
     onActivated();
   }
 
+  async function handleToggleArchived(t) {
+    await api(`/api/admin/tournaments/${t.id}/archive`, { method: "PATCH", body: JSON.stringify({ archived: !t.archived }) });
+    onActivated();
+  }
+
   const needsDuration = type === "standard" || type === "championship";
   const needsBracket = type === "knockout" || type === "championship";
 
@@ -623,6 +628,15 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                 {t.paused ? "Возобновить" : "Приостановить"}
               </button>
             )}
+            {(t.archived || t.status === "finished" || t.paused) && (
+              <button
+                onClick={(e) => { e.stopPropagation(); handleToggleArchived(t); }}
+                title="Убрать розыгрыш с глаз долой в архив (или вернуть обратно)"
+                style={{ ...ghostButtonStyle, fontSize: 12 }}
+              >
+                {t.archived ? "Вернуть из архива" : "В архив"}
+              </button>
+            )}
             <button
               onClick={(e) => { e.stopPropagation(); startEditSettings(t); }}
               style={{ ...ghostButtonStyle, fontSize: 12 }}
@@ -635,8 +649,8 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
     );
   }
 
-  const liveTournaments = tournaments.filter((t) => t.status !== "finished");
-  const archivedTournaments = tournaments.filter((t) => t.status === "finished");
+  const liveTournaments = tournaments.filter((t) => !t.archived);
+  const archivedTournaments = tournaments.filter((t) => t.archived);
   const archivedByYear = {};
   for (const t of archivedTournaments) {
     const year = t.start_date ? t.start_date.slice(0, 4) : "—";
@@ -774,10 +788,12 @@ function EntriesPanel({ tournament, users }) {
           ))}
         </select>
         <input placeholder="Позывной для этого розыгрыша" value={callsign} onChange={(e) => setCallsign(e.target.value)} style={inputStyle} required />
-        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, opacity: 0.8, cursor: "pointer" }}>
-          <input type="checkbox" checked={hideFromStandings} onChange={(e) => setHideFromStandings(e.target.checked)} />
-          не учитывать в таблице
-        </label>
+        {tournament.type !== "knockout" && (
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, opacity: 0.8, cursor: "pointer" }}>
+            <input type="checkbox" checked={hideFromStandings} onChange={(e) => setHideFromStandings(e.target.checked)} />
+            не учитывать в таблице
+          </label>
+        )}
         <button type="submit" style={buttonStyle}>Подключить</button>
       </form>
       {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
@@ -800,7 +816,7 @@ function EntriesPanel({ tournament, users }) {
                 <td style={{ ...tdStyle, opacity: 0.7 }}>{u?.admin_note || `Игрок #${e.user_id}`}</td>
                 <td style={tdStyle}>
                   {e.active ? "Подключён" : "Отключён"}
-                  {e.hidden_from_standings && (
+                  {tournament.type !== "knockout" && e.hidden_from_standings && (
                     <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>
                       не в таблице
                     </span>
@@ -811,9 +827,11 @@ function EntriesPanel({ tournament, users }) {
                     <button onClick={() => toggleActive(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
                       {e.active ? "Отключить" : "Подключить"}
                     </button>
-                    <button onClick={() => toggleHidden(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
-                      {e.hidden_from_standings ? "Учитывать в таблице" : "Не учитывать в таблице"}
-                    </button>
+                    {tournament.type !== "knockout" && (
+                      <button onClick={() => toggleHidden(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                        {e.hidden_from_standings ? "Учитывать в таблице" : "Не учитывать в таблице"}
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -829,6 +847,7 @@ function TodayWordPanel({ tournament }) {
   const [word, setWord] = useState(null);
   const [notApplicable, setNotApplicable] = useState(false);
   const [excluded, setExcluded] = useState(false);
+  const [yesterday, setYesterday] = useState(null);
 
   async function refresh() {
     try {
@@ -836,6 +855,15 @@ function TodayWordPanel({ tournament }) {
       setWord(data);
       setExcluded(false);
       setNotApplicable(false);
+      // В бессрочной игре дополнительно показываем вчерашнее слово прямо тут —
+      // у неё нет фиксированного диапазона дней, чтобы держать это в истории
+      // "по умолчанию" (см. пункт бэклога: вчера/сегодня/завтра).
+      if (tournament.type === "endless" && data.day_number > 1) {
+        const history = await api(`/api/admin/tournaments/${tournament.id}/words`);
+        setYesterday(history.find((w) => w.day_number === data.day_number - 1) || null);
+      } else {
+        setYesterday(null);
+      }
     } catch (e) {
       setNotApplicable(true);
     }
@@ -859,6 +887,11 @@ function TodayWordPanel({ tournament }) {
       <p style={{ fontSize: 13, opacity: 0.7, marginTop: -4 }}>
         День уже идёт, менять слово поздно — это просто справка для админа.
       </p>
+      {yesterday && (
+        <div style={{ fontSize: 13, opacity: 0.6, marginBottom: 8 }}>
+          Вчера (день {yesterday.day_number}): <b style={{ textTransform: "uppercase", letterSpacing: 1 }}>{yesterday.word}</b>
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <span style={{ fontSize: 22, fontWeight: 700, textTransform: "uppercase", letterSpacing: 2 }}>{word.word}</span>
         <button
@@ -1022,8 +1055,9 @@ function StandingsPanel({ tournament }) {
   const [hoveredCell, setHoveredCell] = useState(null); // {participantId, day} | null
 
   async function handleCopyStandings() {
+    const tags = [standings.hashtag, "#таблица", `#день${standings.current_day}`].filter(Boolean).join(" ");
     const lines = standings.rows.map((r) => `${r.place}. ${r.callsign} — ${r.total_points}`);
-    const text = `${tournament.title}\n\n${lines.join("\n")}`;
+    const text = `${tags}\n\n${lines.join("\n")}`;
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
@@ -1045,12 +1079,11 @@ function StandingsPanel({ tournament }) {
     const callsignCol = Math.max(90, ...standings.rows.map((r) => mctx.measureText(r.callsign).width + 20));
 
     const padding = 16;
-    const titleHeight = 32;
     const rowHeight = 28;
     const headerHeight = 28;
     const tableWidth = placeCol + callsignCol + totalCol + dayCol * standings.total_days;
     const width = tableWidth + padding * 2;
-    const height = titleHeight + headerHeight + rowHeight * standings.rows.length + padding * 2;
+    const height = headerHeight + rowHeight * standings.rows.length + padding * 2;
 
     const canvas = document.createElement("canvas");
     canvas.width = width * dpr;
@@ -1060,13 +1093,9 @@ function StandingsPanel({ tournament }) {
 
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, height);
-
-    ctx.fillStyle = "#1a1a1b";
-    ctx.font = "bold 16px system-ui, sans-serif";
     ctx.textBaseline = "middle";
-    ctx.fillText(tournament.title, padding, padding + titleHeight / 2);
 
-    const tableTop = padding + titleHeight;
+    const tableTop = padding;
     let x = padding;
     const colX = { place: x };
     x += placeCol;
@@ -1454,6 +1483,16 @@ function MatchWordQueue({ matchId }) {
     }
   }
 
+  async function handleReroll(gameNumber) {
+    setError("");
+    try {
+      await api(`/api/admin/bracket/matches/${matchId}/words/${gameNumber}/reroll`, { method: "POST" });
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   if (!queue) return null;
 
   return (
@@ -1478,12 +1517,20 @@ function MatchWordQueue({ matchId }) {
             <>
               <span style={{ textTransform: "uppercase", letterSpacing: 1, fontSize: 13 }}>{q.word}</span>
               {q.editable && (
-                <button
-                  onClick={() => { setEditingNum(q.game_number); setWordForm(q.word); }}
-                  style={{ ...ghostButtonStyle, padding: "1px 6px", fontSize: 11 }}
-                >
-                  Заменить
-                </button>
+                <>
+                  <button
+                    onClick={() => { setEditingNum(q.game_number); setWordForm(q.word); }}
+                    style={{ ...ghostButtonStyle, padding: "1px 6px", fontSize: 11 }}
+                  >
+                    Заменить
+                  </button>
+                  <button
+                    onClick={() => handleReroll(q.game_number)}
+                    style={{ ...ghostButtonStyle, padding: "1px 6px", fontSize: 11 }}
+                  >
+                    Предложить другое
+                  </button>
+                </>
               )}
             </>
           )}
@@ -1892,7 +1939,9 @@ function Centered({ children }) {
 }
 
 const panelStyle = { background: "#1c1c1e", borderRadius: 10, padding: 16 };
-const inputStyle = { padding: "8px 10px", borderRadius: 6, border: "1px solid #3a3a3c", background: "#121213", color: "#fff", fontSize: 14 };
+// colorScheme: "dark" — иначе нативная иконка календаря/цвета у <input type="date">
+// рисуется тёмной по умолчанию и сливается с тёмным фоном поля (см. пункт бэклога).
+const inputStyle = { padding: "8px 10px", borderRadius: 6, border: "1px solid #3a3a3c", background: "#121213", color: "#fff", fontSize: 14, colorScheme: "dark" };
 const buttonStyle = { padding: "8px 12px", borderRadius: 6, border: "none", background: "#538d4e", color: "#fff", fontSize: 14, cursor: "pointer" };
 const ghostButtonStyle = { padding: "6px 10px", borderRadius: 6, border: "1px solid #3a3a3c", background: "transparent", color: "#fff", fontSize: 13, cursor: "pointer" };
 const thStyle = { padding: "4px 8px", textAlign: "left" };

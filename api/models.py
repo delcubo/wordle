@@ -99,6 +99,10 @@ class Tournament(Base):
     # блокирует игру для всех участников без изменения фазы (active/tiebreak/
     # playoff), чтобы можно было включить обратно и продолжить с того же места.
     paused: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Ручной архив (см. пункт бэклога) — независим от status: раньше в архив
+    # автоматически попадали только status=finished, теперь админ сам решает,
+    # когда убрать приостановленный или завершённый розыгрыш с глаз долой.
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
     # Заметка админа с описанием розыгрыша — не показывается игрокам.
     note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
