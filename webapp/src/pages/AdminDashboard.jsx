@@ -67,23 +67,26 @@ export default function AdminDashboard() {
   if (loading) return <Centered>Загрузка...</Centered>;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#121213", color: "#fff", fontFamily: "system-ui, sans-serif", padding: 20 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <h1 style={{ margin: 0 }}>Админ-панель · Вордли</h1>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button onClick={handleToggleTheme} style={ghostButtonStyle} title="Тема оформления для игроков (не влияет на саму админ-панель)">
-            Тема игроков: {theme === "dark" ? "тёмная" : "светлая"}
-          </button>
-          <button onClick={handleLogout} style={ghostButtonStyle}>Выйти</button>
+    <div style={{ minHeight: "100vh", background: "#121213", color: "#fff", fontFamily: "system-ui, sans-serif" }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 10, background: "#121213", padding: "20px 20px 0", borderBottom: "1px solid #2a2a2c" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h1 style={{ margin: 0 }}>Админ-панель · Вордли</h1>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button onClick={handleToggleTheme} style={ghostButtonStyle} title="Тема оформления для игроков (не влияет на саму админ-панель)">
+              Тема игроков: {theme === "dark" ? "тёмная" : "светлая"}
+            </button>
+            <button onClick={handleLogout} style={ghostButtonStyle}>Выйти</button>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, paddingBottom: 12 }}>
+          <TabButton active={tab === "tournaments"} onClick={() => setTab("tournaments")}>Розыгрыши</TabButton>
+          <TabButton active={tab === "users"} onClick={() => setTab("users")}>Игроки</TabButton>
+          <TabButton active={tab === "dictionary"} onClick={() => setTab("dictionary")}>Словарь</TabButton>
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        <TabButton active={tab === "tournaments"} onClick={() => setTab("tournaments")}>Розыгрыши</TabButton>
-        <TabButton active={tab === "users"} onClick={() => setTab("users")}>Игроки</TabButton>
-        <TabButton active={tab === "dictionary"} onClick={() => setTab("dictionary")}>Словарь</TabButton>
-      </div>
-
+      <div style={{ padding: 20 }}>
       {tab === "users" && <UsersPanel users={users} onChanged={refreshUsers} />}
       {tab === "dictionary" && <DictionaryPanel />}
 
@@ -117,6 +120,7 @@ export default function AdminDashboard() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
