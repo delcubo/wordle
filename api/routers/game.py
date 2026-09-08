@@ -37,6 +37,16 @@ async def _authenticate_user(session: AsyncSession, token: str):
     return user
 
 
+async def _entry_bracket_round(session: AsyncSession, tournament_id: int, entry_id: int) -> int | None:
+    """Номер раунда сетки, в котором сейчас (или последний раз) участвует entry —
+    чтобы показывать игроку ЕГО СОБСТВЕННУЮ стадию в названии розыгрыша, а не
+    самую дальнюю стадию по сетке в целом (см. render_tournament_title)."""
+    matches = await crud.list_playoff_matches_for_entry(session, tournament_id, entry_id)
+    if not matches:
+        return None
+    return max(m.round_number for m in matches)
+
+
 @router.get("/my-tournaments", response_model=list[MyTournamentOut])
 async def my_tournaments(token: str, session: AsyncSession = Depends(get_session)):
     """Список розыгрышей, в которых участвует владелец ссылки — экран 'мои розыгрыши'."""
@@ -110,7 +120,8 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
 @router.get("/today", response_model=TodayWordStatus)
 async def get_today_status(token: str, tournament_id: int, session: AsyncSession = Depends(get_session)):
     entry, tournament, daily_word = await _resolve_context(session, token, tournament_id)
-    tournament_title = await render_tournament_title(session, tournament)
+    round_number = await _entry_bracket_round(session, tournament_id, entry.id)
+    tournament_title = await render_tournament_title(session, tournament, round_number)
 
     if daily_word is None:
         return TodayWordStatus(
@@ -204,7 +215,8 @@ async def get_bracket_today(token: str, tournament_id: int, session: AsyncSessio
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
 
-    tournament_title = await render_tournament_title(session, tournament)
+    round_number = await _entry_bracket_round(session, tournament_id, entry.id)
+    tournament_title = await render_tournament_title(session, tournament, round_number)
     if tournament.paused:
         return BracketTodayStatus(
             has_match=False, callsign=entry.callsign, tournament_title=tournament_title,
