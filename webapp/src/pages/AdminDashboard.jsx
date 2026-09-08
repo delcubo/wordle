@@ -1867,14 +1867,14 @@ function BracketImage({ tournament, matches }) {
         <button onClick={handleDownload} style={ghostButtonStyle}>Скачать PNG</button>
         {status && <span style={{ fontSize: 12, opacity: 0.7 }}>{status}</span>}
       </div>
-      <div style={{ overflowX: "auto", background: "#121213", borderRadius: 8, padding: 8 }}>
-        <svg ref={svgRef} width={svgWidth} height={svgHeight} viewBox={`0 0 ${svgWidth} ${svgHeight}`}>
-          <rect x={0} y={0} width={svgWidth} height={svgHeight} fill="#121213" />
+      <div style={{ overflowX: "auto", background: "#ffffff", borderRadius: 8, padding: 8 }}>
+        <svg ref={svgRef} width={svgWidth} height={svgHeight} viewBox={`0 0 ${svgWidth} ${svgHeight}`} fontFamily="system-ui, sans-serif">
+          <rect x={0} y={0} width={svgWidth} height={svgHeight} fill="#ffffff" />
           {rounds.map((slots, rIdx) => {
             const x = PAD + rIdx * (BOX_W + COL_GAP);
             return (
               <g key={`round-${rIdx}`}>
-                <text x={x + BOX_W / 2} y={PAD - 8} textAnchor="middle" fontSize="12" fill="#818384">
+                <text x={x + BOX_W / 2} y={PAD - 8} textAnchor="middle" fontSize="12" fontWeight="bold" fill="#666">
                   {roundLabel(slots.length)}
                 </text>
                 {slots.map((m, i) => {
@@ -1887,18 +1887,18 @@ function BracketImage({ tournament, matches }) {
                   const attemptsB = formatAttempts(m?.entry_b_attempts_used, m?.entry_b_solved);
                   return (
                     <g key={`box-${rIdx}-${i}`}>
-                      <rect x={x} y={y} width={BOX_W} height={BOX_H} rx={6} fill="#1c1c1e" stroke="#3a3a3c" />
-                      <line x1={x} y1={y + BOX_H / 2} x2={x + BOX_W} y2={y + BOX_H / 2} stroke="#3a3a3c" />
-                      <text x={x + 8} y={y + BOX_H / 2 - 6} fontSize="13" fill={winnerA ? "#6aaa64" : "#fff"} fontWeight={winnerA ? "700" : "400"}>
+                      <rect x={x} y={y} width={BOX_W} height={BOX_H} rx={6} fill={i % 2 === 1 ? "#fafafa" : "#ffffff"} stroke="#ddd" />
+                      <line x1={x} y1={y + BOX_H / 2} x2={x + BOX_W} y2={y + BOX_H / 2} stroke="#ddd" />
+                      <text x={x + 8} y={y + BOX_H / 2 - 6} fontSize="13" fill={winnerA ? "#6aaa64" : "#1a1a1b"} fontWeight={winnerA ? "700" : "400"}>
                         {nameA}
                       </text>
-                      <text x={x + BOX_W - 8} y={y + BOX_H / 2 - 6} fontSize="11" textAnchor="end" fill={winnerA ? "#6aaa64" : "#818384"}>
+                      <text x={x + BOX_W - 8} y={y + BOX_H / 2 - 6} fontSize="11" textAnchor="end" fill={winnerA ? "#6aaa64" : "#999"}>
                         {attemptsA}
                       </text>
-                      <text x={x + 8} y={y + BOX_H - 6} fontSize="13" fill={winnerB ? "#6aaa64" : "#fff"} fontWeight={winnerB ? "700" : "400"}>
+                      <text x={x + 8} y={y + BOX_H - 6} fontSize="13" fill={winnerB ? "#6aaa64" : "#1a1a1b"} fontWeight={winnerB ? "700" : "400"}>
                         {nameB}
                       </text>
-                      <text x={x + BOX_W - 8} y={y + BOX_H - 6} fontSize="11" textAnchor="end" fill={winnerB ? "#6aaa64" : "#818384"}>
+                      <text x={x + BOX_W - 8} y={y + BOX_H - 6} fontSize="11" textAnchor="end" fill={winnerB ? "#6aaa64" : "#999"}>
                         {attemptsB}
                       </text>
                     </g>
@@ -1919,7 +1919,7 @@ function BracketImage({ tournament, matches }) {
                   key={`line-${r}-${i}`}
                   d={`M ${x1} ${yA} H ${xMid} V ${yB} M ${xMid} ${cy} H ${x2}`}
                   fill="none"
-                  stroke="#3a3a3c"
+                  stroke="#ddd"
                 />
               );
             });
