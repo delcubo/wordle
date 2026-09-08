@@ -18,13 +18,13 @@ from api.tournament_time import today, day_number_for_date, date_for_day_number
 
 # ---------- Users (глобальная личность) ----------
 
-async def create_user(session: AsyncSession, admin_note: str | None = None, is_test: bool = False) -> User:
+async def create_user(session: AsyncSession, admin_note: str | None = None) -> User:
     # 8 байт (~11 символов base64url) — короче старых 32-символьных ссылок для
     # удобства, но 64 бита энтропии всё ещё практически не подобрать перебором
     # (см. пункт #17 бэклога: 5 символов, как изначально просили, было бы
     # подобрать перебором реально при отсутствии rate-limit, поэтому выбрана
     # умеренная длина). Уже выданные более длинные токены не трогаем.
-    user = User(access_token=secrets.token_urlsafe(8), admin_note=admin_note, is_test=is_test)
+    user = User(access_token=secrets.token_urlsafe(8), admin_note=admin_note)
     session.add(user)
     await session.commit()
     await session.refresh(user)
@@ -36,11 +36,12 @@ async def list_users(session: AsyncSession) -> list[User]:
     return list(result.scalars().all())
 
 
-async def get_test_user_ids(session: AsyncSession) -> set[int]:
-    """Игроки, помеченные как личный тестовый аккаунт админа — исключаются из
-    подсчёта таблиц результатов (см. standings_view.compute_standings)."""
-    result = await session.execute(select(User.id).where(User.is_test.is_(True)))
-    return {row[0] for row in result.all()}
+async def admin_note_taken(session: AsyncSession, admin_note: str, exclude_user_id: int | None = None) -> bool:
+    """Проверка на дубль заметки игрока (см. пункт бэклога) — сравнение без
+    учёта регистра, чтобы 'Вася' и 'вася' тоже считались одним и тем же."""
+    result = await session.execute(select(User).where(func.lower(User.admin_note) == admin_note.lower()))
+    users = result.scalars().all()
+    return any(u.id != exclude_user_id for u in users)
 
 
 async def get_user_by_token(session: AsyncSession, access_token: str) -> User | None:
@@ -78,6 +79,34 @@ async def set_user_archived(session: AsyncSession, user_id: int, archived: bool)
     return user
 
 
+async def disconnect_user_from_all(session: AsyncSession, user_id: int) -> User | None:
+    """Отключить игрока от всех розыгрышей, в которых он сейчас активен, без
+    архивации — личная ссылка продолжает работать, игрок просто нигде не
+    участвует, пока админ не подключит его обратно (см. пункт бэклога про
+    разделение 'Отключить' и 'В архив')."""
+    user = await session.get(User, user_id)
+    if user is None:
+        return None
+    for entry in await list_entries_for_user(session, user_id):
+        entry.active = False
+        session.add(entry)
+    await session.commit()
+    return user
+
+
+async def regenerate_access_token(session: AsyncSession, user_id: int) -> User | None:
+    """Выдаёт новую персональную ссылку взамен утерянной старой — доступ тот
+    же (тот же User, те же участия), старый токен просто перестаёт работать."""
+    user = await session.get(User, user_id)
+    if user is None:
+        return None
+    user.access_token = secrets.token_urlsafe(8)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
 # ---------- Tournaments ----------
 
 async def get_tournament(session: AsyncSession, tournament_id: int) -> Tournament | None:
@@ -107,6 +136,19 @@ async def get_other_active_tournament_of_type(
         )
     )
     return result.scalars().first()
+
+
+async def set_tournament_paused(session: AsyncSession, tournament_id: int, paused: bool) -> Tournament | None:
+    """Немедленно приостанавливает/возобновляет розыгрыш для всех участников
+    без изменения его фазы (см. пункт бэклога) — см. Tournament.paused."""
+    tournament = await get_tournament(session, tournament_id)
+    if tournament is None:
+        return None
+    tournament.paused = paused
+    session.add(tournament)
+    await session.commit()
+    await session.refresh(tournament)
+    return tournament
 
 
 # ---------- Tournament entries (участие User в Tournament) ----------
@@ -156,8 +198,19 @@ async def set_entry_active(session: AsyncSession, entry_id: int, active: bool) -
     return entry
 
 
+async def set_entry_hidden(session: AsyncSession, entry_id: int, hidden: bool) -> TournamentEntry | None:
+    entry = await session.get(TournamentEntry, entry_id)
+    if entry is None:
+        return None
+    entry.hidden_from_standings = hidden
+    session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+    return entry
+
+
 async def create_entry(
-    session: AsyncSession, tournament: Tournament, user_id: int, callsign: str
+    session: AsyncSession, tournament: Tournament, user_id: int, callsign: str, hidden_from_standings: bool = False
 ) -> TournamentEntry:
     current_day = day_number_for_date(tournament.start_date, today())
     entry = TournamentEntry(
@@ -165,6 +218,7 @@ async def create_entry(
         user_id=user_id,
         callsign=callsign,
         joined_on_day=max(current_day, 1),
+        hidden_from_standings=hidden_from_standings,
     )
     session.add(entry)
     await session.commit()
@@ -602,8 +656,17 @@ async def create_playoff_game(
     calendar_date: date,
     is_sudden_death: bool = False,
 ) -> PlayoffGame:
-    already_used = await get_all_used_words(session, tournament_id)
-    word = pick_word_for_match(match_id, game_number, already_used)
+    match = await session.get(PlayoffMatch, match_id)
+    overrides = dict((match.word_overrides or {})) if match else {}
+    override_word = overrides.pop(str(game_number), None)
+    if override_word:
+        word = override_word
+        if match is not None:
+            match.word_overrides = overrides
+            session.add(match)
+    else:
+        already_used = await get_all_used_words(session, tournament_id)
+        word = pick_word_for_match(match_id, game_number, already_used)
     game = PlayoffGame(
         match_id=match_id,
         game_number=game_number,
@@ -613,6 +676,25 @@ async def create_playoff_game(
         entry_a_guesses=[],
         entry_b_guesses=[],
     )
+    session.add(game)
+    await session.commit()
+    await session.refresh(game)
+    return game
+
+
+async def set_playoff_word_override(session: AsyncSession, match: PlayoffMatch, game_number: int, word: str) -> None:
+    """Заранее задаёт слово для игры 2 или 3 пары (на случай ничьей) — сама
+    игра появится позже, лениво, только если до неё дойдёт (см. пункт бэклога
+    про очередь из 3 слов)."""
+    overrides = dict(match.word_overrides or {})
+    overrides[str(game_number)] = word
+    match.word_overrides = overrides
+    session.add(match)
+    await session.commit()
+
+
+async def set_playoff_game_word(session: AsyncSession, game: PlayoffGame, word: str) -> PlayoffGame:
+    game.word = word
     session.add(game)
     await session.commit()
     await session.refresh(game)

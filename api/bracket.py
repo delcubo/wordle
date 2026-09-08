@@ -11,7 +11,7 @@ championship — автоматически, по итоговому поряд�
 """
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.models import Tournament, TournamentType, TournamentStatus, PlayoffMatch
+from api.models import Tournament, TournamentType, TournamentStatus, PlayoffMatch, PlayoffMatchStatus
 from api.tournament_time import today, day_number_for_date
 from api.tiebreak import compute_final_order
 from api import crud, bracket_game
@@ -52,9 +52,15 @@ async def generate_championship_bracket(session: AsyncSession, tournament: Tourn
 
 
 async def set_knockout_round1(
-    session: AsyncSession, tournament: Tournament, pairs: list[tuple[int, int]]
+    session: AsyncSession, tournament: Tournament, pairs: list[tuple[int | None, int | None]]
 ) -> list[PlayoffMatch]:
-    """Ручной посев раунда 1 для knockout — администратор сам расставляет пары."""
+    """
+    Ручной посев раунда 1 для knockout — администратор сам расставляет пары.
+    Пара может быть неполной (один из entry_a/entry_b — None: единственный
+    участник сразу проходит дальше без игры) или совсем пустой (оба None —
+    решается без победителя, чтобы не набиралось ровно 2^N участников) —
+    см. пункт бэклога про пустые/неполные пары.
+    """
     if tournament.type != TournamentType.knockout:
         raise ValueError("Ручной посев доступен только для knockout")
     if tournament.bracket_size is None:
@@ -68,11 +74,13 @@ async def set_knockout_round1(
     valid_ids = {e.id for e in await crud.list_entries(session, tournament.id)}
     seen: set[int] = set()
     for entry_a, entry_b in pairs:
-        if entry_a not in valid_ids or entry_b not in valid_ids:
-            raise ValueError("В парах указан участник, не подключённый к этому розыгрышу")
-        if entry_a == entry_b:
+        if entry_a is not None and entry_a == entry_b:
             raise ValueError("Участник не может играть сам с собой")
         for entry_id in (entry_a, entry_b):
+            if entry_id is None:
+                continue
+            if entry_id not in valid_ids:
+                raise ValueError("В парах указан участник, не подключённый к этому розыгрышу")
             if entry_id in seen:
                 raise ValueError("Каждый участник должен встречаться в сетке ровно один раз")
             seen.add(entry_id)
@@ -84,24 +92,33 @@ async def set_knockout_round1(
     tournament.status = TournamentStatus.playoff
     session.add(tournament)
     await session.commit()
+
+    # Пары, решённые без игры (пустые/неполные), сразу продвигаем по сетке —
+    # иначе их результат так и останется висеть до первого чужого захода.
+    for match in matches:
+        if match.status == PlayoffMatchStatus.finished:
+            await bracket_game.advance_winner(session, tournament, match)
+
     return matches
 
 
 async def _create_round(
-    session: AsyncSession, tournament_id: int, round_number: int, pairs: list[tuple[int, int]], scheduled_date
+    session: AsyncSession, tournament_id: int, round_number: int,
+    pairs: list[tuple[int | None, int | None]], scheduled_date,
 ) -> list[PlayoffMatch]:
     """
-    Создаёт пары раунда и сразу первую игру для каждой — не откладываем её
-    создание до первого захода игрока, иначе дедлайн ("не сыграл до начала
+    Создаёт пары раунда. Полная пара сразу получает первую игру — не откладываем
+    её создание до первого захода игрока, иначе дедлайн ("не сыграл до начала
     следующего дня — техническое поражение") не от чего было бы отсчитывать,
-    если оба долго не заходят.
+    если оба долго не заходят. Пустая/неполная пара игры не получает — она уже
+    решена (см. bracket_game.resolve_bye_if_needed).
     """
     matches = []
     for position, (entry_a, entry_b) in enumerate(pairs):
         match = await crud.create_playoff_match(
             session, tournament_id, round_number, position, entry_a, entry_b, scheduled_date
         )
-        await crud.create_playoff_game(session, tournament_id, match.id, 1, scheduled_date or today())
+        await bracket_game.resolve_bye_if_needed(session, match, scheduled_date)
         matches.append(match)
     return matches
 

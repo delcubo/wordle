@@ -13,11 +13,14 @@ sudden death при ничье и продвижение победителя в
 техническое поражение; если не сыграли оба — пара зависает, доигровка вручную
 через админку.
 """
+from datetime import timedelta
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models import Tournament, TournamentStatus, TournamentEntry, PlayoffMatch, PlayoffMatchStatus, PlayoffGame
 from api.tournament_time import today
 from api.wordle_logic import check_guess, is_solved
+from api.dictionary import pick_word_for_match
 from api import crud
 
 MAX_ATTEMPTS = 6
@@ -119,10 +122,32 @@ async def resolve_match_if_ready(session: AsyncSession, tournament: Tournament, 
     session.add(match)
     await session.commit()
 
-    await _advance_winner(session, tournament, match)
+    await advance_winner(session, tournament, match)
 
 
-async def _advance_winner(session: AsyncSession, tournament: Tournament, match: PlayoffMatch) -> None:
+async def resolve_bye_if_needed(session: AsyncSession, match: PlayoffMatch, scheduled_date) -> bool:
+    """
+    Пара без одного или обоих участников не требует игры — решается сразу:
+    - оба слота пусты ("пустая пара", см. пункт бэклога) — у пары просто нет
+      победителя, но она сразу считается завершённой, чтобы сосед по сетке не
+      ждал её бесконечно;
+    - один слот пуст ("неполная пара") — единственный участник автоматически
+      побеждает и сразу проходит дальше, без игры.
+    Возвращает True, если пара была решена так (игра не создавалась) — тогда
+    вызывающий код должен сам продвинуть её дальше через advance_winner.
+    """
+    if match.entry_a_id is not None and match.entry_b_id is not None:
+        await crud.create_playoff_game(session, match.tournament_id, match.id, 1, scheduled_date or today())
+        return False
+
+    match.winner_entry_id = match.entry_a_id if match.entry_a_id is not None else match.entry_b_id
+    match.status = PlayoffMatchStatus.finished
+    session.add(match)
+    await session.commit()
+    return True
+
+
+async def advance_winner(session: AsyncSession, tournament: Tournament, match: PlayoffMatch) -> None:
     matches_in_round = tournament.bracket_size // (2 ** match.round_number)
     if matches_in_round <= 1:
         tournament.status = TournamentStatus.finished
@@ -132,7 +157,10 @@ async def _advance_winner(session: AsyncSession, tournament: Tournament, match: 
 
     sibling_position = match.position + 1 if match.position % 2 == 0 else match.position - 1
     sibling = await crud.get_playoff_match_by_position(session, match.tournament_id, match.round_number, sibling_position)
-    if sibling is None or sibling.winner_entry_id is None:
+    # Ждём, пока сосед РЕШИТСЯ (не обязательно с победителем — пустая пара
+    # тоже "решена", просто без победителя), а не именно пока появится
+    # победитель — иначе пустая пара блокировала бы соседа навсегда.
+    if sibling is None or sibling.status != PlayoffMatchStatus.finished:
         return  # соперник по сетке ещё не определился
 
     next_round = match.round_number + 1
@@ -145,13 +173,22 @@ async def _advance_winner(session: AsyncSession, tournament: Tournament, match: 
     else:
         entry_a, entry_b = sibling.winner_entry_id, match.winner_entry_id
 
-    next_match = await crud.create_playoff_match(session, tournament.id, next_round, next_position, entry_a, entry_b, today())
-    await crud.create_playoff_game(session, tournament.id, next_match.id, 1, today())
+    # Следующий раунд стартует НА СЛЕДУЮЩИЙ день после того, как определилась
+    # пара — иначе победители могли бы сыграть его же в день определения пары,
+    # пока часть сетки ещё доигрывает текущий раунд.
+    next_start = today() + timedelta(days=1)
+    next_match = await crud.create_playoff_match(session, tournament.id, next_round, next_position, entry_a, entry_b, next_start)
 
     match.next_match_id = next_match.id
     sibling.next_match_id = next_match.id
     session.add_all([match, sibling])
     await session.commit()
+
+    # Следующий раунд сам может оказаться пустым/неполным, если сюда каскадом
+    # дошёл бай (обе пары этого раунда были пустыми/неполными) — тогда сразу
+    # решаем и его и продвигаем дальше.
+    if await resolve_bye_if_needed(session, next_match, next_start):
+        await advance_winner(session, tournament, next_match)
 
 
 async def resolve_ready_matches(session: AsyncSession, tournament: Tournament) -> None:
@@ -181,7 +218,7 @@ async def override_winner(
     session.add(match)
     await session.commit()
 
-    await _advance_winner(session, tournament, match)
+    await advance_winner(session, tournament, match)
     return match
 
 
@@ -244,3 +281,36 @@ async def get_player_view(session: AsyncSession, tournament: Tournament, entry) 
         "previous_results": my_previous_results,
         "waiting_for_opponent": my_attempts_used is not None and _result_key(game, opponent_side) is None,
     }
+
+
+async def get_word_queue(session: AsyncSession, match: PlayoffMatch) -> list[dict]:
+    """
+    Очередь из 3 слов пары — первое уже действующее (или сразу станет им),
+    второе и третье — превью на случай ничьей/повторной ничьей, ещё не
+    существующих как PlayoffGame. Игры с 4-й дальше не входят в очередь —
+    для них слово всегда генерируется автоматически в момент ничьей (см.
+    пункт бэклога). Редактируемо: игра 1, пока не наступил её день; игры 2/3 —
+    всегда, пока сами ещё не наступили (после наступления они уже реальные
+    PlayoffGame и подчиняются тому же правилу "пока не наступил день").
+    """
+    games = await crud.list_playoff_games(session, match.id)
+    games_by_number = {g.game_number: g for g in games}
+    overrides = match.word_overrides or {}
+    already_used = await crud.get_all_used_words(session, match.tournament_id)
+
+    queue = []
+    for game_number in (1, 2, 3):
+        existing = games_by_number.get(game_number)
+        if existing is not None:
+            word = existing.word
+            editable = existing.calendar_date > today()
+        else:
+            override = overrides.get(str(game_number))
+            if override:
+                word = override
+            else:
+                word = pick_word_for_match(match.id, game_number, already_used)
+            already_used = already_used | {word}
+            editable = True
+        queue.append({"game_number": game_number, "word": word, "editable": editable})
+    return queue

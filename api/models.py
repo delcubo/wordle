@@ -61,10 +61,6 @@ class User(Base):
     # вкладке "Игроки" (см. пункт #12 бэклога), без потери исторических данных.
     # Прячет игрока из основного списка админки, но ни на что игровое не влияет.
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Личный тестовый игрок админа (см. пункт #25 бэклога) — играет как обычно
-    # и подключается к любым розыгрышам, но исключается из подсчёта таблиц
-    # результатов, чтобы не искажать лидерборд для остальных участников.
-    is_test: Mapped[bool] = mapped_column(Boolean, default=False)
 
     entries: Mapped[list["TournamentEntry"]] = relationship(back_populates="user")
 
@@ -99,6 +95,12 @@ class Tournament(Base):
     status: Mapped[TournamentStatus] = mapped_column(
         SAEnum(TournamentStatus), default=TournamentStatus.draft
     )
+    # Независимый от status флаг "розыгрыш временно приостановлен админом" —
+    # блокирует игру для всех участников без изменения фазы (active/tiebreak/
+    # playoff), чтобы можно было включить обратно и продолжить с того же места.
+    paused: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Заметка админа с описанием розыгрыша — не показывается игрокам.
+    note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -129,6 +131,12 @@ class TournamentEntry(Base):
     # и не видит розыгрыш в "моих розыгрышах", но продолжает учитываться
     # в лидерборде своими уже набранными результатами.
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Не учитывать это участие в таблице результатов розыгрыша (см. пункт
+    # бэклога про замену глобального User.is_test на per-entry опцию) —
+    # игрок играет как обычно, подключается по своей обычной ссылке, но
+    # исключается из compute_standings именно в ЭТОМ розыгрыше.
+    hidden_from_standings: Mapped[bool] = mapped_column(Boolean, default=False)
 
     tournament: Mapped["Tournament"] = relationship(back_populates="entries")
     user: Mapped["User"] = relationship(back_populates="entries")
@@ -228,6 +236,14 @@ class PlayoffMatch(Base):
     # заполнено, только если победитель назначен админом вручную (зависшая или
     # спорная пара), а не обычной игрой — см. api/bracket_game.py::override_winner
     admin_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+    # Слова, которые админ вручную задал заранее для игр 2 и 3 этой пары (на
+    # случай ничьей/повторной ничьей) — см. пункт бэклога про очередь из 3 слов.
+    # Ключ — game_number строкой ("2"/"3"), значение — слово. Игра 1 всегда уже
+    # существует к моменту создания пары, её слово редактируется напрямую в
+    # PlayoffGame.word, сюда не попадает. С игры 4 слова снова генерируются
+    # автоматически (оверрайды на них не предусмотрены).
+    word_overrides: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     games: Mapped[list["PlayoffGame"]] = relationship(back_populates="match")
 

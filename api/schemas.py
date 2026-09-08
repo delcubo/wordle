@@ -35,7 +35,6 @@ class ExcludedWordCreateRequest(BaseModel):
 
 class UserCreateRequest(BaseModel):
     admin_note: str | None = None
-    is_test: bool = False
 
 
 class UserTournamentInfo(BaseModel):
@@ -50,7 +49,6 @@ class UserOut(BaseModel):
     admin_note: str | None
     created_at: str | None = None
     archived: bool = False
-    is_test: bool = False
     tournaments: list[UserTournamentInfo] = []
 
     class Config:
@@ -77,6 +75,7 @@ class TournamentConfigRequest(BaseModel):
     bracket_size: int | None = None       # championship: сколько мест проходит в плей-офф; knockout: общий размер сетки
     rounds_per_match: int = 1
     hashtag: str | None = None  # для копируемого результата (ResultModal)
+    note: str | None = None  # заметка админа, игрокам не показывается
 
 
 class TournamentOut(BaseModel):
@@ -91,6 +90,8 @@ class TournamentOut(BaseModel):
     bracket_size: int | None
     rounds_per_match: int
     hashtag: str | None = None
+    paused: bool = False
+    note: str | None = None
 
     class Config:
         from_attributes = True
@@ -100,6 +101,12 @@ class TournamentSettingsUpdateRequest(BaseModel):
     title: str | None = None  # чистое название — день/стадия подставляются автоматически при показе
     duration_days: int | None = None  # только standard/championship; вниз — не меньше текущего дня
     hashtag: str | None = None
+    note: str | None = None
+    start_date: date | None = None  # только пока розыгрыш ещё не стартовал
+
+
+class TournamentPauseRequest(BaseModel):
+    paused: bool
 
 
 # ---------- Tournament entries ----------
@@ -107,6 +114,7 @@ class TournamentSettingsUpdateRequest(BaseModel):
 class EntryCreateRequest(BaseModel):
     user_id: int
     callsign: str
+    hidden_from_standings: bool = False
 
 
 class EntryOut(BaseModel):
@@ -115,6 +123,7 @@ class EntryOut(BaseModel):
     callsign: str
     joined_on_day: int
     active: bool = True
+    hidden_from_standings: bool = False
 
     class Config:
         from_attributes = True
@@ -126,6 +135,10 @@ class EntryEditRequest(BaseModel):
 
 class EntryActiveRequest(BaseModel):
     active: bool
+
+
+class EntryHiddenRequest(BaseModel):
+    hidden_from_standings: bool
 
 
 # ---------- Daily word confirmation ----------
@@ -168,6 +181,8 @@ class TodayWordStatus(BaseModel):
     callsign: str | None = None
     tournament_title: str | None = None
     hashtag: str | None = None
+    next_word_at: str | None = None  # ISO-момент публикации следующего слова — для попапа-обратного отсчёта
+    paused: bool = False
 
 
 class BracketTodayStatus(BaseModel):
@@ -191,6 +206,8 @@ class BracketTodayStatus(BaseModel):
     callsign: str | None = None
     tournament_title: str | None = None
     hashtag: str | None = None
+    next_word_at: str | None = None
+    paused: bool = False
 
 
 class GuessRequest(BaseModel):
@@ -292,7 +309,19 @@ class PlayoffMatchOut(BaseModel):
 
 
 class BracketRound1Request(BaseModel):
-    pairs: list[tuple[int, int]]  # (entry_a_id, entry_b_id) для каждой пары раунда 1
+    # (entry_a_id, entry_b_id) для каждой пары раунда 1 — None у одной или
+    # обеих сторон означает неполную/пустую пару (см. пункт бэклога)
+    pairs: list[tuple[int | None, int | None]]
+
+
+class PlayoffWordQueueEntry(BaseModel):
+    game_number: int
+    word: str
+    editable: bool
+
+
+class SetPlayoffWordRequest(BaseModel):
+    word: str
 
 
 class MatchOverrideRequest(BaseModel):

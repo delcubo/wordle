@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import WordGrid, { FLIP_TOTAL_MS } from "../components/WordGrid.jsx";
 import Keyboard from "../components/Keyboard.jsx";
@@ -50,9 +50,28 @@ export default function PlayerGame() {
   const [modal, setModal] = useState(null);
   const [theme, setTheme] = useState("dark");
   const [animateRowIndex, setAnimateRowIndex] = useState(null);
+  const errorTimeoutRef = useRef(null);
 
   useEffect(() => {
     fetchTheme().then(setTheme);
+  }, []);
+
+  // Ошибка ввода (например "слова нет в словаре") гаснет сама через пару
+  // секунд — иначе если она уже висит и игрок снова вводит несуществующее
+  // слово, ему не видно, что это новое отклонение, а не старое сообщение.
+  function showTransientError(text) {
+    setMessage(text);
+    setIsError(true);
+    if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current);
+    errorTimeoutRef.current = setTimeout(() => {
+      setMessage("");
+      setIsError(false);
+      errorTimeoutRef.current = null;
+    }, 2500);
+  }
+
+  useEffect(() => () => {
+    if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current);
   }, []);
 
   function applyStandardStatus(data) {
@@ -62,7 +81,11 @@ export default function PlayerGame() {
 
     if (!data.has_word_today) {
       setGameOver(true);
-      setMessage("Слово дня сегодня недоступно — розыгрыш ещё не начался или уже завершён.");
+      setMessage(
+        data.paused
+          ? "Розыгрыш временно приостановлен админом."
+          : "Слово дня сегодня недоступно — розыгрыш ещё не начался или уже завершён."
+      );
       setIsError(false);
       return;
     }
@@ -84,6 +107,7 @@ export default function PlayerGame() {
         solved: data.solved,
         grid: data.previous_results,
         answerWord: data.answer_word,
+        countdownTarget: data.next_word_at,
       });
     } else {
       setMessage("");
@@ -98,7 +122,11 @@ export default function PlayerGame() {
 
     if (!data.has_match) {
       setGameOver(true);
-      setMessage("Слово дня сегодня недоступно — розыгрыш ещё не начался или уже завершён.");
+      setMessage(
+        data.paused
+          ? "Розыгрыш временно приостановлен админом."
+          : "Слово дня сегодня недоступно — розыгрыш ещё не начался или уже завершён."
+      );
       setIsError(false);
       return;
     }
@@ -127,6 +155,8 @@ export default function PlayerGame() {
           grid: data.previous_results,
           answerWord: data.answer_word,
           message: (data.won ? "Победа!" : "Поражение.") + oppResult,
+          countdownTarget: data.won ? data.next_word_at : null,
+          gameEnded: !data.won,
         });
       }
       return;
@@ -223,9 +253,13 @@ export default function PlayerGame() {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      setMessage(err.detail || "Слово не найдено в словаре.");
-      setIsError(true);
+      showTransientError(err.detail || "Слово не найдено в словаре.");
       return;
+    }
+
+    if (errorTimeoutRef.current) {
+      clearTimeout(errorTimeoutRef.current);
+      errorTimeoutRef.current = null;
     }
 
     const data = await res.json();
@@ -326,6 +360,8 @@ export default function PlayerGame() {
           grid={modal.grid}
           answerWord={modal.answerWord}
           message={modal.message}
+          countdownTarget={modal.countdownTarget}
+          gameEnded={modal.gameEnded}
           onClose={() => setModal(null)}
         />
       )}

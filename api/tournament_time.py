@@ -23,3 +23,11 @@ def day_number_for_date(start_date: date, calendar_date: date) -> int:
 
 def date_for_day_number(start_date: date, day_number: int) -> date:
     return start_date + timedelta(days=day_number - 1)
+
+
+def next_publish_at() -> datetime:
+    """Момент публикации следующего слова (00:01 по таймзоне турнира завтрашней
+    календарной даты) — используется для обратного отсчёта в попапе результата
+    (см. TodayWordStatus.next_word_at/BracketTodayStatus.next_word_at)."""
+    tomorrow = today() + timedelta(days=1)
+    return datetime.combine(tomorrow, datetime.min.time(), tzinfo=TOURNAMENT_TZ) + timedelta(minutes=1)

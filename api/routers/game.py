@@ -12,7 +12,7 @@ from api.schemas import TodayWordStatus, GuessRequest, GuessResponse, LetterStat
 from api.wordle_logic import check_guess, is_solved
 from api.scoring import calculate_points
 from api.dictionary import is_valid_word
-from api.tournament_time import today, day_number_for_date
+from api.tournament_time import today, day_number_for_date, next_publish_at
 from api.models import TournamentType, TournamentStatus, PlayoffMatchStatus
 from api.tournament_title import render_tournament_title
 from api import crud, tiebreak, bracket_game
@@ -32,7 +32,7 @@ async def get_theme(session: AsyncSession = Depends(get_session)):
 
 async def _authenticate_user(session: AsyncSession, token: str):
     user = await crud.get_user_by_token(session, token)
-    if user is None:
+    if user is None or user.archived:
         raise HTTPException(status_code=404, detail="Ссылка недействительна")
     return user
 
@@ -80,6 +80,11 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
 
+    if tournament.paused:
+        # Немедленная деактивация админом — блокирует игру для всех участников
+        # независимо от фазы, до тех пор пока не будет включена обратно.
+        return entry, tournament, None
+
     if tournament.type == TournamentType.knockout:
         # у knockout нет слова дня вне сетки вообще — играют только через
         # /game/bracket/today и /game/bracket/guess, с первого дня
@@ -110,7 +115,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
     if daily_word is None:
         return TodayWordStatus(
             has_word_today=False, already_played=False, callsign=entry.callsign, tournament_title=tournament_title,
-            hashtag=tournament.hashtag,
+            hashtag=tournament.hashtag, paused=tournament.paused,
         )
 
     attempt = await crud.get_attempt(session, entry.id, daily_word.id)
@@ -137,6 +142,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         callsign=entry.callsign,
         tournament_title=tournament_title,
         hashtag=tournament.hashtag,
+        next_word_at=next_publish_at().isoformat() if already_played else None,
     )
 
 
@@ -198,13 +204,29 @@ async def get_bracket_today(token: str, tournament_id: int, session: AsyncSessio
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
 
+    tournament_title = await render_tournament_title(session, tournament)
+    if tournament.paused:
+        return BracketTodayStatus(
+            has_match=False, callsign=entry.callsign, tournament_title=tournament_title,
+            hashtag=tournament.hashtag, paused=True,
+        )
+
     # тот же лениво-вычисляемый паттерн, что и у слова дня/тай-брейка: пары,
     # чей дедлайн уже прошёл, разрешаются прямо при заходе игрока
     await bracket_game.resolve_ready_matches(session, tournament)
 
     view = await bracket_game.get_player_view(session, tournament, entry)
-    tournament_title = await render_tournament_title(session, tournament)
-    return BracketTodayStatus(**view, callsign=entry.callsign, tournament_title=tournament_title, hashtag=tournament.hashtag)
+    # Отсчёт до следующего слова показываем только тем, для кого действительно
+    # есть следующее слово: победителю пары (следующий раунд — завтра) или
+    # игроку, доигравшему обычный день/тай-брейк. Проигравшему пару — нет,
+    # для него розыгрыш на этом закончен (см. ResultModal: "игра окончена").
+    next_word_at = None
+    if view.get("match_finished") and view.get("won"):
+        next_word_at = next_publish_at().isoformat()
+    return BracketTodayStatus(
+        **view, callsign=entry.callsign, tournament_title=tournament_title, hashtag=tournament.hashtag,
+        next_word_at=next_word_at,
+    )
 
 
 @router.post("/bracket/guess", response_model=GuessResponse)
@@ -223,6 +245,8 @@ async def submit_bracket_guess(payload: GuessRequest, session: AsyncSession = De
     tournament = await crud.get_tournament(session, payload.tournament_id)
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    if tournament.paused:
+        raise HTTPException(status_code=400, detail="Розыгрыш временно приостановлен")
 
     matches = await crud.list_playoff_matches_for_entry(session, tournament.id, entry.id)
     active_matches = [m for m in matches if m.status != PlayoffMatchStatus.finished]

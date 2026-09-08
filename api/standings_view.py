@@ -11,8 +11,7 @@ from api.tournament_time import today, day_number_for_date
 
 
 async def compute_standings(session: AsyncSession, tournament: Tournament) -> list[StandingsRow]:
-    test_user_ids = await crud.get_test_user_ids(session)
-    entries = [e for e in await crud.list_entries(session, tournament.id) if e.user_id not in test_user_ids]
+    entries = [e for e in await crud.list_entries(session, tournament.id) if not e.hidden_from_standings]
     daily_words = await crud.list_daily_words(session, tournament.id)
     attempts = await crud.list_attempts_for_tournament(session, tournament.id)
 
