@@ -49,11 +49,13 @@ export default function ResultModal({
 }) {
   const [copied, setCopied] = useState(false);
 
+  const attemptsLabel = solved ? `${attemptsUsed}/6` : "X/6";
+
   async function handleCopy() {
-    const attemptsLabel = solved ? `${attemptsUsed}/6` : "X/6";
     const emojiGrid = grid.map((row) => row.map((s) => EMOJI[s] || "⬜").join("")).join("\n");
-    const lines = [`${title} ${attemptsLabel}`];
+    const lines = [title];
     if (callsign) lines.push(`Игрок: ${callsign}`);
+    lines.push(`Попытки: ${attemptsLabel}`);
     lines.push("", emojiGrid);
     if (hashtag) lines.push("", hashtag);
     try {
@@ -81,7 +83,7 @@ export default function ResultModal({
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h3 style={{ margin: 0, fontSize: 16 }}>{title} {solved ? `${attemptsUsed}/6` : "X/6"}</h3>
+          <h3 style={{ margin: 0, fontSize: 16 }}>{title}</h3>
           <button
             onClick={onClose}
             style={{ background: "transparent", border: "none", color: "var(--muted)", fontSize: 20, cursor: "pointer", lineHeight: 1 }}
@@ -91,6 +93,7 @@ export default function ResultModal({
         </div>
 
         {callsign && <div style={{ marginTop: 4, fontSize: 13, opacity: 0.7 }}>Игрок: {callsign}</div>}
+        <div style={{ marginTop: 4, fontSize: 13, opacity: 0.7 }}>Попытки: {attemptsLabel}</div>
         {message && <div style={{ marginTop: 10, fontSize: 14, opacity: 0.9 }}>{message}</div>}
 
         {gameEnded ? (
