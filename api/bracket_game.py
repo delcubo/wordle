@@ -223,15 +223,21 @@ async def override_winner(
 
 
 async def get_player_view(session: AsyncSession, tournament: Tournament, entry) -> dict:
-    """Статус текущего матча сетки для конкретного участника — для игровой страницы."""
+    """
+    Статус текущего матча сетки для конкретного участника — для игровой страницы.
+    "Текущий" — самый дальний раунд, который УЖЕ НАСТУПИЛ (scheduled_date не в
+    будущем): следующий раунд после победы создаётся сразу (см. advance_winner),
+    но начинается только на следующий день, и до этого момента он не должен
+    заслонять собой ещё не остывший результат только что завершённого раунда —
+    иначе игрок-победитель вместо своего попапа с результатом видел бы "матч
+    недоступен" вплоть до начала следующего раунда (см. пункт бэклога).
+    """
     matches = await crud.list_playoff_matches_for_entry(session, tournament.id, entry.id)
-    if not matches:
+    started = [m for m in matches if (m.scheduled_date or today()) <= today()]
+    if not started:
         return {"has_match": False}
 
-    match = max(matches, key=lambda m: m.round_number)
-    if today() < (match.scheduled_date or today()):
-        return {"has_match": False}
-
+    match = max(started, key=lambda m: m.round_number)
     side = _side_for_entry(match, entry.id)
     opponent_side = "b" if side == "a" else "a"
     opponent_entry_id = match.entry_b_id if side == "a" else match.entry_a_id

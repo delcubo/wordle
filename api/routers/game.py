@@ -40,11 +40,17 @@ async def _authenticate_user(session: AsyncSession, token: str):
 async def _entry_bracket_round(session: AsyncSession, tournament_id: int, entry_id: int) -> int | None:
     """Номер раунда сетки, в котором сейчас (или последний раз) участвует entry —
     чтобы показывать игроку ЕГО СОБСТВЕННУЮ стадию в названии розыгрыша, а не
-    самую дальнюю стадию по сетке в целом (см. render_tournament_title)."""
+    самую дальнюю стадию по сетке в целом (см. render_tournament_title). Считаем
+    только раунды, которые УЖЕ НАСТУПИЛИ — следующий раунд после победы создаётся
+    сразу, но начинается только завтра (см. bracket_game.advance_winner), и до
+    этого момента заголовок не должен перескакивать вперёд, пока сам раунд ещё
+    недоступен (см. bracket_game.get_player_view — та же логика выбора "текущего"
+    матча, оба места должны совпадать)."""
     matches = await crud.list_playoff_matches_for_entry(session, tournament_id, entry_id)
-    if not matches:
+    started = [m for m in matches if (m.scheduled_date or today()) <= today()]
+    if not started:
         return None
-    return max(m.round_number for m in matches)
+    return max(m.round_number for m in started)
 
 
 @router.get("/my-tournaments", response_model=list[MyTournamentOut])
