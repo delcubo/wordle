@@ -20,8 +20,20 @@ export const FLIP_TOTAL_MS = FLIP_DURATION_MS + FLIP_STAGGER_MS * 4;
  * страницы), просто показываются раскрашенными без анимации.
  */
 export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRowIndex }) {
+  // Буквы, чья правильная позиция уже известна из предыдущих попыток этой же
+  // игры — показываются подсказкой (приглушённым цветом) в ещё не введённых
+  // клетках текущей попытки, по аналогии с wordle.belousov.one, чтобы не
+  // заставлять игрока держать их в памяти и перепечатывать заново.
+  const knownCorrect = Array(5).fill(null);
+  rows.forEach((row) => {
+    if (!row.statuses) return;
+    row.statuses.forEach((s, j) => {
+      if (s === "correct") knownCorrect[j] = row.letters[j];
+    });
+  });
+
   return (
-    <div style={{ display: "grid", gap: 6, justifyContent: "center", padding: "16px 0" }}>
+    <div style={{ display: "grid", gap: "clamp(4px, 1.5vw, 8px)", justifyContent: "center", padding: "16px 0" }}>
       <style>{`
         @keyframes wordgrid-flip {
           0%, 50% { background: transparent; border-color: var(--border-filled); color: var(--fg); }
@@ -33,16 +45,26 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
       `}</style>
       {rows.map((row, i) => {
         const isActive = i === activeRowIndex;
-        const letters = isActive
-          ? (currentGuess + "     ").slice(0, 5).split("")
-          : row.letters ?? Array(5).fill("");
         const statuses = row.statuses;
         const isAnimating = i === animateRowIndex && statuses;
 
+        const ghostFlags = Array(5).fill(false);
+        const letters = isActive
+          ? Array.from({ length: 5 }, (_, j) => {
+              if (j < currentGuess.length) return currentGuess[j];
+              if (knownCorrect[j]) {
+                ghostFlags[j] = true;
+                return knownCorrect[j];
+              }
+              return "";
+            })
+          : row.letters ?? Array(5).fill("");
+
         return (
-          <div key={i} style={{ display: "flex", gap: 6 }}>
+          <div key={i} style={{ display: "flex", gap: "clamp(4px, 1.5vw, 8px)" }}>
             {letters.map((letter, j) => {
-              const filled = Boolean(letter.trim());
+              const isGhost = ghostFlags[j];
+              const filled = Boolean(letter.trim()) && !isGhost;
               const graded = statuses && !isAnimating;
 
               const style = isAnimating
@@ -54,7 +76,7 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
                     animation: `wordgrid-flip ${FLIP_DURATION_MS}ms ease-in-out ${j * FLIP_STAGGER_MS}ms both`,
                   }
                 : {
-                    color: graded ? "#fff" : "var(--fg)",
+                    color: graded ? "#fff" : isGhost ? "var(--muted)" : "var(--fg)",
                     background: graded ? COLORS[statuses[j]] : "transparent",
                     border: `2px solid ${graded ? COLORS[statuses[j]] : filled ? "var(--border-filled)" : "var(--border)"}`,
                   };
@@ -63,12 +85,12 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
                 <div
                   key={j}
                   style={{
-                    width: 48,
-                    height: 48,
+                    width: "clamp(48px, 18vw, 68px)",
+                    height: "clamp(48px, 18vw, 68px)",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    fontSize: 24,
+                    fontSize: "clamp(22px, 7vw, 34px)",
                     fontWeight: 700,
                     textTransform: "uppercase",
                     borderRadius: 4,
