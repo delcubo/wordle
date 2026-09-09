@@ -64,10 +64,15 @@ async def my_tournaments(token: str, session: AsyncSession = Depends(get_session
         tournament = await crud.get_tournament(session, entry.tournament_id)
         if tournament is None or tournament.paused:
             continue
+        # round_number — как и в get_bracket_today/get_today_status: собственная
+        # (уже наступившая) стадия ИМЕННО ЭТОГО участника, а не самая дальняя по
+        # сетке в целом — иначе в списке розыгрышей могла показаться стадия,
+        # которая для этого игрока ещё не началась (см. пункт бэклога).
+        round_number = await _entry_bracket_round(session, tournament.id, entry.id)
         result.append(
             MyTournamentOut(
                 tournament_id=tournament.id,
-                title=await render_tournament_title(session, tournament),
+                title=await render_tournament_title(session, tournament, round_number),
                 type=tournament.type,
                 callsign=entry.callsign,
                 status=tournament.status,

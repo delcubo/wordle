@@ -240,10 +240,17 @@ async def advance_winner(session: AsyncSession, tournament: Tournament, match: P
     # свою игру (см. resolve_bye_if_needed).
     require_play = _forfeited_both_sides(match) or _forfeited_both_sides(sibling)
 
-    # Следующий раунд стартует НА СЛЕДУЮЩИЙ день после того, как определилась
-    # пара — иначе победители могли бы сыграть его же в день определения пары,
-    # пока часть сетки ещё доигрывает текущий раунд.
-    next_start = today() + timedelta(days=1)
+    # Каждый раунд играется РОВНО один день, раунды идут подряд без пропусков:
+    # следующий раунд стартует на следующий день ПОСЛЕ ДНЯ ЭТОГО РАУНДА (а не
+    # "сегодня+1" от момента, когда конкретная пара фактически решилась) —
+    # иначе у пар, решённых с опозданием (например, после разрешения зависшей
+    # из-за двойной неявки соседней пары — см. resolve_match_if_ready), новый
+    # раунд стартовал бы позже, чем у остальных пар того же раунда, и игры
+    # одного раунда расползлись бы по разным дням. Если разрешение опоздало
+    # настолько, что расчётная дата уже в прошлом, — не заводим раунд задним
+    # числом, начинаем его сегодня (клэмп по today()).
+    round_date = match.scheduled_date or sibling.scheduled_date or today()
+    next_start = max(round_date + timedelta(days=1), today())
     next_match = await crud.create_playoff_match(session, tournament.id, next_round, next_position, entry_a, entry_b, next_start)
 
     match.next_match_id = next_match.id
