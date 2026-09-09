@@ -774,10 +774,25 @@ function EntriesPanel({ tournament, users }) {
     refresh();
   }
 
+  async function handleDisconnectAll() {
+    if (!window.confirm(`Отключить всех подключённых участников (${activeCount}) от «${tournament.title}»? Набранная статистика останется в таблице, подключить обратно можно по одному.`)) {
+      return;
+    }
+    await api(`/api/admin/tournaments/${tournament.id}/entries/disconnect-all`, { method: "POST" });
+    refresh();
+  }
+
   return (
     <div style={panelStyle}>
-      <h3 style={{ marginTop: 0 }}>Участники «{tournament.title}»</h3>
-      <p style={{ opacity: 0.7, fontSize: 13, marginTop: -4 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <h3 style={{ margin: 0 }}>Участники «{tournament.title}»</h3>
+        {activeCount > 0 && (
+          <button onClick={handleDisconnectAll} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+            Отключить всех
+          </button>
+        )}
+      </div>
+      <p style={{ opacity: 0.7, fontSize: 13, marginTop: 4 }}>
         Подключено: {activeCount}{inactiveCount > 0 ? ` · Отключено: ${inactiveCount}` : ""}
       </p>
       <form onSubmit={handleAdd} style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>

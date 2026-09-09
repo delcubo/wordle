@@ -373,6 +373,20 @@ async def edit_entry(entry_id: int, payload: EntryEditRequest, session: AsyncSes
     return updated
 
 
+@router.post("/tournaments/{tournament_id}/entries/disconnect-all", response_model=list[EntryOut])
+async def disconnect_all_entries(
+    tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
+):
+    """Отключить одной кнопкой сразу всех участников розыгрыша — не удаляет
+    записи и накопленную статистику, каждого можно подключить обратно
+    по отдельности (см. set_entry_active)."""
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    await crud.disconnect_all_entries(session, tournament_id)
+    return await crud.list_entries(session, tournament_id)
+
+
 @router.patch("/entries/{entry_id}/active", response_model=EntryOut)
 async def set_entry_active(
     entry_id: int, payload: EntryActiveRequest, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)

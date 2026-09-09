@@ -200,6 +200,20 @@ async def get_entry_including_inactive(session: AsyncSession, tournament_id: int
     return result.scalar_one_or_none()
 
 
+async def disconnect_all_entries(session: AsyncSession, tournament_id: int) -> int:
+    """Отключить одной кнопкой сразу всех активных участников розыгрыша (без
+    удаления записей и статистики — как обычное отключение по одному, см.
+    set_entry_active). Возвращает число реально отключённых участий."""
+    count = 0
+    for entry in await list_entries(session, tournament_id):
+        if entry.active:
+            entry.active = False
+            session.add(entry)
+            count += 1
+    await session.commit()
+    return count
+
+
 async def set_entry_active(session: AsyncSession, entry_id: int, active: bool) -> TournamentEntry | None:
     entry = await session.get(TournamentEntry, entry_id)
     if entry is None:
