@@ -695,6 +695,17 @@ async def create_playoff_game(
     return game
 
 
+async def set_technical_loss(session: AsyncSession, game: PlayoffGame, side: str) -> PlayoffGame:
+    """side — 'a' или 'b': эта сторона считается сразу проигравшей без игры
+    (соперник по сетке достался ей только из-за неявки соседней пары —
+    см. api/bracket_game.py::resolve_bye_if_needed)."""
+    setattr(game, f"entry_{side}_technical_loss", True)
+    session.add(game)
+    await session.commit()
+    await session.refresh(game)
+    return game
+
+
 async def set_playoff_word_override(session: AsyncSession, match: PlayoffMatch, game_number: int, word: str) -> None:
     """Заранее задаёт слово для игры 2 или 3 пары (на случай ничьей) — сама
     игра появится позже, лениво, только если до неё дойдёт (см. пункт бэклога

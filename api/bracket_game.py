@@ -10,8 +10,9 @@ sudden death при ничье и продвижение победителя в
 число попыток) — меньше ключ, лучше результат. Полное совпадение ключей —
 ничья, сразу (в тот же день) заводится ещё одна игра (sudden death). Если
 участник не сыграл текущую игру до начала следующего дня — ему проставляется
-техническое поражение; если не сыграли оба — пара зависает, доигровка вручную
-через админку.
+техническое поражение; если не сыграли оба — пара считается решённой без
+победителя (дальше по сетке из неё никто не проходит, ровно как из пустой
+пары — см. resolve_bye_if_needed), без ручной доигровки через админку.
 """
 from datetime import timedelta
 
@@ -95,6 +96,16 @@ async def resolve_match_if_ready(session: AsyncSession, tournament: Tournament, 
     key_b = _result_key(game, "b")
 
     if key_a is None and key_b is None:
+        if not deadline_passed:
+            return  # ждём хотя бы одного участника
+        # Ни один участник не сыграл вовремя — пара считается решённой без
+        # победителя, дальше по сетке из неё никто не проходит (см. пункт
+        # бэклога), без ручной доигровки через админку.
+        match.winner_entry_id = None
+        match.status = PlayoffMatchStatus.finished
+        session.add(match)
+        await session.commit()
+        await advance_winner(session, tournament, match)
         return
     if (key_a is None or key_b is None) and not deadline_passed:
         return  # ждём вторую сторону
@@ -109,7 +120,15 @@ async def resolve_match_if_ready(session: AsyncSession, tournament: Tournament, 
     await session.commit()
 
     if key_a[0] and key_b[0]:
-        return  # не явились оба — зависает, доигровка вручную через админку
+        # Оба технически проиграли (например, единственный реальный участник
+        # неполной пары — см. resolve_bye_if_needed — тоже не явился на свою
+        # игру) — как и выше, пара решена без победителя, никто не проходит.
+        match.winner_entry_id = None
+        match.status = PlayoffMatchStatus.finished
+        session.add(match)
+        await session.commit()
+        await advance_winner(session, tournament, match)
+        return
 
     if key_a == key_b:
         await crud.create_playoff_game(
@@ -125,19 +144,49 @@ async def resolve_match_if_ready(session: AsyncSession, tournament: Tournament, 
     await advance_winner(session, tournament, match)
 
 
-async def resolve_bye_if_needed(session: AsyncSession, match: PlayoffMatch, scheduled_date) -> bool:
+async def resolve_bye_if_needed(
+    session: AsyncSession, match: PlayoffMatch, scheduled_date, require_play: bool = False
+) -> bool:
     """
-    Пара без одного или обоих участников не требует игры — решается сразу:
+    Пара без одного или обоих участников не требует игры от отсутствующей
+    стороны — решается сразу:
     - оба слота пусты ("пустая пара", см. пункт бэклога) — у пары просто нет
       победителя, но она сразу считается завершённой, чтобы сосед по сетке не
       ждал её бесконечно;
-    - один слот пуст ("неполная пара") — единственный участник автоматически
-      побеждает и сразу проходит дальше, без игры.
-    Возвращает True, если пара была решена так (игра не создавалась) — тогда
-    вызывающий код должен сам продвинуть её дальше через advance_winner.
+    - один слот пуст ("неполная пара") — единственный участник обычно
+      автоматически побеждает и сразу проходит дальше, без игры (структурный
+      бай — соперника для этой позиции не было предусмотрено с самого начала,
+      например при нечётном числе участников на первом раунде knockout).
+
+    require_play=True — особый случай: соперник по сетке достался пустым не
+    структурно, а из-за того, что соседняя пара не сыграна вовремя (двойная
+    неявка, см. resolve_match_if_ready) — тогда свободный проход не даётся:
+    единственному участнику всё равно заводится настоящая игра (соперник в
+    ней сразу считается технически проигравшим), и пройти дальше можно только
+    реально сыграв её; если не сыграет он сам — по тому же правилу пара тоже
+    решится без победителя (см. resolve_match_if_ready) и дальше не пройдёт
+    никто.
+
+    Возвращает True, если пара была решена БЕЗ игры (полностью пустая, либо
+    структурный бай) — тогда вызывающий код должен сам продвинуть её дальше
+    через advance_winner. Для require_play с одним участником возвращает
+    False — игра создана, ждём её результата как обычно.
     """
     if match.entry_a_id is not None and match.entry_b_id is not None:
         await crud.create_playoff_game(session, match.tournament_id, match.id, 1, scheduled_date or today())
+        return False
+
+    if match.entry_a_id is None and match.entry_b_id is None:
+        match.winner_entry_id = None
+        match.status = PlayoffMatchStatus.finished
+        session.add(match)
+        await session.commit()
+        return True
+
+    if require_play:
+        game = await crud.create_playoff_game(session, match.tournament_id, match.id, 1, scheduled_date or today())
+        missing_side = "a" if match.entry_a_id is None else "b"
+        await crud.set_technical_loss(session, game, missing_side)
         return False
 
     match.winner_entry_id = match.entry_a_id if match.entry_a_id is not None else match.entry_b_id
@@ -145,6 +194,18 @@ async def resolve_bye_if_needed(session: AsyncSession, match: PlayoffMatch, sche
     session.add(match)
     await session.commit()
     return True
+
+
+def _forfeited_both_sides(m: PlayoffMatch) -> bool:
+    """Пара решена именно двойной неявкой (оба участника были назначены, но
+    ни один не сыграл — см. resolve_match_if_ready), а не структурно пустой
+    /неполной парой с самого начала (см. resolve_bye_if_needed)."""
+    return (
+        m.status == PlayoffMatchStatus.finished
+        and m.winner_entry_id is None
+        and m.entry_a_id is not None
+        and m.entry_b_id is not None
+    )
 
 
 async def advance_winner(session: AsyncSession, tournament: Tournament, match: PlayoffMatch) -> None:
@@ -173,6 +234,12 @@ async def advance_winner(session: AsyncSession, tournament: Tournament, match: P
     else:
         entry_a, entry_b = sibling.winner_entry_id, match.winner_entry_id
 
+    # Если пустой слот в новой паре — следствие того, что одна из пар-родителей
+    # не сыграна вовремя (двойная неявка), а не структурного бая — свободный
+    # проход не даётся, единственному участнику всё равно придётся сыграть
+    # свою игру (см. resolve_bye_if_needed).
+    require_play = _forfeited_both_sides(match) or _forfeited_both_sides(sibling)
+
     # Следующий раунд стартует НА СЛЕДУЮЩИЙ день после того, как определилась
     # пара — иначе победители могли бы сыграть его же в день определения пары,
     # пока часть сетки ещё доигрывает текущий раунд.
@@ -187,7 +254,7 @@ async def advance_winner(session: AsyncSession, tournament: Tournament, match: P
     # Следующий раунд сам может оказаться пустым/неполным, если сюда каскадом
     # дошёл бай (обе пары этого раунда были пустыми/неполными) — тогда сразу
     # решаем и его и продвигаем дальше.
-    if await resolve_bye_if_needed(session, next_match, next_start):
+    if await resolve_bye_if_needed(session, next_match, next_start, require_play=require_play):
         await advance_winner(session, tournament, next_match)
 
 

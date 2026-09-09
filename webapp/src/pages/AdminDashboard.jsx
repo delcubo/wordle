@@ -1661,6 +1661,7 @@ function BracketPanel({ tournament }) {
             <tbody>
               {matches.map((m) => {
                 const hasBothSides = m.entry_a_id != null && m.entry_b_id != null;
+                const hasAnySide = m.entry_a_id != null || m.entry_b_id != null;
                 return (
                 <Fragment key={m.id}>
                 <tr style={{ borderTop: "1px solid #2a2a2c" }}>
@@ -1678,11 +1679,13 @@ function BracketPanel({ tournament }) {
                     {m.winner_entry_id
                       ? <>победил: {m.winner_entry_id === m.entry_a_id ? m.entry_a_callsign : m.entry_b_callsign}
                         {m.admin_note && <sup title={`Скорректировано: ${m.admin_note}`} style={{ color: "#e5a94c" }}> ✎</sup>}</>
-                      : (m.status === "finished" ? "пустая пара" : MATCH_STATUS_LABEL[m.status] || m.status)}
+                      : (m.status === "finished"
+                          ? (hasAnySide ? "не сыграли — никто не прошёл дальше" : "пустая пара")
+                          : MATCH_STATUS_LABEL[m.status] || m.status)}
                   </td>
                   <td style={tdStyle}>
                     <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                      {hasBothSides && m.status !== "finished" && (
+                      {hasAnySide && m.status !== "finished" && (
                         <button
                           onClick={() => setWordQueueOpenId(wordQueueOpenId === m.id ? null : m.id)}
                           style={{ ...ghostButtonStyle, padding: "2px 6px", fontSize: 11 }}
