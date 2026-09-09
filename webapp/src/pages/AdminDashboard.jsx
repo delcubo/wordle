@@ -12,7 +12,7 @@ async function api(path, options = {}) {
     ...options,
   });
   if (res.status === 401) {
-    window.location.href = "/login";
+    window.location.href = "/alvipa";
     throw new Error("unauthorized");
   }
   if (!res.ok) {
@@ -55,7 +55,7 @@ export default function AdminDashboard() {
 
   async function handleLogout() {
     await api("/api/admin/logout", { method: "POST" });
-    navigate("/login");
+    navigate("/alvipa");
   }
 
   async function handleToggleTheme() {

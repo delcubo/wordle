@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import MyTournaments from "./pages/MyTournaments.jsx";
 import PlayerGame from "./pages/PlayerGame.jsx";
@@ -13,9 +13,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <Routes>
         <Route path="/play/:token" element={<MyTournaments />} />
         <Route path="/play/:token/:tournamentId" element={<PlayerGame />} />
-        <Route path="/login" element={<AdminLogin />} />
+        <Route path="/alvipa" element={<AdminLogin />} />
         <Route path="/admin" element={<AdminDashboard />} />
-        <Route path="/" element={<Navigate to="/login" replace />} />
+        <Route path="/" element={null} />
       </Routes>
     </BrowserRouter>
   </React.StrictMode>
