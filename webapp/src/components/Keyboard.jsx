@@ -63,7 +63,7 @@ function KeyButton({ children, onClick, background = "var(--key-default)", color
       style={{
         flex: wide ? "1.6 1 0%" : "1 1 0%",
         minWidth: 0,
-        height: "clamp(32px, min(10.5vw, 5dvh), 56px)",
+        height: "clamp(34px, min(12vw, 5.5dvh), 64px)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -71,7 +71,7 @@ function KeyButton({ children, onClick, background = "var(--key-default)", color
         color,
         border: "none",
         borderRadius: 4,
-        fontSize: wide ? "clamp(9px, 2.8vw, 14px)" : "clamp(11px, 3.6vw, 18px)",
+        fontSize: wide ? "clamp(10px, 3vw, 16px)" : "clamp(13px, 4vw, 20px)",
         fontWeight: 600,
         textTransform: "uppercase",
         cursor: "pointer",
