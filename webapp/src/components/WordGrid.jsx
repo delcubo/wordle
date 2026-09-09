@@ -33,7 +33,7 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
   });
 
   return (
-    <div style={{ display: "grid", gap: "clamp(4px, 1.5vw, 8px)", justifyContent: "center", padding: "16px 0" }}>
+    <div style={{ display: "grid", gap: "clamp(3px, 1.5vw, 8px)", justifyContent: "center", padding: "10px 0" }}>
       <style>{`
         @keyframes wordgrid-flip {
           0%, 50% { background: transparent; border-color: var(--border-filled); color: var(--fg); }
@@ -85,12 +85,12 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
                 <div
                   key={j}
                   style={{
-                    width: "clamp(48px, 18vw, 68px)",
-                    height: "clamp(48px, 18vw, 68px)",
+                    width: "clamp(36px, min(16vw, 7dvh), 64px)",
+                    height: "clamp(36px, min(16vw, 7dvh), 64px)",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    fontSize: "clamp(22px, 7vw, 34px)",
+                    fontSize: "clamp(16px, min(6vw, 3dvh), 32px)",
                     fontWeight: 700,
                     textTransform: "uppercase",
                     borderRadius: 4,

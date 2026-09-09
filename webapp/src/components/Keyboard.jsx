@@ -63,7 +63,7 @@ function KeyButton({ children, onClick, background = "var(--key-default)", color
       style={{
         flex: wide ? "1.6 1 0%" : "1 1 0%",
         minWidth: 0,
-        height: "clamp(40px, 13vw, 64px)",
+        height: "clamp(32px, min(10.5vw, 5dvh), 56px)",
         background,
         color,
         border: "none",
