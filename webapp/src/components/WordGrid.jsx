@@ -19,6 +19,10 @@ const MIN_TILE = 32;
 const MAX_TILE = 72;
 const MAX_GRID_WIDTH = 400; // 5 клеток по MAX_TILE + зазоры — не растягивать шире и на просторном десктопе
 
+function currentViewportHeight() {
+  return window.visualViewport ? window.visualViewport.height : window.innerHeight;
+}
+
 /**
  * rows: массив по 6 строк, каждая — { letters: string[5], statuses: string[5] | null }
  * currentGuess: то, что игрок вводит прямо сейчас (для незавершённой строки)
@@ -26,17 +30,28 @@ const MAX_GRID_WIDTH = 400; // 5 клеток по MAX_TILE + зазоры — �
  * для неё буквы переворачиваются по очереди, раскрывая цвет в середине переворота
  * (как на wordle.belousov.one); строки, уже пришедшие готовыми (при загрузке
  * страницы), просто показываются раскрашенными без анимации.
+ * keyboardRef: ref на обёртку клавиатуры (см. PlayerGame.jsx) — нужен, чтобы
+ * посчитать, сколько места она реально занимает внизу экрана.
  *
- * Размер клетки не фиксирован — компонент занимает всё свободное место между
- * шапкой и клавиатурой (родитель — flex-колонка, см. PlayerGame.jsx) и сам
- * измеряет через ResizeObserver, сколько реально доступно по ширине/высоте,
- * подбирая максимальный размер клетки, при котором все 6 строк и 5 столбцов
- * ещё помещаются без обрезки — иначе клавиатура, прижатая к низу экрана
- * (см. пункт бэклога), оставляла бы пустой зазор над собой на высоких экранах.
+ * Размер клетки не фиксирован — подбирается напрямую из геометрии страницы:
+ * высота видимой области (window.visualViewport, точнее отслеживает схлопывание
+ * панелей мобильного браузера, чем innerHeight/CSS dvh) минус то, где поле
+ * начинается (высота шапки над ним — определяется обычным потоком, без flex-grow)
+ * минус высота клавиатуры. Полагаться на flex-grow внутри flex-колонки с
+ * dvh-контейнером оказалось ненадёжно — в мобильном Safari эта комбинация вела
+ * себя иначе, чем в десктопном браузере при разработке, и поле налезало на
+ * клавиатуру (см. пункт бэклога) — явный расчёт в пикселях устраняет
+ * зависимость от того, как конкретный браузер трактует эту комбинацию CSS.
  */
-export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRowIndex }) {
+export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRowIndex, keyboardRef }) {
   const containerRef = useRef(null);
   const [tileSize, setTileSize] = useState(56);
+  // Довесок к нижнему отступу — выталкивает всё, что идёт после поля (то есть
+  // клавиатуру), ровно к нижнему краю видимой области, без margin:auto/flex-grow
+  // (см. пункт бэклога — в мобильном Safari эти приёмы в связке с dvh вели себя
+  // непредсказуемо). Как только рядов+клеток+паддингов не хватает, чтобы самим
+  // дотянуться до низа экрана, этот довесок выбирает ровно недостающее.
+  const [bottomGap, setBottomGap] = useState(0);
 
   useLayoutEffect(() => {
     const el = containerRef.current;
@@ -44,17 +59,36 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
 
     function recompute() {
       const rect = el.getBoundingClientRect();
+      const keyboardHeight = keyboardRef?.current ? keyboardRef.current.getBoundingClientRect().height : 0;
+      const availableHeight = Math.max(0, currentViewportHeight() - rect.top - keyboardHeight);
+
       const width = Math.min(rect.width, MAX_GRID_WIDTH);
-      const height = Math.max(0, rect.height - PAD_V * 2);
+      const usableHeight = Math.max(0, availableHeight - PAD_V * 2);
       const fromWidth = (width - GAP * 4) / 5;
-      const fromHeight = (height - GAP * 5) / 6;
-      setTileSize(Math.max(MIN_TILE, Math.min(fromWidth, fromHeight, MAX_TILE)));
+      const fromHeight = (usableHeight - GAP * 5) / 6;
+      const size = Math.max(MIN_TILE, Math.min(fromWidth, fromHeight, MAX_TILE));
+
+      const contentHeight = size * 6 + GAP * 5 + PAD_V * 2;
+      setTileSize(size);
+      setBottomGap(Math.max(0, availableHeight - contentHeight));
     }
 
     recompute();
-    const observer = new ResizeObserver(recompute);
-    observer.observe(el);
-    return () => observer.disconnect();
+
+    const resizeObserver = new ResizeObserver(recompute);
+    resizeObserver.observe(el);
+    if (keyboardRef?.current) resizeObserver.observe(keyboardRef.current);
+
+    const vv = window.visualViewport;
+    if (vv) vv.addEventListener("resize", recompute);
+    else window.addEventListener("resize", recompute);
+
+    return () => {
+      resizeObserver.disconnect();
+      if (vv) vv.removeEventListener("resize", recompute);
+      else window.removeEventListener("resize", recompute);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fontSize = Math.round(tileSize * 0.47);
@@ -63,13 +97,12 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
     <div
       ref={containerRef}
       style={{
-        flex: "1 1 0",
-        minHeight: 0,
         width: "100%",
         display: "flex",
         alignItems: "flex-start",
         justifyContent: "center",
-        padding: `${PAD_V}px 0`,
+        paddingTop: PAD_V,
+        paddingBottom: PAD_V + bottomGap,
         boxSizing: "border-box",
       }}
     >

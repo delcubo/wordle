@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import WordGrid, { FLIP_TOTAL_MS } from "../components/WordGrid.jsx";
 import Keyboard from "../components/Keyboard.jsx";
@@ -51,6 +51,7 @@ export default function PlayerGame() {
   const [theme, setTheme] = useState("dark");
   const [animateRowIndex, setAnimateRowIndex] = useState(null);
   const errorTimeoutRef = useRef(null);
+  const keyboardWrapRef = useRef(null);
 
   useEffect(() => {
     fetchTheme().then(setTheme);
@@ -343,13 +344,15 @@ export default function PlayerGame() {
           {message}
         </div>
       )}
-      <WordGrid rows={rows} currentGuess={currentGuess} activeRowIndex={activeRowIndex} animateRowIndex={animateRowIndex} />
-      <Keyboard
-        letterStates={letterStates}
-        onLetter={handleLetter}
-        onEnter={handleEnter}
-        onBackspace={handleBackspace}
-      />
+      <WordGrid rows={rows} currentGuess={currentGuess} activeRowIndex={activeRowIndex} animateRowIndex={animateRowIndex} keyboardRef={keyboardWrapRef} />
+      <div ref={keyboardWrapRef} style={{ width: "100%" }}>
+        <Keyboard
+          letterStates={letterStates}
+          onLetter={handleLetter}
+          onEnter={handleEnter}
+          onBackspace={handleBackspace}
+        />
+      </div>
       {modal && (
         <ResultModal
           title={modal.title}
@@ -370,11 +373,36 @@ export default function PlayerGame() {
 }
 
 function Centered({ children, theme = "dark" }) {
+  // dvh в связке с flex:1-детьми (см. WordGrid.jsx) ведёт себя не одинаково
+  // во всех браузерах — в мобильном Safari при открытых панелях адресной
+  // строки/навигации измерение "доступной высоты" через CSS-юнит оказалось
+  // ненадёжным (см. пункт бэклога: поле налезало на клавиатуру). Меряем
+  // реальную видимую высоту напрямую через JS (visualViewport, если есть —
+  // он точнее отслеживает схлопывание панелей браузера, чем innerHeight) и
+  // используем как min-height в пикселях — однозначное число, а не единица,
+  // чью трактовку внутри flex-контейнера браузеры могут расходиться.
+  const [viewportHeight, setViewportHeight] = useState(null);
+
+  useLayoutEffect(() => {
+    function measure() {
+      const vv = window.visualViewport;
+      setViewportHeight(vv ? vv.height : window.innerHeight);
+    }
+    measure();
+    const vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener("resize", measure);
+      return () => vv.removeEventListener("resize", measure);
+    }
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
   return (
     <div
       style={{
         ...themeVars(theme),
-        minHeight: "100dvh",
+        minHeight: viewportHeight != null ? `${viewportHeight}px` : "100dvh",
         background: "var(--bg)",
         color: "var(--fg)",
         fontFamily: "system-ui, sans-serif",
