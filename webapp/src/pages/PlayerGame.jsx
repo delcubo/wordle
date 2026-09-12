@@ -374,7 +374,7 @@ function Centered({ children, theme = "dark" }) {
     <div
       style={{
         ...themeVars(theme),
-        minHeight: "100vh",
+        minHeight: "100dvh",
         background: "var(--bg)",
         color: "var(--fg)",
         fontFamily: "system-ui, sans-serif",
