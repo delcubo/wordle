@@ -374,12 +374,21 @@ function DictionaryPanel() {
   const [newWord, setNewWord] = useState("");
   const [error, setError] = useState("");
 
+  const [addedWords, setAddedWords] = useState([]);
+  const [newAddedWord, setNewAddedWord] = useState("");
+  const [addedError, setAddedError] = useState("");
+
   async function refresh() {
     setWords(await api("/api/admin/dictionary/excluded"));
   }
 
+  async function refreshAdded() {
+    setAddedWords(await api("/api/admin/dictionary/added"));
+  }
+
   useEffect(() => {
     refresh();
+    refreshAdded();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -403,46 +412,107 @@ function DictionaryPanel() {
     refresh();
   }
 
-  return (
-    <div style={{ ...panelStyle, maxWidth: 500 }}>
-      <h3 style={{ marginTop: 0 }}>Словарь — исключённые слова</h3>
-      <p style={{ opacity: 0.7, fontSize: 13, marginTop: -4 }}>
-        Слова из этого списка больше не будут предлагаться как новое слово дня —
-        удобно вычищать странные/архаичные находки по факту игры. На уже
-        назначенные слова (в т.ч. сегодняшнее) и на проверку вводимых попыток
-        не влияет.
-      </p>
-      <form onSubmit={handleAdd} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <input
-          placeholder="Слово из 5 букв"
-          value={newWord}
-          onChange={(e) => setNewWord(e.target.value)}
-          maxLength={20}
-          style={{ ...inputStyle, flex: 1 }}
-        />
-        <button type="submit" style={buttonStyle}>Исключить</button>
-      </form>
-      {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
+  async function handleAddMissing(e) {
+    e.preventDefault();
+    setAddedError("");
+    try {
+      await api("/api/admin/dictionary/added", {
+        method: "POST",
+        body: JSON.stringify({ word: newAddedWord.trim().toLowerCase() }),
+      });
+      setNewAddedWord("");
+      refreshAdded();
+    } catch (e) {
+      setAddedError(e.message);
+    }
+  }
 
-      {words.length === 0 ? (
-        <div style={{ opacity: 0.5, fontSize: 13 }}>Список пуст.</div>
-      ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <tbody>
-            {words.map((w) => (
-              <tr key={w.id} style={{ borderTop: "1px solid #2a2a2c" }}>
-                <td style={{ ...tdStyle, textTransform: "uppercase", letterSpacing: 1 }}>{w.word}</td>
-                <td style={tdStyle}>
-                  <button onClick={() => handleRemove(w.id)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
-                    Вернуть в словарь
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
+  async function handleRemoveAdded(id) {
+    await api(`/api/admin/dictionary/added/${id}`, { method: "DELETE" });
+    refreshAdded();
+  }
+
+  return (
+    <>
+      <div style={{ ...panelStyle, maxWidth: 500, marginBottom: 16 }}>
+        <h3 style={{ marginTop: 0 }}>Словарь — добавить отсутствующее слово</h3>
+        <p style={{ opacity: 0.7, fontSize: 13, marginTop: -4 }}>
+          Если игрок ввёл существительное в именительном падеже из 5 букв, а
+          игра его не приняла — добавьте его сюда. Сразу становится и валидной
+          попыткой, и кандидатом на будущее слово дня, без деплоя.
+        </p>
+        <form onSubmit={handleAddMissing} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <input
+            placeholder="Слово из 5 букв"
+            value={newAddedWord}
+            onChange={(e) => setNewAddedWord(e.target.value)}
+            maxLength={20}
+            style={{ ...inputStyle, flex: 1 }}
+          />
+          <button type="submit" style={buttonStyle}>Добавить</button>
+        </form>
+        {addedError && <div style={{ color: "#e5484d", marginBottom: 8 }}>{addedError}</div>}
+
+        {addedWords.length === 0 ? (
+          <div style={{ opacity: 0.5, fontSize: 13 }}>Список пуст.</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <tbody>
+              {addedWords.map((w) => (
+                <tr key={w.id} style={{ borderTop: "1px solid #2a2a2c" }}>
+                  <td style={{ ...tdStyle, textTransform: "uppercase", letterSpacing: 1 }}>{w.word}</td>
+                  <td style={tdStyle}>
+                    <button onClick={() => handleRemoveAdded(w.id)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                      Убрать
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={{ ...panelStyle, maxWidth: 500 }}>
+        <h3 style={{ marginTop: 0 }}>Словарь — исключённые слова</h3>
+        <p style={{ opacity: 0.7, fontSize: 13, marginTop: -4 }}>
+          Слова из этого списка больше не будут предлагаться как новое слово дня —
+          удобно вычищать странные/архаичные находки по факту игры. На уже
+          назначенные слова (в т.ч. сегодняшнее) и на проверку вводимых попыток
+          не влияет.
+        </p>
+        <form onSubmit={handleAdd} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <input
+            placeholder="Слово из 5 букв"
+            value={newWord}
+            onChange={(e) => setNewWord(e.target.value)}
+            maxLength={20}
+            style={{ ...inputStyle, flex: 1 }}
+          />
+          <button type="submit" style={buttonStyle}>Исключить</button>
+        </form>
+        {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
+
+        {words.length === 0 ? (
+          <div style={{ opacity: 0.5, fontSize: 13 }}>Список пуст.</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <tbody>
+              {words.map((w) => (
+                <tr key={w.id} style={{ borderTop: "1px solid #2a2a2c" }}>
+                  <td style={{ ...tdStyle, textTransform: "uppercase", letterSpacing: 1 }}>{w.word}</td>
+                  <td style={tdStyle}>
+                    <button onClick={() => handleRemove(w.id)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                      Вернуть в словарь
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
   );
 }
 

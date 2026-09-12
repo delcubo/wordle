@@ -57,6 +57,35 @@ def _normalized_index() -> dict[str, str]:
     return _normalized_index_cache
 
 
+def register_added_word(word: str) -> None:
+    """
+    Добавляет слово, найденное отсутствующим по факту игры, в словарь этого
+    процесса — сразу становится и валидной попыткой (is_valid_word), и
+    кандидатом на слово дня (pick_word_for_day и т.п.). Источник правды —
+    таблица AddedWord в БД (см. api/routers/admin.py); эта функция только
+    обновляет кэш в памяти текущего процесса — при старте им же заполняется
+    api/main.py из БД, а при добавлении через админку вызывается сразу же,
+    без перезапуска. Не трогает файлы репозитория (в отличие от
+    answer_words_extra.txt) — переживает только до следующего деплоя/рестарта
+    процесса, для чего и нужна БД как источник правды.
+    """
+    words = load_words()  # гарантирует, что кэш уже инициализирован
+    if word in words:
+        return
+    words.append(word)
+    _normalized_index()[normalize_yo(word)] = word
+
+
+def unregister_added_word(word: str) -> None:
+    """Обратное действие — админ удалил ранее добавленное слово из панели."""
+    words = load_words()
+    if word in words:
+        words.remove(word)
+    normalized = _normalized_index()
+    if normalized.get(normalize_yo(word)) == word:
+        del normalized[normalize_yo(word)]
+
+
 def is_valid_word(word: str) -> bool:
     """Проверка и вводимой попытки, и кандидата на слово дня — один и тот же список."""
     return normalize_yo(word.lower()) in _normalized_index()

@@ -361,3 +361,19 @@ class ExcludedWord(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     word: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     excluded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AddedWord(Base):
+    """
+    Слово, которого не было в основном словаре (api/data/answer_words.txt +
+    answer_words_extra.txt) и которое админ добавил вручную через панель —
+    обнаружилось по факту игры как отсутствующее (см. пункт бэклога).
+    В отличие от ExcludedWord хранится в БД, а не в файле репозитория, чтобы
+    добавлять слова без деплоя; при старте процесса подгружается в кэш
+    словаря (см. api/dictionary.py::register_added_word и api/main.py).
+    """
+    __tablename__ = "added_words"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    word: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

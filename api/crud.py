@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models import (
     Tournament, TournamentStatus, TournamentEntry, User, DailyWord, DailyWordStatus, Attempt,
-    TiebreakRound, TiebreakParticipant, PlayoffMatch, PlayoffGame, AppSettings, ExcludedWord,
+    TiebreakRound, TiebreakParticipant, PlayoffMatch, PlayoffGame, AppSettings, ExcludedWord, AddedWord,
 )
 from api.dictionary import pick_word_for_day, pick_alternative_word, pick_word_for_match
 from api.tournament_time import today, day_number_for_date, date_for_day_number
@@ -792,6 +792,38 @@ async def unexclude_word(session: AsyncSession, excluded_id: int) -> bool:
     await session.delete(excluded)
     await session.commit()
     return True
+
+
+# ---------- Словарь: слова, добавленные админом вручную ----------
+
+async def list_added_words(session: AsyncSession) -> list[AddedWord]:
+    result = await session.execute(select(AddedWord).order_by(AddedWord.added_at.desc()))
+    return list(result.scalars().all())
+
+
+async def add_word(session: AsyncSession, word: str) -> AddedWord:
+    result = await session.execute(select(AddedWord).where(AddedWord.word == word))
+    existing = result.scalar_one_or_none()
+    if existing is not None:
+        return existing
+    added = AddedWord(word=word)
+    session.add(added)
+    await session.commit()
+    await session.refresh(added)
+    return added
+
+
+async def remove_added_word(session: AsyncSession, added_id: int) -> str | None:
+    """Возвращает слово удалённой записи (чтобы вызывающий код мог убрать его
+    и из кэша словаря — см. dictionary.unregister_added_word), либо None,
+    если записи с таким id не было."""
+    added = await session.get(AddedWord, added_id)
+    if added is None:
+        return None
+    word = added.word
+    await session.delete(added)
+    await session.commit()
+    return word
 
 
 async def save_playoff_guess(

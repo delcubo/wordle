@@ -31,6 +31,21 @@ class ExcludedWordCreateRequest(BaseModel):
     word: str
 
 
+# ---------- Словарь: добавленные слова ----------
+
+class AddedWordOut(BaseModel):
+    id: int
+    word: str
+    added_at: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class AddedWordCreateRequest(BaseModel):
+    word: str
+
+
 # ---------- Users ----------
 
 class UserCreateRequest(BaseModel):

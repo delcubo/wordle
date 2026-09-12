@@ -4,12 +4,25 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from api.database import async_session_factory
+from api.dictionary import register_added_word
 from api.routers import game, admin
+from api import crud
 
 app = FastAPI(title="Wordle Group Game API")
 
 app.include_router(game.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
+
+
+@app.on_event("startup")
+async def _load_added_words_into_dictionary_cache():
+    """Слова, добавленные админом вручную (см. AddedWord), хранятся в БД, а не
+    в файле репозитория — при старте каждого процесса подгружаем их в кэш
+    словаря заново (см. api/dictionary.py::register_added_word)."""
+    async with async_session_factory() as session:
+        for word in await crud.list_added_words(session):
+            register_added_word(word.word)
 
 WEBAPP_DIST = os.path.join(os.path.dirname(__file__), "..", "webapp", "dist")
 _index_path = os.path.join(WEBAPP_DIST, "index.html")

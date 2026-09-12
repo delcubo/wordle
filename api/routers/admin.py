@@ -20,10 +20,11 @@ from api.schemas import (
     DayResultOverrideRequest, DayResultOverrideResponse,
     ThemeOut, ThemeUpdateRequest,
     ExcludedWordOut, ExcludedWordCreateRequest,
+    AddedWordOut, AddedWordCreateRequest,
 )
 from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry, PlayoffMatch, TiebreakRound
 from api.admin_auth import check_password, create_session_token, require_admin, COOKIE_NAME
-from api.dictionary import validate_manual_word, canonical_word
+from api.dictionary import validate_manual_word, canonical_word, is_valid_word, register_added_word, unregister_added_word
 from api.scoring import calculate_points
 from api.tournament_time import today, day_number_for_date
 from api import crud, tiebreak, bracket, bracket_game
@@ -103,6 +104,43 @@ async def remove_excluded_word(excluded_id: int, session: AsyncSession = Depends
     ok = await crud.unexclude_word(session, excluded_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Не найдено")
+    return {"ok": True}
+
+
+# ---------- Словарь: слова, добавленные админом вручную ----------
+
+@router.get("/dictionary/added", response_model=list[AddedWordOut])
+async def get_added_words(session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    words = await crud.list_added_words(session)
+    return [AddedWordOut(id=w.id, word=w.word, added_at=str(w.added_at)) for w in words]
+
+
+@router.post("/dictionary/added", response_model=AddedWordOut)
+async def add_added_word(
+    payload: AddedWordCreateRequest, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
+):
+    """Добавить слово, отсутствующее в словаре, но обнаруженное по факту игры
+    (существительное в именительном падеже, 5 букв) — сразу становится и
+    валидной попыткой, и кандидатом на будущее слово дня, без деплоя (см.
+    AddedWord и dictionary.register_added_word)."""
+    word = payload.word.strip().lower()
+    if len(word) != 5:
+        raise HTTPException(status_code=400, detail="Слово должно быть из 5 букв")
+    if not all("а" <= ch <= "я" or ch == "ё" for ch in word):
+        raise HTTPException(status_code=400, detail="Слово должно состоять только из русских букв")
+    if is_valid_word(word):
+        raise HTTPException(status_code=400, detail="Это слово уже есть в словаре")
+    added = await crud.add_word(session, word)
+    register_added_word(added.word)
+    return AddedWordOut(id=added.id, word=added.word, added_at=str(added.added_at))
+
+
+@router.delete("/dictionary/added/{added_id}")
+async def remove_added_word(added_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    word = await crud.remove_added_word(session, added_id)
+    if word is None:
+        raise HTTPException(status_code=404, detail="Не найдено")
+    unregister_added_word(word)
     return {"ok": True}
 
 
