@@ -14,7 +14,7 @@ const FLIP_STAGGER_MS = 300;
 export const FLIP_TOTAL_MS = FLIP_DURATION_MS + FLIP_STAGGER_MS * 4;
 
 const GAP = 8;
-const PAD_V = 8;
+const PAD_V = 16;
 const MIN_TILE = 32;
 const MAX_TILE = 72;
 const MAX_GRID_WIDTH = 400; // 5 клеток по MAX_TILE + зазоры — не растягивать шире и на просторном десктопе

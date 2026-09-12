@@ -20,7 +20,7 @@ export default function Keyboard({ letterStates, onLetter, onEnter, onBackspace 
         gap: "clamp(4px, 1vw, 8px)",
         width: "100%",
         maxWidth: 560,
-        margin: "auto auto 0",
+        margin: "0 auto",
         padding: "0 4px 8px",
         boxSizing: "border-box",
       }}
