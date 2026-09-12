@@ -18,6 +18,12 @@ const PAD_V = 16;
 const MIN_TILE = 32;
 const MAX_TILE = 72;
 const MAX_GRID_WIDTH = 400; // 5 клеток по MAX_TILE + зазоры — не растягивать шире и на просторном десктопе
+// Запас поверх расчёта из getBoundingClientRect — на реальных телефонах
+// (в отличие от тестирования в десктопном браузере) расчёт "впритык" пару раз
+// давал на глаз нулевой зазор до клавиатуры (см. пункт бэклога) — не удалось
+// до конца локализовать причину без доступа к устройству, поэтому вместо
+// точного 0 сознательно занижаем доступную высоту на фиксированную величину.
+const SAFETY_MARGIN = 24;
 
 /**
  * rows: массив по 6 строк, каждая — { letters: string[5], statuses: string[5] | null }
@@ -55,7 +61,7 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
       const keyboardTop = keyboardRef?.current
         ? keyboardRef.current.getBoundingClientRect().top
         : window.innerHeight;
-      const availableHeight = Math.max(0, keyboardTop - rect.top);
+      const availableHeight = Math.max(0, keyboardTop - rect.top - SAFETY_MARGIN);
 
       const width = Math.min(rect.width, MAX_GRID_WIDTH);
       const usableHeight = Math.max(0, availableHeight - PAD_V * 2);
@@ -69,6 +75,10 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
     }
 
     recompute();
+    // Один отложенный пересчёт подстраховывает от того, что на реальных
+    // телефонах панель браузера/safe-area иногда устаканивается уже после
+    // первого кадра, не всегда посылая событие resize, которое мы слушаем.
+    const settleTimer = setTimeout(recompute, 300);
 
     const resizeObserver = new ResizeObserver(recompute);
     resizeObserver.observe(el);
@@ -78,6 +88,7 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
     if (vv) vv.addEventListener("resize", recompute);
 
     return () => {
+      clearTimeout(settleTimer);
       resizeObserver.disconnect();
       window.removeEventListener("resize", recompute);
       if (vv) vv.removeEventListener("resize", recompute);
