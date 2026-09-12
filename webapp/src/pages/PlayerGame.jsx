@@ -345,7 +345,18 @@ export default function PlayerGame() {
         </div>
       )}
       <WordGrid rows={rows} currentGuess={currentGuess} activeRowIndex={activeRowIndex} animateRowIndex={animateRowIndex} keyboardRef={keyboardWrapRef} />
-      <div ref={keyboardWrapRef} style={{ width: "100%" }}>
+      <div
+        ref={keyboardWrapRef}
+        style={{
+          position: "fixed",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: "var(--bg)",
+          padding: "8px 8px calc(env(safe-area-inset-bottom, 0px) + 4px)",
+          boxSizing: "border-box",
+        }}
+      >
         <Keyboard
           letterStates={letterStates}
           onLetter={handleLetter}

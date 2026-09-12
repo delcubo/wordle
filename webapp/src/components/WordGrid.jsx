@@ -19,10 +19,6 @@ const MIN_TILE = 32;
 const MAX_TILE = 72;
 const MAX_GRID_WIDTH = 400; // 5 клеток по MAX_TILE + зазоры — не растягивать шире и на просторном десктопе
 
-function currentViewportHeight() {
-  return window.visualViewport ? window.visualViewport.height : window.innerHeight;
-}
-
 /**
  * rows: массив по 6 строк, каждая — { letters: string[5], statuses: string[5] | null }
  * currentGuess: то, что игрок вводит прямо сейчас (для незавершённой строки)
@@ -30,27 +26,24 @@ function currentViewportHeight() {
  * для неё буквы переворачиваются по очереди, раскрывая цвет в середине переворота
  * (как на wordle.belousov.one); строки, уже пришедшие готовыми (при загрузке
  * страницы), просто показываются раскрашенными без анимации.
- * keyboardRef: ref на обёртку клавиатуры (см. PlayerGame.jsx) — нужен, чтобы
- * посчитать, сколько места она реально занимает внизу экрана.
+ * keyboardRef: ref на обёртку клавиатуры (см. PlayerGame.jsx) — она держится
+ * через position:fixed внизу экрана, поэтому её getBoundingClientRect().top
+ * — это уже правильная, посчитанная браузером граница видимой области (в
+ * отличие от window.innerHeight/visualViewport.height/CSS dvh, которые в
+ * мобильных Safari и Chrome на деле включали то, что реально закрыто нижней
+ * панелью инструментов браузера — см. пункт бэклога, клавиатура уезжала под
+ * панель). Используем её напрямую вместо попытки самим вычислить высоту
+ * экрана.
  *
- * Размер клетки не фиксирован — подбирается напрямую из геометрии страницы:
- * высота видимой области (window.visualViewport, точнее отслеживает схлопывание
- * панелей мобильного браузера, чем innerHeight/CSS dvh) минус то, где поле
- * начинается (высота шапки над ним — определяется обычным потоком, без flex-grow)
- * минус высота клавиатуры. Полагаться на flex-grow внутри flex-колонки с
- * dvh-контейнером оказалось ненадёжно — в мобильном Safari эта комбинация вела
- * себя иначе, чем в десктопном браузере при разработке, и поле налезало на
- * клавиатуру (см. пункт бэклога) — явный расчёт в пикселях устраняет
- * зависимость от того, как конкретный браузер трактует эту комбинацию CSS.
+ * Размер клетки не фиксирован — подбирается так, чтобы все 6 строк и 5
+ * столбцов поместились в промежуток между низом шапки (где начинается это
+ * поле — обычный поток документа) и верхом клавиатуры.
  */
 export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRowIndex, keyboardRef }) {
   const containerRef = useRef(null);
   const [tileSize, setTileSize] = useState(56);
-  // Довесок к нижнему отступу — выталкивает всё, что идёт после поля (то есть
-  // клавиатуру), ровно к нижнему краю видимой области, без margin:auto/flex-grow
-  // (см. пункт бэклога — в мобильном Safari эти приёмы в связке с dvh вели себя
-  // непредсказуемо). Как только рядов+клеток+паддингов не хватает, чтобы самим
-  // дотянуться до низа экрана, этот довесок выбирает ровно недостающее.
+  // Довесок к нижнему отступу — выталкивает поле, чтобы его низ ровно упирался
+  // в верх (зафиксированной) клавиатуры, а не оставлял зазор выше неё.
   const [bottomGap, setBottomGap] = useState(0);
 
   useLayoutEffect(() => {
@@ -59,8 +52,10 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
 
     function recompute() {
       const rect = el.getBoundingClientRect();
-      const keyboardHeight = keyboardRef?.current ? keyboardRef.current.getBoundingClientRect().height : 0;
-      const availableHeight = Math.max(0, currentViewportHeight() - rect.top - keyboardHeight);
+      const keyboardTop = keyboardRef?.current
+        ? keyboardRef.current.getBoundingClientRect().top
+        : window.innerHeight;
+      const availableHeight = Math.max(0, keyboardTop - rect.top);
 
       const width = Math.min(rect.width, MAX_GRID_WIDTH);
       const usableHeight = Math.max(0, availableHeight - PAD_V * 2);
@@ -78,15 +73,14 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
     const resizeObserver = new ResizeObserver(recompute);
     resizeObserver.observe(el);
     if (keyboardRef?.current) resizeObserver.observe(keyboardRef.current);
-
+    window.addEventListener("resize", recompute);
     const vv = window.visualViewport;
     if (vv) vv.addEventListener("resize", recompute);
-    else window.addEventListener("resize", recompute);
 
     return () => {
       resizeObserver.disconnect();
+      window.removeEventListener("resize", recompute);
       if (vv) vv.removeEventListener("resize", recompute);
-      else window.removeEventListener("resize", recompute);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
