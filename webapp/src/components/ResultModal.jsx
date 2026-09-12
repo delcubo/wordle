@@ -71,7 +71,7 @@ export default function ResultModal({
     <div
       onClick={onClose}
       style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.95)",
         display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
       }}
     >
