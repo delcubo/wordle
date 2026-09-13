@@ -36,6 +36,7 @@ async function api(path, options = {}) {
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [tab, setTab] = useState("tournaments");
   const [tournaments, setTournaments] = useState([]);
   const [users, setUsers] = useState([]);
@@ -103,8 +104,8 @@ export default function AdminDashboard() {
       {tab === "dictionary" && <DictionaryPanel />}
 
       {tab === "tournaments" && (
-        <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 300px" }}>
+        <div style={isMobile ? { display: "flex", flexDirection: "column", gap: 24 } : { display: "flex", gap: 24, flexWrap: "wrap" }}>
+          <div style={isMobile ? {} : { flex: "1 1 300px" }}>
             <TournamentPanel
               tournaments={tournaments}
               selected={selected}
@@ -113,7 +114,7 @@ export default function AdminDashboard() {
               onActivated={refreshTournaments}
             />
           </div>
-          <div style={{ flex: "2 1 500px" }}>
+          <div style={isMobile ? {} : { flex: "2 1 500px" }}>
             {selected ? (
               <>
                 <EntriesPanel tournament={selected} users={users} />
@@ -925,11 +926,14 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
 }
 
 function EntriesPanel({ tournament, users }) {
+  const isMobile = useIsMobile();
   const [entries, setEntries] = useState([]);
   const [userId, setUserId] = useState("");
   const [callsign, setCallsign] = useState("");
   const [hideFromStandings, setHideFromStandings] = useState(false);
   const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [openMenuId, setOpenMenuId] = useState(null);
 
   async function refresh() {
     setEntries(await api(`/api/admin/tournaments/${tournament.id}/entries`));
@@ -944,6 +948,13 @@ function EntriesPanel({ tournament, users }) {
   const availableUsers = users.filter((u) => !connectedUserIds.has(u.id) && !u.archived);
   const activeCount = entries.filter((e) => e.active).length;
   const inactiveCount = entries.length - activeCount;
+
+  const query = search.trim().toLowerCase();
+  const filteredEntries = entries.filter((e) => {
+    if (!query) return true;
+    const u = users.find((x) => x.id === e.user_id);
+    return e.callsign.toLowerCase().includes(query) || (u?.admin_note || "").toLowerCase().includes(query);
+  });
 
   async function handleAdd(e) {
     e.preventDefault();
@@ -1010,6 +1021,76 @@ function EntriesPanel({ tournament, users }) {
     refresh();
   }
 
+  function renderCard(e) {
+    const u = users.find((x) => x.id === e.user_id);
+    const isMenuOpen = openMenuId === e.id;
+
+    function runAction(fn) {
+      setOpenMenuId(null);
+      fn(e);
+    }
+
+    return (
+      <div key={e.id} style={{ background: "#242426", borderRadius: 10, padding: 12, marginBottom: 8, opacity: e.active ? 1 : 0.5 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 500 }}>{e.callsign}</div>
+            <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>{u?.admin_note || `Игрок #${e.user_id}`}</div>
+          </div>
+          <button
+            onClick={() => setOpenMenuId(isMenuOpen ? null : e.id)}
+            title="Действия"
+            style={{ width: 28, height: 28, borderRadius: 6, border: "1px solid #3a3a3c", background: "transparent", color: "#818384", fontSize: 16, cursor: "pointer", flexShrink: 0 }}
+          >
+            ⋮
+          </button>
+        </div>
+        {isMenuOpen && (
+          // Раскрывается внутри самой карточки (а не плавающим меню поверх) —
+          // список участников прокручивается в своей области (см. пункт
+          // бэклога), и плавающее меню обрезалось бы этой прокруткой, если
+          // карточка ближе к нижнему краю видимой части списка.
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8, paddingTop: 8, borderTop: "1px solid #3a3a3c" }}>
+            <button onClick={() => runAction(toggleActive)} style={{ ...ghostButtonStyle, textAlign: "left", fontSize: 12 }}>
+              {e.active ? "Отключить" : "Подключить"}
+            </button>
+            {tournament.type !== "knockout" && (
+              <button onClick={() => runAction(toggleHidden)} style={{ ...ghostButtonStyle, textAlign: "left", fontSize: 12 }}>
+                {e.hidden_from_standings ? "Учитывать в таблице" : "Не учитывать в таблице"}
+              </button>
+            )}
+            {tournament.type !== "knockout" && e.active && (
+              <button onClick={() => runAction(handleResetToday)} style={{ ...ghostButtonStyle, textAlign: "left", fontSize: 12 }}>
+                Сбросить сегодня
+              </button>
+            )}
+          </div>
+        )}
+        <div style={{ fontSize: 12, marginTop: 6 }}>
+          {e.active ? (
+            tournament.type === "endless" ? (
+              <span
+                style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }}
+                title={e.played_today ? "Уже сыграл сегодняшнее слово" : "Ещё не играл сегодня"}
+              >
+                Подключён
+              </span>
+            ) : (
+              <span style={{ opacity: 0.7 }}>Подключён</span>
+            )
+          ) : (
+            <span style={{ opacity: 0.7 }}>Отключён</span>
+          )}
+          {tournament.type !== "knockout" && e.hidden_from_standings && (
+            <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>
+              не в таблице
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={panelStyle}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -1048,65 +1129,81 @@ function EntriesPanel({ tournament, users }) {
       </form>
       {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
 
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr style={{ textAlign: "left", opacity: 0.7, fontSize: 13 }}>
-            <th style={thStyle}>Позывной</th>
-            <th style={thStyle}>Игрок</th>
-            <th style={thStyle}>Статус</th>
-            <th style={thStyle}></th>
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map((e) => {
-            const u = users.find((x) => x.id === e.user_id);
-            return (
-              <tr key={e.id} style={{ borderTop: "1px solid #2a2a2c", opacity: e.active ? 1 : 0.5 }}>
-                <td style={tdStyle}>{e.callsign}</td>
-                <td style={{ ...tdStyle, opacity: 0.7 }}>{u?.admin_note || `Игрок #${e.user_id}`}</td>
-                <td style={tdStyle}>
-                  {e.active ? (
-                    tournament.type === "endless" ? (
-                      <span
-                        style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }}
-                        title={e.played_today ? "Уже сыграл сегодняшнее слово" : "Ещё не играл сегодня"}
-                      >
-                        Подключён
-                      </span>
-                    ) : (
-                      "Подключён"
-                    )
-                  ) : (
-                    "Отключён"
-                  )}
-                  {tournament.type !== "knockout" && e.hidden_from_standings && (
-                    <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>
-                      не в таблице
-                    </span>
-                  )}
-                </td>
-                <td style={tdStyle}>
-                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                    <button onClick={() => toggleActive(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
-                      {e.active ? "Отключить" : "Подключить"}
-                    </button>
-                    {tournament.type !== "knockout" && (
-                      <button onClick={() => toggleHidden(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
-                        {e.hidden_from_standings ? "Учитывать в таблице" : "Не учитывать в таблице"}
-                      </button>
-                    )}
-                    {tournament.type !== "knockout" && e.active && (
-                      <button onClick={() => handleResetToday(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
-                        Сбросить сегодня
-                      </button>
-                    )}
-                  </div>
-                </td>
+      <input
+        placeholder="🔎 Поиск по позывному или игроку..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        style={{ ...inputStyle, width: "100%", marginBottom: 8, boxSizing: "border-box" }}
+      />
+
+      <div style={{ maxHeight: 360, overflowY: "auto" }}>
+        {isMobile ? (
+          filteredEntries.map(renderCard)
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ textAlign: "left", opacity: 0.7, fontSize: 13 }}>
+                <th style={thStyle}>Позывной</th>
+                <th style={thStyle}>Игрок</th>
+                <th style={thStyle}>Статус</th>
+                <th style={thStyle}></th>
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
+            </thead>
+            <tbody>
+              {filteredEntries.map((e) => {
+                const u = users.find((x) => x.id === e.user_id);
+                return (
+                  <tr key={e.id} style={{ borderTop: "1px solid #2a2a2c", opacity: e.active ? 1 : 0.5 }}>
+                    <td style={tdStyle}>{e.callsign}</td>
+                    <td style={{ ...tdStyle, opacity: 0.7 }}>{u?.admin_note || `Игрок #${e.user_id}`}</td>
+                    <td style={tdStyle}>
+                      {e.active ? (
+                        tournament.type === "endless" ? (
+                          <span
+                            style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }}
+                            title={e.played_today ? "Уже сыграл сегодняшнее слово" : "Ещё не играл сегодня"}
+                          >
+                            Подключён
+                          </span>
+                        ) : (
+                          "Подключён"
+                        )
+                      ) : (
+                        "Отключён"
+                      )}
+                      {tournament.type !== "knockout" && e.hidden_from_standings && (
+                        <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>
+                          не в таблице
+                        </span>
+                      )}
+                    </td>
+                    <td style={tdStyle}>
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        <button onClick={() => toggleActive(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                          {e.active ? "Отключить" : "Подключить"}
+                        </button>
+                        {tournament.type !== "knockout" && (
+                          <button onClick={() => toggleHidden(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                            {e.hidden_from_standings ? "Учитывать в таблице" : "Не учитывать в таблице"}
+                          </button>
+                        )}
+                        {tournament.type !== "knockout" && e.active && (
+                          <button onClick={() => handleResetToday(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                            Сбросить сегодня
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {query && filteredEntries.length === 0 && (
+        <div style={{ opacity: 0.5, fontSize: 13, marginTop: 8 }}>Никого не найдено.</div>
+      )}
     </div>
   );
 }
