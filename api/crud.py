@@ -6,6 +6,7 @@ import secrets
 from datetime import date
 
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models import (
@@ -394,10 +395,37 @@ async def get_attempt(session: AsyncSession, entry_id: int, daily_word_id: int) 
     return result.scalar_one_or_none()
 
 
+async def _get_attempt_for_update(session: AsyncSession, entry_id: int, daily_word_id: int) -> Attempt | None:
+    """Как get_attempt, но блокирует найденную строку (SELECT ... FOR UPDATE)
+    до конца транзакции — см. get_or_create_attempt."""
+    result = await session.execute(
+        select(Attempt)
+        .where(Attempt.entry_id == entry_id, Attempt.daily_word_id == daily_word_id)
+        .with_for_update()
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_or_create_attempt(session: AsyncSession, entry_id: int, daily_word_id: int) -> Attempt:
-    attempt = await get_attempt(session, entry_id, daily_word_id)
+    """
+    Используется на пути отправки попытки (см. api/routers/game.py::submit_guess),
+    поэтому блокирует строку на время транзакции: без этого два почти
+    одновременных запроса с одним и тем же словом (например, повторная
+    отправка из-за сетевой задержки — см. пункт бэклога) читали одинаковый
+    guesses[] ДО того, как другой закоммитит свой, и один из результатов
+    просто терялся (потерянное обновление). С блокировкой второй запрос ждёт,
+    пока первый зафиксируется, и продолжает уже от актуального состояния.
+
+    Для самой первой попытки дня, когда строки ещё нет, блокировать нечего —
+    от одновременного создания дубликата защищает уникальный индекс
+    (entry_id, daily_word_id): если оба запроса всё же успели одновременно
+    дойти до вставки, проигравший ловит IntegrityError и просто перечитывает
+    (тоже с блокировкой) то, что успел зафиксировать выигравший.
+    """
+    attempt = await _get_attempt_for_update(session, entry_id, daily_word_id)
     if attempt:
         return attempt
+
     attempt = Attempt(
         entry_id=entry_id,
         daily_word_id=daily_word_id,
@@ -407,7 +435,14 @@ async def get_or_create_attempt(session: AsyncSession, entry_id: int, daily_word
         points=0,
     )
     session.add(attempt)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        attempt = await _get_attempt_for_update(session, entry_id, daily_word_id)
+        if attempt is None:
+            raise
+        return attempt
     await session.refresh(attempt)
     return attempt
 
