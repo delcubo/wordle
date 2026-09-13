@@ -11,7 +11,7 @@ const COLORS = {
   default: "var(--key-default)",
 };
 
-export default function Keyboard({ letterStates, onLetter, onEnter, onBackspace }) {
+export default function Keyboard({ letterStates, onLetter, onEnter, onBackspace, disabled = false }) {
   return (
     <div
       style={{
@@ -23,6 +23,12 @@ export default function Keyboard({ letterStates, onLetter, onEnter, onBackspace 
         margin: "0 auto",
         padding: "0 4px 8px",
         boxSizing: "border-box",
+        // Пока попытка отправляется на сервер, клавиатура игнорирует тычки —
+        // иначе повторный тап по "ВВОД" до ответа сервера уходит отдельным,
+        // самостоятельно засчитываемым запросом с тем же словом (см. пункт
+        // бэклога: игрок терял по три попытки на одно и то же слово).
+        pointerEvents: disabled ? "none" : "auto",
+        opacity: disabled ? 0.6 : 1,
       }}
     >
       {ROWS.map((row, i) => (

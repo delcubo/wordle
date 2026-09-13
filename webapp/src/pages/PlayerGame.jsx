@@ -50,6 +50,7 @@ export default function PlayerGame() {
   const [modal, setModal] = useState(null);
   const [theme, setTheme] = useState("dark");
   const [animateRowIndex, setAnimateRowIndex] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
   const errorTimeoutRef = useRef(null);
   const keyboardWrapRef = useRef(null);
 
@@ -243,85 +244,95 @@ export default function PlayerGame() {
   }
 
   async function handleEnter() {
-    if (currentGuess.length !== WORD_LENGTH || gameOver) return;
+    // submitting гасит повторную отправку, пока идёт запрос — без этой защиты
+    // повторный тап по "ВВОД" (например, из-за задержки на медленной сети) до
+    // того, как currentGuess очистится, уходит отдельным, полностью валидным
+    // запросом с тем же словом и списывает игроку ещё одну попытку (см.
+    // пункт бэклога — так игрок терял по три попытки на одно и то же слово).
+    if (submitting || currentGuess.length !== WORD_LENGTH || gameOver) return;
 
-    const endpoint = mode === "bracket" ? "/api/game/bracket/guess" : "/api/game/guess";
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, tournament_id: Number(tournamentId), guess: currentGuess }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      showTransientError(err.detail || "Слово не найдено в словаре.");
-      return;
-    }
-
-    if (errorTimeoutRef.current) {
-      clearTimeout(errorTimeoutRef.current);
-      errorTimeoutRef.current = null;
-    }
-
-    const data = await res.json();
-    const statuses = data.result.map((r) => r.state);
-
-    // грид "этого раунда" на момент прямо сейчас — до любых дальнейших фетчей,
-    // пригодится, если матч сетки уйдёт в sudden death (там прошлый раунд уже
-    // не будет виден в свежем статусе — там будет уже новый, пустой)
-    const roundGrid = [...rows.slice(0, activeRowIndex).map((r) => r.statuses), statuses];
-
-    setRows((prev) => {
-      const next = [...prev];
-      next[activeRowIndex] = { letters: currentGuess.split(""), statuses };
-      return next;
-    });
-    setAnimateRowIndex(activeRowIndex);
-    setLetterStates((prev) => {
-      const next = { ...prev };
-      data.result.forEach(({ letter, state }) => {
-        if (!next[letter] || LETTER_PRIORITY[state] > LETTER_PRIORITY[next[letter]]) next[letter] = state;
+    setSubmitting(true);
+    try {
+      const endpoint = mode === "bracket" ? "/api/game/bracket/guess" : "/api/game/guess";
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, tournament_id: Number(tournamentId), guess: currentGuess }),
       });
-      return next;
-    });
-    setCurrentGuess("");
-    setActiveRowIndex((i) => i + 1);
-    setIsError(false);
 
-    if (!data.game_over) {
-      setMessage("");
-      return;
-    }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showTransientError(err.detail || "Слово не найдено в словаре.");
+        return;
+      }
 
-    setGameOver(true);
+      if (errorTimeoutRef.current) {
+        clearTimeout(errorTimeoutRef.current);
+        errorTimeoutRef.current = null;
+      }
 
-    // Итоговую модалку и любые UI-обновления, перекрывающие грид, откладываем
-    // до конца анимации переворота последней строки — иначе она перекроет
-    // грид раньше, чем игрок увидит цвет своей последней попытки.
-    if (mode === "bracket") {
-      const fresh = await fetchBracketStatus();
-      const isTie = !fresh.match_finished && !fresh.already_played;
+      const data = await res.json();
+      const statuses = data.result.map((r) => r.state);
+
+      // грид "этого раунда" на момент прямо сейчас — до любых дальнейших фетчей,
+      // пригодится, если матч сетки уйдёт в sudden death (там прошлый раунд уже
+      // не будет виден в свежем статусе — там будет уже новый, пустой)
+      const roundGrid = [...rows.slice(0, activeRowIndex).map((r) => r.statuses), statuses];
+
+      setRows((prev) => {
+        const next = [...prev];
+        next[activeRowIndex] = { letters: currentGuess.split(""), statuses };
+        return next;
+      });
+      setAnimateRowIndex(activeRowIndex);
+      setLetterStates((prev) => {
+        const next = { ...prev };
+        data.result.forEach(({ letter, state }) => {
+          if (!next[letter] || LETTER_PRIORITY[state] > LETTER_PRIORITY[next[letter]]) next[letter] = state;
+        });
+        return next;
+      });
+      setCurrentGuess("");
+      setActiveRowIndex((i) => i + 1);
+      setIsError(false);
+
+      if (!data.game_over) {
+        setMessage("");
+        return;
+      }
+
+      setGameOver(true);
+
+      // Итоговую модалку и любые UI-обновления, перекрывающие грид, откладываем
+      // до конца анимации переворота последней строки — иначе она перекроет
+      // грид раньше, чем игрок увидит цвет своей последней попытки.
+      if (mode === "bracket") {
+        const fresh = await fetchBracketStatus();
+        const isTie = !fresh.match_finished && !fresh.already_played;
+        setTimeout(() => {
+          if (isTie) {
+            setModal({
+              title: fresh.tournament_title,
+              callsign: fresh.callsign,
+              hashtag: fresh.hashtag,
+              attemptsUsed: data.attempts_used,
+              solved: data.solved,
+              grid: roundGrid,
+              message: "Ничья! У соперника такой же результат — начинается дополнительный раунд (sudden death).",
+            });
+          }
+          applyBracketStatus(fresh, { announceTie: isTie });
+        }, FLIP_TOTAL_MS);
+        return;
+      }
+
+      const fresh = await fetchStandardStatus();
       setTimeout(() => {
-        if (isTie) {
-          setModal({
-            title: fresh.tournament_title,
-            callsign: fresh.callsign,
-            hashtag: fresh.hashtag,
-            attemptsUsed: data.attempts_used,
-            solved: data.solved,
-            grid: roundGrid,
-            message: "Ничья! У соперника такой же результат — начинается дополнительный раунд (sudden death).",
-          });
-        }
-        applyBracketStatus(fresh, { announceTie: isTie });
+        if (fresh) applyStandardStatus(fresh);
       }, FLIP_TOTAL_MS);
-      return;
+    } finally {
+      setSubmitting(false);
     }
-
-    const fresh = await fetchStandardStatus();
-    setTimeout(() => {
-      if (fresh) applyStandardStatus(fresh);
-    }, FLIP_TOTAL_MS);
   }
 
   if (invalidLink) {
@@ -362,6 +373,7 @@ export default function PlayerGame() {
           onLetter={handleLetter}
           onEnter={handleEnter}
           onBackspace={handleBackspace}
+          disabled={submitting}
         />
       </div>
       {modal && (
