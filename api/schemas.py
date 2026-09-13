@@ -144,6 +144,10 @@ class EntryOut(BaseModel):
     joined_on_day: int
     active: bool = True
     hidden_from_standings: bool = False
+    # Заполняется только для бессрочного режима (см. пункт бэклога) — сыграл
+    # ли участник уже сегодняшнее слово. Для остальных типов розыгрыша не
+    # считается (там видно из таблицы/сетки) и остаётся None.
+    played_today: bool | None = None
 
     class Config:
         from_attributes = True

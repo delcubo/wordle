@@ -397,7 +397,19 @@ async def add_entry(
 
 @router.get("/tournaments/{tournament_id}/entries", response_model=list[EntryOut])
 async def get_entries(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
-    return await crud.list_entries(session, tournament_id)
+    entries = await crud.list_entries(session, tournament_id)
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None or tournament.type != TournamentType.endless:
+        return entries
+    played_ids = await crud.get_entries_played_today(session, tournament)
+    return [
+        EntryOut(
+            id=e.id, user_id=e.user_id, callsign=e.callsign, joined_on_day=e.joined_on_day,
+            active=e.active, hidden_from_standings=e.hidden_from_standings,
+            played_today=e.id in played_ids,
+        )
+        for e in entries
+    ]
 
 
 @router.patch("/entries/{entry_id}", response_model=EntryOut)
@@ -422,6 +434,19 @@ async def disconnect_all_entries(
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
     await crud.disconnect_all_entries(session, tournament_id)
+    return await crud.list_entries(session, tournament_id)
+
+
+@router.post("/tournaments/{tournament_id}/entries/add-all", response_model=list[EntryOut])
+async def add_all_entries(
+    tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
+):
+    """Подключить одной кнопкой сразу всех зарегистрированных игроков платформы
+    — чтобы не добавлять по одному вручную (см. crud.add_all_users)."""
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    await crud.add_all_users(session, tournament)
     return await crud.list_entries(session, tournament_id)
 
 

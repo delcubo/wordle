@@ -865,15 +865,30 @@ function EntriesPanel({ tournament, users }) {
     refresh();
   }
 
+  async function handleAddAll() {
+    if (!window.confirm(`Подключить сразу всех зарегистрированных игроков (${availableUsers.length}) к «${tournament.title}»? Позывные подставятся по умолчанию (заметка админа или «#игрокN») — их можно будет переименовать позже.`)) {
+      return;
+    }
+    await api(`/api/admin/tournaments/${tournament.id}/entries/add-all`, { method: "POST" });
+    refresh();
+  }
+
   return (
     <div style={panelStyle}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <h3 style={{ margin: 0 }}>Участники «{tournament.title}»</h3>
-        {activeCount > 0 && (
-          <button onClick={handleDisconnectAll} style={{ ...ghostButtonStyle, fontSize: 12 }}>
-            Отключить всех
-          </button>
-        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {availableUsers.length > 0 && (
+            <button onClick={handleAddAll} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+              Добавить всех
+            </button>
+          )}
+          {activeCount > 0 && (
+            <button onClick={handleDisconnectAll} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+              Отключить всех
+            </button>
+          )}
+        </div>
       </div>
       <p style={{ opacity: 0.7, fontSize: 13, marginTop: 4 }}>
         Подключено: {activeCount}{inactiveCount > 0 ? ` · Отключено: ${inactiveCount}` : ""}
@@ -913,7 +928,20 @@ function EntriesPanel({ tournament, users }) {
                 <td style={tdStyle}>{e.callsign}</td>
                 <td style={{ ...tdStyle, opacity: 0.7 }}>{u?.admin_note || `Игрок #${e.user_id}`}</td>
                 <td style={tdStyle}>
-                  {e.active ? "Подключён" : "Отключён"}
+                  {e.active ? (
+                    tournament.type === "endless" ? (
+                      <span
+                        style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }}
+                        title={e.played_today ? "Уже сыграл сегодняшнее слово" : "Ещё не играл сегодня"}
+                      >
+                        Подключён
+                      </span>
+                    ) : (
+                      "Подключён"
+                    )
+                  ) : (
+                    "Отключён"
+                  )}
                   {tournament.type !== "knockout" && e.hidden_from_standings && (
                     <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>
                       не в таблице
@@ -1116,11 +1144,17 @@ function WordHistoryPanel({ tournament }) {
 
   if (!words) return null;
   const sorted = [...words].sort((a, b) => b.day_number - a.day_number);
+  // В бессрочном режиме у розыгрыша нет конца, и список слов со временем рос
+  // бы бесконечно — показываем только последние 10 дней (данные за остальные
+  // никуда не деваются, просто не выводятся здесь).
+  const shown = tournament.type === "endless" ? sorted.slice(0, 10) : sorted;
 
   return (
     <div style={{ ...panelStyle, marginTop: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => setOpen((o) => !o)}>
-        <h3 style={{ margin: 0 }}>История слов {open ? "▾" : "▸"}</h3>
+        <h3 style={{ margin: 0 }}>
+          История слов {tournament.type === "endless" && "(последние 10)"} {open ? "▾" : "▸"}
+        </h3>
         <button onClick={(e) => { e.stopPropagation(); refresh(); }} style={ghostButtonStyle}>Обновить</button>
       </div>
       {open && (
@@ -1134,7 +1168,7 @@ function WordHistoryPanel({ tournament }) {
             </tr>
           </thead>
           <tbody>
-            {sorted.map((w) => (
+            {shown.map((w) => (
               <tr key={w.id} style={{ borderTop: "1px solid #2a2a2c" }}>
                 <td style={tdStyle}>{w.day_number}</td>
                 <td style={tdStyle}>{w.calendar_date}</td>

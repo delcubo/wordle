@@ -72,6 +72,7 @@ export default function ResultModal({
       onClick={onClose}
       style={{
         position: "fixed", inset: 0, background: "rgba(0,0,0,0.95)",
+        backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
         display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
       }}
     >

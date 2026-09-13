@@ -215,6 +215,51 @@ async def disconnect_all_entries(session: AsyncSession, tournament_id: int) -> i
     return count
 
 
+async def _pick_default_callsign(session: AsyncSession, tournament_id: int, user: User) -> str:
+    """Позывной по умолчанию для массового подключения (см. add_all_users) —
+    заметка админа, если она есть и ещё не занята в этом розыгрыше, иначе
+    гарантированно уникальный вариант по id игрока. Админ может переименовать
+    его позже как обычно (см. edit_entry_callsign)."""
+    note = (user.admin_note or "").strip()
+    if note and not await callsign_taken(session, tournament_id, note):
+        return note
+    candidate = f"#игрок{user.id}"
+    suffix = 1
+    while await callsign_taken(session, tournament_id, candidate):
+        suffix += 1
+        candidate = f"#игрок{user.id}-{suffix}"
+    return candidate
+
+
+async def add_all_users(session: AsyncSession, tournament: Tournament) -> int:
+    """
+    Быстро подключает к розыгрышу сразу всех зарегистрированных на платформе
+    (неудалённых) игроков — чтобы не добавлять по одному вручную. Уже
+    подключённых пропускает; тех, кого раньше отключили от ЭТОГО розыгрыша,
+    просто подключает обратно (сохраняя прежний позывной и историю попыток —
+    как при подключении по одному, см. api/routers/admin.py::add_entry).
+    Новым (никогда не участвовавшим в этом розыгрыше) подбирает позывной по
+    умолчанию (см. _pick_default_callsign).
+
+    Возвращает число реально подключённых (новых + переподключённых) участников.
+    """
+    count = 0
+    for user in await list_users(session):
+        if user.archived:
+            continue
+        existing = await get_entry_including_inactive(session, tournament.id, user.id)
+        if existing is not None:
+            if existing.active:
+                continue
+            await set_entry_active(session, existing.id, True)
+            count += 1
+            continue
+        callsign = await _pick_default_callsign(session, tournament.id, user)
+        await create_entry(session, tournament, user.id, callsign)
+        count += 1
+    return count
+
+
 async def set_entry_active(session: AsyncSession, entry_id: int, active: bool) -> TournamentEntry | None:
     entry = await session.get(TournamentEntry, entry_id)
     if entry is None:
@@ -259,6 +304,27 @@ async def list_entries(session: AsyncSession, tournament_id: int) -> list[Tourna
         select(TournamentEntry).where(TournamentEntry.tournament_id == tournament_id).order_by(TournamentEntry.joined_at)
     )
     return list(result.scalars().all())
+
+
+async def get_entries_played_today(session: AsyncSession, tournament: Tournament) -> set[int]:
+    """entry_id участников, уже завершивших сегодняшнее слово (в том же
+    смысле, что already_played на игровой странице — угадал либо исчерпал все
+    6 попыток) — для колонки статуса в бессрочном режиме (см. пункт бэклога).
+    Пустое множество, если сегодня ещё нет слова дня (розыгрыш не начался/на
+    паузе) — вызывающий код в этом случае просто не подсветит никого."""
+    day_number = day_number_for_date(tournament.start_date, today())
+    if day_number < 1:
+        return set()
+    daily_word = await get_daily_word_by_day(session, tournament.id, day_number)
+    if daily_word is None:
+        return set()
+    result = await session.execute(
+        select(Attempt.entry_id).where(
+            Attempt.daily_word_id == daily_word.id,
+            (Attempt.solved.is_(True)) | (Attempt.attempts_used >= 6),
+        )
+    )
+    return {row[0] for row in result.all()}
 
 
 async def list_entries_for_user(session: AsyncSession, user_id: int) -> list[TournamentEntry]:
