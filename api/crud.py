@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models import (
-    Tournament, TournamentStatus, TournamentEntry, User, DailyWord, DailyWordStatus, Attempt,
+    Tournament, TournamentStatus, TournamentType, TournamentEntry, User, DailyWord, DailyWordStatus, Attempt,
     TiebreakRound, TiebreakParticipant, PlayoffMatch, PlayoffGame, AppSettings, ExcludedWord, AddedWord,
 )
 from api.dictionary import pick_word_for_day, pick_alternative_word, pick_word_for_match
@@ -293,6 +293,36 @@ async def edit_entry_callsign(session: AsyncSession, entry_id: int, callsign: st
 
 
 # ---------- Daily words (с подтверждением админом) ----------
+
+async def reset_todays_attempt(session: AsyncSession, entry: TournamentEntry, tournament: Tournament) -> bool:
+    """
+    Сбрасывает попытку участника за сегодняшний день розыгрыша — удаляет
+    Attempt целиком, чтобы для игрока это выглядело так, будто он ещё не
+    играл сегодня (get_or_create_attempt на следующей отправке заведёт новую
+    попытку с нуля). Не про исправление результата (см. override_day_result в
+    api/routers/admin.py) — про полный повторный шанс на сегодня.
+
+    Не применимо к knockout (там нет слова дня вне сетки — см.
+    api/routers/game.py::_resolve_context) и к дням вне диапазона розыгрыша.
+    Возвращает True, только если реально было что сбрасывать.
+    """
+    if tournament.type == TournamentType.knockout:
+        return False
+    day_number = day_number_for_date(tournament.start_date, today())
+    if day_number < 1:
+        return False
+    if tournament.duration_days is not None and day_number > tournament.duration_days:
+        return False
+    daily_word = await get_daily_word_by_day(session, tournament.id, day_number)
+    if daily_word is None:
+        return False
+    attempt = await get_attempt(session, entry.id, daily_word.id)
+    if attempt is None:
+        return False
+    await session.delete(attempt)
+    await session.commit()
+    return True
+
 
 async def get_daily_word_by_id(session: AsyncSession, daily_word_id: int) -> DailyWord | None:
     return await session.get(DailyWord, daily_word_id)

@@ -437,6 +437,24 @@ async def set_entry_active(
     return entry
 
 
+@router.post("/entries/{entry_id}/reset-today")
+async def reset_entry_today(entry_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    """Сбросить попытку участника за сегодняшний день целиком — как будто он
+    ещё не играл сегодня (не для исправления результата, для полного
+    повторного шанса — см. crud.reset_todays_attempt). Не применимо к
+    knockout и к дням вне диапазона розыгрыша."""
+    entry = await session.get(TournamentEntry, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Участие не найдено")
+    tournament = await crud.get_tournament(session, entry.tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    reset = await crud.reset_todays_attempt(session, entry, tournament)
+    if not reset:
+        raise HTTPException(status_code=400, detail="Сегодня участник ещё не играл — нечего сбрасывать")
+    return {"ok": True}
+
+
 @router.patch("/entries/{entry_id}/hidden", response_model=EntryOut)
 async def set_entry_hidden(
     entry_id: int, payload: EntryHiddenRequest, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)

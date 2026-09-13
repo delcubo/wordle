@@ -844,6 +844,19 @@ function EntriesPanel({ tournament, users }) {
     refresh();
   }
 
+  async function handleResetToday(entry) {
+    if (!window.confirm(`Сбросить попытку «${entry.callsign}» за сегодня? Игрок сможет сыграть сегодняшнее слово заново с нуля — введённые буквы и результат за сегодня будут стёрты без возможности отмены.`)) {
+      return;
+    }
+    setError("");
+    try {
+      await api(`/api/admin/entries/${entry.id}/reset-today`, { method: "POST" });
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   async function handleDisconnectAll() {
     if (!window.confirm(`Отключить всех подключённых участников (${activeCount}) от «${tournament.title}»? Набранная статистика останется в таблице, подключить обратно можно по одному.`)) {
       return;
@@ -915,6 +928,11 @@ function EntriesPanel({ tournament, users }) {
                     {tournament.type !== "knockout" && (
                       <button onClick={() => toggleHidden(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
                         {e.hidden_from_standings ? "Учитывать в таблице" : "Не учитывать в таблице"}
+                      </button>
+                    )}
+                    {tournament.type !== "knockout" && e.active && (
+                      <button onClick={() => handleResetToday(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                        Сбросить сегодня
                       </button>
                     )}
                   </div>
