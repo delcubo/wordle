@@ -1,19 +1,26 @@
 """
-Оркестрация тай-брейка championship: запуск раундов для групп участников,
-полностью совпавших по очкам и пропускам (см. scoring.groups_needing_tiebreak),
-и их разрешение по мере того, как участники доигрывают общее слово.
+Оркестрация тай-брейка — используется в двух режимах:
 
-Раунд можно разрешить, когда либо все участники доиграли слово, либо наступил
-дедлайн (день раунда уже прошёл). На дедлайне тот, кто вообще не сделал ни
-одной попытки, всегда ставится ниже того, кто играл и не угадал за все 6 —
-неявка хуже участия, даже неудачного (см. _result_key). Если после разрешения
-раунда часть группы всё ещё совпадает — для неё сразу заводится продолжение
-(новое слово того же дня, см. create_tiebreak_round), играть можно немедленно;
-исключение — если совпадение вызвано тем, что вся подгруппа не участвовала
-вовсе: новый раунд тут не поможет (играть некому), нужна ручная доигровка.
+1. championship: запуск раундов для групп участников, полностью совпавших по
+   очкам и пропускам (см. scoring.groups_needing_tiebreak) — start_tiebreak.
+2. Розыгрыш типа tiebreak целиком: корневая группа — сразу все подключённые
+   участники, раунды начинаются с первого дня розыгрыша — см. ensure_started.
+
+В обоих случаях раунд можно разрешить, когда либо все участники доиграли
+слово, либо наступил дедлайн (день раунда уже прошёл). На дедлайне тот, кто
+вообще не сделал ни одной попытки, всегда ставится ниже того, кто играл и не
+угадал за все 6 — неявка хуже участия, даже неудачного (см. _result_key). Если
+после разрешения раунда часть группы всё ещё совпадает — для неё сразу
+заводится продолжение (новое слово того же дня, см. create_tiebreak_round),
+играть можно немедленно; исключение — если совпадение вызвано тем, что вся
+подгруппа не участвовала вовсе: новый раунд тут не поможет (играть некому),
+нужна ручная доигровка.
 
 compute_final_order() восстанавливает итоговый порядок участников по цепочкам
-разрешённых раундов — им пользуется генерация сетки плей-офф (api/bracket.py).
+разрешённых раундов championship — им пользуется генерация сетки плей-офф
+(api/bracket.py). build_results() — аналог для розыгрыша типа tiebreak целиком,
+терпимый к ещё не разрешённым раундам (для живого отображения в админке и
+игроку — см. get_entry_place).
 """
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +28,7 @@ from api.models import Tournament, TournamentType, TournamentStatus, TiebreakRou
 from api.tournament_time import today, day_number_for_date
 from api.standings_view import compute_standings
 from api.scoring import groups_needing_tiebreak
+from api.dictionary import pick_alternative_word
 from api import crud
 
 
@@ -59,11 +67,186 @@ async def start_tiebreak(session: AsyncSession, tournament: Tournament) -> list[
     return rounds
 
 
+async def ensure_started(session: AsyncSession, tournament: Tournament) -> None:
+    """
+    Для розыгрыша типа tiebreak — лениво заводит корневой раунд (сразу все
+    подключённые активные участники), как только наступил день старта, точно
+    так же, как обычное слово дня лениво заводится у standard/endless (см.
+    api/routers/game.py::_resolve_context). Без дополнительного подтверждения
+    админом — раунд сразу действующий, играть можно немедленно, как и у
+    продолжений раундов championship-тай-брейка.
+    """
+    if tournament.type != TournamentType.tiebreak:
+        return
+    if day_number_for_date(tournament.start_date, today()) < 1:
+        return
+    if await crud.list_root_tiebreak_rounds(session, tournament.id):
+        return  # уже запущен
+    entries = [e for e in await crud.list_entries(session, tournament.id) if e.active]
+    if len(entries) < 2:
+        return  # не с кем распределять места — ждём, пока подключат ещё игроков
+    await crud.create_tiebreak_round(session, tournament, [e.id for e in entries])
+
+
 async def resolve_ready_rounds(session: AsyncSession, tournament: Tournament) -> None:
     """Проверяет все незавершённые раунды тай-брейка розыгрыша и разрешает те,
-    что готовы (см. _try_resolve_round)."""
+    что готовы (см. _try_resolve_round). Для розыгрыша типа tiebreak целиком —
+    после этого сразу проверяет, не разошлись ли уже все места, и если да,
+    сам завершает розыгрыш (см. _maybe_finish)."""
     for round_ in await crud.list_active_tiebreak_rounds(session, tournament.id):
         await _try_resolve_round(session, tournament, round_)
+    if tournament.type == TournamentType.tiebreak:
+        await _maybe_finish(session, tournament)
+
+
+async def _maybe_finish(session: AsyncSession, tournament: Tournament) -> None:
+    """Розыгрыш типа tiebreak завершается сам, как только каждому исходному
+    участнику (кто застал самый первый раунд — см. ensure_started) досталось
+    единственное, уже не делимое место — по аналогии с авто-финишем сетки на
+    вылет при решении финальной пары (см. bracket_game.advance_winner). Игрок,
+    подключённый уже после старта (см. пункт бэклога про переброску) и ни разу
+    не попавший ни в один раунд, финишу не мешает — распределять для него всё
+    равно нечего."""
+    if tournament.status == TournamentStatus.finished:
+        return
+    roots = await crud.list_root_tiebreak_rounds(session, tournament.id)
+    if not roots:
+        return
+    participating_ids: set[int] = set()
+    for root in roots:
+        participating_ids.update(p.entry_id for p in await crud.list_tiebreak_participants(session, root.id))
+    if not participating_ids:
+        return
+
+    results = await build_results(session, tournament)
+    place_by_entry = {row["entry_id"]: row["place"] for row in results["rows"]}
+    if all(
+        place_by_entry.get(entry_id) is not None and "-" not in place_by_entry[entry_id]
+        for entry_id in participating_ids
+    ):
+        tournament.status = TournamentStatus.finished
+        session.add(tournament)
+        await session.commit()
+
+
+async def build_results(session: AsyncSession, tournament: Tournament) -> dict:
+    """
+    Сводная таблица для розыгрыша типа tiebreak целиком (см. пункт бэклога):
+    список раундов по порядку появления и по каждому участнику — место (число,
+    если уже точно определено; диапазон вида "2-4", если группа ещё играет
+    дальше или полагающийся ей раунд-продолжение ещё не создан; None, если
+    розыгрыш ещё не стартовал) и результат по каждому раунду ("N/6", "X/6" или
+    None — не участвовал в этом раунде). В отличие от compute_final_order/
+    _resolve_group_order (которые требуют полного разрешения и нужны только
+    для посева сетки championship), терпима к ещё не разрешённым раундам —
+    для живого отображения в админке и статуса игрока (см. get_entry_place).
+    """
+    rounds = await crud.list_tiebreak_rounds(session, tournament.id)
+    entries = await crud.list_entries(session, tournament.id)
+
+    daily_words = {}
+    for r in rounds:
+        if r.daily_word_id not in daily_words:
+            daily_words[r.daily_word_id] = await crud.get_daily_word_by_id(session, r.daily_word_id)
+
+    participants_by_round: dict[int, list[int]] = {}
+    for r in rounds:
+        participants_by_round[r.id] = [p.entry_id for p in await crud.list_tiebreak_participants(session, r.id)]
+
+    children_by_round: dict[int, dict[frozenset, TiebreakRound]] = {}
+    for r in rounds:
+        children_by_round[r.id] = {
+            frozenset(participants_by_round[child.id]): child
+            for child in await crud.get_child_rounds(session, r.id)
+        }
+
+    cells: dict[int, dict[int, dict | None]] = {}
+    for r in rounds:
+        daily_word = daily_words[r.daily_word_id]
+        for entry_id in participants_by_round[r.id]:
+            attempt = await crud.get_attempt(session, entry_id, daily_word.id)
+            cells.setdefault(entry_id, {})[r.id] = (
+                {"solved": attempt.solved, "attempts_used": attempt.attempts_used} if attempt else None
+            )
+
+    places: dict[int, str] = {}
+
+    async def walk(round_: TiebreakRound, offset: int) -> int:
+        entry_ids = participants_by_round[round_.id]
+        size = len(entry_ids)
+        if not round_.completed:
+            place_str = str(offset + 1) if size == 1 else f"{offset + 1}-{offset + size}"
+            for entry_id in entry_ids:
+                places[entry_id] = place_str
+            return offset + size
+
+        daily_word = daily_words[round_.daily_word_id]
+        keyed: dict[tuple, list[int]] = {}
+        for entry_id in entry_ids:
+            key = await _result_key(session, entry_id, daily_word.id, finalize=True)
+            keyed.setdefault(key, []).append(entry_id)
+
+        cur = offset
+        for key in sorted(keyed.keys()):
+            group = keyed[key]
+            if len(group) == 1:
+                places[group[0]] = str(cur + 1)
+                cur += 1
+                continue
+            child = children_by_round[round_.id].get(frozenset(group))
+            if child is not None:
+                cur = await walk(child, cur)
+            else:
+                place_str = f"{cur + 1}-{cur + len(group)}"
+                for entry_id in group:
+                    places[entry_id] = place_str
+                cur += len(group)
+        return cur
+
+    offset = 0
+    for root in await crud.list_root_tiebreak_rounds(session, tournament.id):
+        offset = await walk(root, offset)
+
+    rows = [
+        {
+            "entry_id": entry.id,
+            "callsign": entry.callsign,
+            "active": entry.active,
+            "place": places.get(entry.id),
+            "cells": [cells.get(entry.id, {}).get(r.id) for r in rounds],
+        }
+        for entry in entries
+    ]
+
+    return {
+        "rounds": [
+            {"id": r.id, "round_number": r.round_number, "word": daily_words[r.daily_word_id].word, "completed": r.completed}
+            for r in rounds
+        ],
+        "rows": rows,
+    }
+
+
+async def get_entry_place(session: AsyncSession, tournament: Tournament, entry_id: int) -> str | None:
+    """Текущее место entry в розыгрыше типа tiebreak — диапазон вида "2-4",
+    пока группа ещё не разошлась до конца, точное число, когда место уже не
+    изменится, либо None, если розыгрыш ещё не стартовал или entry в нём не
+    участвовал (см. build_results)."""
+    results = await build_results(session, tournament)
+    row = next((r for r in results["rows"] if r["entry_id"] == entry_id), None)
+    return row["place"] if row else None
+
+
+async def reroll_tiebreak_word(session: AsyncSession, tournament: Tournament, day_number: int) -> str:
+    """"Предложить другое слово" для ещё не наступившего слота очереди tiebreak
+    (см. crud.get_tiebreak_word_queue) — как и у остальных режимов, реролл
+    недетерминирован (иначе повторное нажатие всегда возвращало бы то же
+    слово)."""
+    already_used = await crud.get_all_used_words(session, tournament.id)
+    current = (tournament.word_overrides or {}).get(str(day_number))
+    new_word = pick_alternative_word(already_used, exclude=current)
+    await crud.set_tiebreak_word_override(session, tournament, day_number, new_word)
+    return new_word
 
 
 async def _result_key(

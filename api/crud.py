@@ -431,11 +431,12 @@ async def reset_todays_attempt(session: AsyncSession, entry: TournamentEntry, to
     попытку с нуля). Не про исправление результата (см. override_day_result в
     api/routers/admin.py) — про полный повторный шанс на сегодня.
 
-    Не применимо к knockout (там нет слова дня вне сетки — см.
-    api/routers/game.py::_resolve_context) и к дням вне диапазона розыгрыша.
-    Возвращает True, только если реально было что сбрасывать.
+    Не применимо к knockout (там нет слова дня вне сетки) и к tiebreak (там
+    номер дня раундовый, а не календарный — см. api/routers/game.py::_resolve_context)
+    и к дням вне диапазона розыгрыша. Возвращает True, только если реально
+    было что сбрасывать.
     """
-    if tournament.type == TournamentType.knockout:
+    if tournament.type in (TournamentType.knockout, TournamentType.tiebreak):
         return False
     day_number = day_number_for_date(tournament.start_date, today())
     if day_number < 1:
@@ -688,7 +689,8 @@ async def create_tiebreak_round(
     """
     already_used = await _get_used_words(session, tournament.id)
     day_number = await _next_free_day_number(session, tournament.id)
-    word = pick_word_for_day(tournament.id, day_number, already_used)
+    override = (tournament.word_overrides or {}).get(str(day_number))
+    word = override if override else pick_word_for_day(tournament.id, day_number, already_used)
 
     daily_word = DailyWord(
         tournament_id=tournament.id,
@@ -721,6 +723,41 @@ async def create_tiebreak_round(
     await session.commit()
     await session.refresh(tiebreak_round)
     return tiebreak_round
+
+
+async def get_tiebreak_word_queue(session: AsyncSession, tournament: Tournament, count: int = 5) -> list[dict]:
+    """
+    Превью первых `count` слов розыгрыша типа tiebreak — до того, как реально
+    наступил соответствующий раунд, слово детерминированно выбирается по
+    (tournament_id, day_number), как и обычное слово дня (см. pick_word_for_day),
+    либо берётся из ручной замены (tournament.word_overrides). Как только раунд
+    с этим номером дня реально создан (см. create_tiebreak_round) — слово уже
+    зафиксировано и не редактируется (day-word мог быть уже сыгран).
+    """
+    existing_by_day = {w.day_number: w for w in await list_daily_words(session, tournament.id)}
+    already_used = await _get_used_words(session, tournament.id)
+    overrides = tournament.word_overrides or {}
+
+    queue = []
+    for day_number in range(1, count + 1):
+        existing = existing_by_day.get(day_number)
+        if existing is not None:
+            queue.append({"day_number": day_number, "word": existing.word, "editable": False})
+            already_used = already_used | {existing.word}
+            continue
+        override = overrides.get(str(day_number))
+        word = override if override else pick_word_for_day(tournament.id, day_number, already_used)
+        already_used = already_used | {word}
+        queue.append({"day_number": day_number, "word": word, "editable": True})
+    return queue
+
+
+async def set_tiebreak_word_override(session: AsyncSession, tournament: Tournament, day_number: int, word: str) -> None:
+    overrides = dict(tournament.word_overrides or {})
+    overrides[str(day_number)] = word
+    tournament.word_overrides = overrides
+    session.add(tournament)
+    await session.commit()
 
 
 async def list_tiebreak_rounds(session: AsyncSession, tournament_id: int) -> list[TiebreakRound]:

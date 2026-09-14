@@ -3,7 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { fetchTheme, themeVars } from "../theme.js";
 
 const STATUS_LABEL = { draft: "не начался", active: "идёт", tiebreak: "тай-брейк", playoff: "плей-офф", finished: "завершён" };
-const TYPE_LABEL = { standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат", endless: "Бессрочная игра" };
+const TYPE_LABEL = { standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат", endless: "Бессрочная игра", tiebreak: "Тай-брейк" };
 
 export default function MyTournaments() {
   const { token } = useParams();

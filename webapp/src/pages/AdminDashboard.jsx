@@ -24,7 +24,7 @@ function useLatest(value) {
 }
 
 const DEFAULT_SCORING = { "1": 10, "2": 5, "3": 4, "4": 3, "5": 2, "6": 1 };
-const TYPE_LABEL = { standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат", endless: "Бессрочная игра" };
+const TYPE_LABEL = { standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат", endless: "Бессрочная игра", tiebreak: "Тай-брейк" };
 const STATUS_LABEL = { draft: "черновик", active: "идёт", tiebreak: "тай-брейк", playoff: "плей-офф", finished: "завершён" };
 
 async function api(path, options = {}) {
@@ -128,9 +128,11 @@ export default function AdminDashboard() {
             {selected ? (
               <>
                 <EntriesPanel tournament={selected} users={users} allTournaments={tournaments} />
-                {selected.type !== "knockout" && <TodayWordPanel tournament={selected} />}
-                <WordConfirmPanel tournament={selected} />
-                {selected.type !== "knockout" && <WordHistoryPanel tournament={selected} />}
+                {selected.type === "tiebreak" && <TiebreakWordsPanel tournament={selected} />}
+                {selected.type !== "knockout" && selected.type !== "tiebreak" && <TodayWordPanel tournament={selected} />}
+                {selected.type !== "knockout" && selected.type !== "tiebreak" && <WordConfirmPanel tournament={selected} />}
+                {selected.type !== "knockout" && selected.type !== "tiebreak" && <WordHistoryPanel tournament={selected} />}
+                {selected.type === "tiebreak" && <TiebreakResultsPanel tournament={selected} />}
                 {selected.duration_days != null && <StandingsPanel tournament={selected} />}
                 {selected.type === "championship" && <TiebreakPanel tournament={selected} />}
                 {(selected.type === "championship" || selected.type === "knockout") && (
@@ -911,6 +913,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
             <option value="championship">Чемпионат (+ плей-офф)</option>
             <option value="knockout">На вылет</option>
             <option value="endless">Бессрочная игра (без очков и таблицы)</option>
+            <option value="tiebreak">Тай-брейк (распределение мест за один день)</option>
           </select>
           <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={inputStyle} required />
           {needsDuration && (
@@ -1195,12 +1198,12 @@ function EntriesPanel({ tournament, users, allTournaments }) {
             <button onClick={() => runAction(toggleActive)} style={{ ...ghostButtonStyle, textAlign: "left", fontSize: 12 }}>
               {e.active ? "Отключить" : "Подключить"}
             </button>
-            {tournament.type !== "knockout" && (
+            {tournament.type !== "knockout" && tournament.type !== "tiebreak" && (
               <button onClick={() => runAction(toggleHidden)} style={{ ...ghostButtonStyle, textAlign: "left", fontSize: 12 }}>
                 {e.hidden_from_standings ? "В таблице" : "Не в таблице"}
               </button>
             )}
-            {tournament.type !== "knockout" && e.active && (
+            {tournament.type !== "knockout" && tournament.type !== "tiebreak" && e.active && (
               <button onClick={() => runAction(handleResetToday)} style={{ ...ghostButtonStyle, textAlign: "left", fontSize: 12 }}>
                 Сбросить сегодня
               </button>
@@ -1222,7 +1225,7 @@ function EntriesPanel({ tournament, users, allTournaments }) {
           ) : (
             <span style={{ opacity: 0.7 }}>Отключён</span>
           )}
-          {tournament.type !== "knockout" && e.hidden_from_standings && (
+          {tournament.type !== "knockout" && tournament.type !== "tiebreak" && e.hidden_from_standings && (
             <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>
               не в таблице
             </span>
@@ -1263,7 +1266,7 @@ function EntriesPanel({ tournament, users, allTournaments }) {
           ))}
         </select>
         <input placeholder="Позывной для этого розыгрыша" value={callsign} onChange={(e) => setCallsign(e.target.value)} style={inputStyle} required />
-        {tournament.type !== "knockout" && (
+        {tournament.type !== "knockout" && tournament.type !== "tiebreak" && (
           <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, opacity: 0.8, cursor: "pointer" }}>
             <input type="checkbox" checked={hideFromStandings} onChange={(e) => setHideFromStandings(e.target.checked)} />
             не учитывать в таблице
@@ -1379,7 +1382,7 @@ function EntriesPanel({ tournament, users, allTournaments }) {
                       ) : (
                         "Отключён"
                       )}
-                      {tournament.type !== "knockout" && e.hidden_from_standings && (
+                      {tournament.type !== "knockout" && tournament.type !== "tiebreak" && e.hidden_from_standings && (
                         <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>
                           не в таблице
                         </span>
@@ -1393,12 +1396,12 @@ function EntriesPanel({ tournament, users, allTournaments }) {
                         <button onClick={() => toggleActive(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
                           {e.active ? "Отключить" : "Подключить"}
                         </button>
-                        {tournament.type !== "knockout" && (
+                        {tournament.type !== "knockout" && tournament.type !== "tiebreak" && (
                           <button onClick={() => toggleHidden(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
                             {e.hidden_from_standings ? "В таблице" : "Не в таблице"}
                           </button>
                         )}
-                        {tournament.type !== "knockout" && e.active && (
+                        {tournament.type !== "knockout" && tournament.type !== "tiebreak" && e.active && (
                           <button onClick={() => handleResetToday(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
                             Сбросить сегодня
                           </button>
@@ -1635,6 +1638,172 @@ function WordHistoryPanel({ tournament }) {
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+function TiebreakWordsPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
+  const [queue, setQueue] = useState(null);
+  const [overrides, setOverrides] = useState({});
+  const [error, setError] = useState("");
+
+  async function refresh() {
+    const id = tournament.id;
+    try {
+      const data = await api(`/api/admin/tournaments/${id}/tiebreak-words`);
+      if (tournamentIdRef.current === id) setQueue(data);
+    } catch (e) {
+      if (tournamentIdRef.current === id) setError(e.message);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id]);
+
+  async function handleReroll(dayNumber) {
+    setError("");
+    try {
+      await api(`/api/admin/tournaments/${tournament.id}/tiebreak-words/${dayNumber}/reroll`, { method: "POST" });
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function handleSetWord(dayNumber) {
+    setError("");
+    try {
+      await api(`/api/admin/tournaments/${tournament.id}/tiebreak-words/${dayNumber}`, {
+        method: "POST",
+        body: JSON.stringify({ word: (overrides[dayNumber] || "").trim().toLowerCase() }),
+      });
+      setOverrides((prev) => ({ ...prev, [dayNumber]: "" }));
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  if (!queue) return null;
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ margin: 0 }}>Первые слова тай-брейка</h3>
+        <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+      </div>
+      <p style={{ fontSize: 13, opacity: 0.7 }}>
+        Слово раунда 1 действует сразу после старта, остальные пригодятся только
+        если часть участников сравняется по попыткам и понадобится продолжение.
+        Уже наступивший раунд менять нельзя.
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {queue.map((slot) => (
+          <div key={slot.day_number} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ width: 70, opacity: 0.7, fontSize: 13 }}>Раунд {slot.day_number}</span>
+            <span style={{ fontSize: 16, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, width: 110 }}>{slot.word}</span>
+            {slot.editable ? (
+              <>
+                <button onClick={() => handleReroll(slot.day_number)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                  Предложить другое
+                </button>
+                <input
+                  placeholder="Своё слово"
+                  value={overrides[slot.day_number] || ""}
+                  onChange={(e) => setOverrides((prev) => ({ ...prev, [slot.day_number]: e.target.value }))}
+                  style={{ ...inputStyle, fontSize: 12, width: 100 }}
+                  maxLength={5}
+                />
+                <button
+                  onClick={() => handleSetWord(slot.day_number)}
+                  disabled={(overrides[slot.day_number] || "").trim().length !== 5}
+                  style={{ ...ghostButtonStyle, fontSize: 12 }}
+                >
+                  Заменить
+                </button>
+              </>
+            ) : (
+              <span style={{ fontSize: 12, opacity: 0.5 }}>уже наступил</span>
+            )}
+          </div>
+        ))}
+      </div>
+      {error && <div style={{ color: "#e5484d", marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
+function TiebreakResultsPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+
+  async function refresh() {
+    const id = tournament.id;
+    try {
+      const res = await api(`/api/admin/tournaments/${id}/tiebreak-results`);
+      if (tournamentIdRef.current === id) setData(res);
+    } catch (e) {
+      if (tournamentIdRef.current === id) setError(e.message);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id]);
+
+  if (!data) return null;
+
+  function placeRank(place) {
+    if (!place) return Infinity;
+    return Number(place.split("-")[0]);
+  }
+  const rows = [...data.rows].sort((a, b) => placeRank(a.place) - placeRank(b.place) || a.callsign.localeCompare(b.callsign));
+
+  function cellText(cell) {
+    if (!cell) return "-";
+    return cell.solved ? `${cell.attempts_used}/6` : "X/6";
+  }
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ margin: 0 }}>Результаты тай-брейка</h3>
+        <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+      </div>
+      {data.rounds.length === 0 ? (
+        <p style={{ opacity: 0.7, fontSize: 13, marginTop: 8 }}>Розыгрыш ещё не начался.</p>
+      ) : (
+        <div style={{ overflowX: "auto", marginTop: 8 }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
+            <thead>
+              <tr style={{ textAlign: "left", opacity: 0.7 }}>
+                <th style={thStyle}>Место</th>
+                <th style={thStyle}>Позывной</th>
+                {data.rounds.map((r) => (
+                  <th key={r.id} style={thStyle} title={r.word}>Раунд {r.round_number}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.entry_id} style={{ borderTop: "1px solid #2a2a2c", opacity: row.active ? 1 : 0.5 }}>
+                  <td style={{ ...tdStyle, fontWeight: row.place && !row.place.includes("-") ? 700 : 400 }}>{row.place || "-"}</td>
+                  <td style={tdStyle}>{row.callsign}</td>
+                  {row.cells.map((cell, i) => (
+                    <td key={i} style={tdStyle}>{cellText(cell)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {error && <div style={{ color: "#e5484d", marginTop: 8 }}>{error}</div>}
     </div>
   );
 }

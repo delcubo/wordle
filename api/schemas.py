@@ -200,6 +200,43 @@ class ConfirmWordRequest(BaseModel):
     override_word: str | None = None  # None = согласиться с предложенным
 
 
+# ---------- Tiebreak (розыгрыш типа tiebreak целиком) ----------
+
+class TiebreakWordQueueEntry(BaseModel):
+    day_number: int
+    word: str
+    editable: bool
+
+
+class SetTiebreakWordRequest(BaseModel):
+    word: str
+
+
+class TiebreakResultCell(BaseModel):
+    solved: bool
+    attempts_used: int
+
+
+class TiebreakResultRound(BaseModel):
+    id: int
+    round_number: int
+    word: str
+    completed: bool
+
+
+class TiebreakResultRow(BaseModel):
+    entry_id: int
+    callsign: str
+    active: bool
+    place: str | None
+    cells: list[TiebreakResultCell | None]
+
+
+class TiebreakResultsOut(BaseModel):
+    rounds: list[TiebreakResultRound]
+    rows: list[TiebreakResultRow]
+
+
 # ---------- Player-facing game ----------
 
 class MyTournamentOut(BaseModel):
@@ -227,6 +264,9 @@ class TodayWordStatus(BaseModel):
     hashtag: str | None = None
     next_word_at: str | None = None  # ISO-момент публикации следующего слова — для попапа-обратного отсчёта
     paused: bool = False
+    is_tiebreak: bool = False  # только для розыгрыша типа tiebreak — переключает текст ожидания/финала на фронте
+    tiebreak_started: bool = False  # розыгрыш типа tiebreak уже стартовал (хотя бы корневой раунд создан)
+    tiebreak_place: str | None = None  # текущее/итоговое место — "2" или диапазон "2-4", пока группа ещё играет
 
 
 class BracketTodayStatus(BaseModel):

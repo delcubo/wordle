@@ -53,6 +53,20 @@ async def _entry_bracket_round(session: AsyncSession, tournament_id: int, entry_
     return max(m.round_number for m in started)
 
 
+async def _entry_round_number(session: AsyncSession, tournament, entry_id: int) -> int | None:
+    """round_number для render_tournament_title — для tiebreak это номер дня
+    активного раунда участника (см. api/tiebreak.py), для остальных типов —
+    его собственная стадия сетки (см. _entry_bracket_round). None, если у
+    участника сейчас нет ни активного раунда, ни начавшейся пары сетки."""
+    if tournament.type == TournamentType.tiebreak:
+        round_ = await crud.get_active_tiebreak_round_for_entry(session, tournament.id, entry_id)
+        if round_ is None:
+            return None
+        daily_word = await crud.get_daily_word_by_id(session, round_.daily_word_id)
+        return daily_word.day_number if daily_word else None
+    return await _entry_bracket_round(session, tournament.id, entry_id)
+
+
 @router.get("/my-tournaments", response_model=list[MyTournamentOut])
 async def my_tournaments(token: str, session: AsyncSession = Depends(get_session)):
     """Список розыгрышей, в которых участвует владелец ссылки — экран 'мои розыгрыши'."""
@@ -68,7 +82,7 @@ async def my_tournaments(token: str, session: AsyncSession = Depends(get_session
         # (уже наступившая) стадия ИМЕННО ЭТОГО участника, а не самая дальняя по
         # сетке в целом — иначе в списке розыгрышей могла показаться стадия,
         # которая для этого игрока ещё не началась (см. пункт бэклога).
-        round_number = await _entry_bracket_round(session, tournament.id, entry.id)
+        round_number = await _entry_round_number(session, tournament, entry.id)
         result.append(
             MyTournamentOut(
                 tournament_id=tournament.id,
@@ -90,7 +104,9 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
     endless не имеет duration_days, но, в отличие от knockout, слово дня у него
     есть всегда, без верхней границы. Пока розыгрыш в статусе tiebreak, слово
     дня заменяется словом активного раунда тай-брейка (если участник в него
-    попал) — обычный цикл по duration_days в этот момент уже закончился.
+    попал) — обычный цикл по duration_days в этот момент уже закончился. Тип
+    розыгрыша tiebreak (целиком, не только фаза championship) вообще не
+    использует duration_days — там всегда только раунды, с самого начала.
     """
     user = await _authenticate_user(session, token)
     entry = await crud.get_entry(session, tournament_id, user.id)
@@ -110,6 +126,16 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
         # у knockout нет слова дня вне сетки вообще — играют только через
         # /game/bracket/today и /game/bracket/guess, с первого дня
         return entry, tournament, None
+
+    if tournament.type == TournamentType.tiebreak:
+        # весь розыгрыш — раунды тай-брейка с самого начала (см. api/tiebreak.py),
+        # обычного слова дня по duration_days тут вообще не бывает
+        await tiebreak.ensure_started(session, tournament)
+        round_ = await crud.get_active_tiebreak_round_for_entry(session, tournament.id, entry.id)
+        if round_ is None:
+            return entry, tournament, None  # ещё не стартовал / ждёт итогов раунда / уже получил место
+        daily_word = await crud.get_daily_word_by_id(session, round_.daily_word_id)
+        return entry, tournament, daily_word
 
     if tournament.status == TournamentStatus.tiebreak:
         round_ = await crud.get_active_tiebreak_round_for_entry(session, tournament.id, entry.id)
@@ -131,14 +157,23 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
 @router.get("/today", response_model=TodayWordStatus)
 async def get_today_status(token: str, tournament_id: int, session: AsyncSession = Depends(get_session)):
     entry, tournament, daily_word = await _resolve_context(session, token, tournament_id)
-    round_number = await _entry_bracket_round(session, tournament_id, entry.id)
+    round_number = await _entry_round_number(session, tournament, entry.id)
     tournament_title = await render_tournament_title(session, tournament, round_number)
     is_endless = tournament.type == TournamentType.endless
+    is_tiebreak = tournament.type == TournamentType.tiebreak
+
+    tiebreak_started = False
+    tiebreak_place = None
+    if is_tiebreak:
+        tiebreak_started = bool(await crud.list_root_tiebreak_rounds(session, tournament.id))
+        if tiebreak_started:
+            tiebreak_place = await tiebreak.get_entry_place(session, tournament, entry.id)
 
     if daily_word is None:
         return TodayWordStatus(
             has_word_today=False, already_played=False, callsign=entry.callsign, tournament_title=tournament_title,
             base_title=tournament.title, is_endless=is_endless, hashtag=tournament.hashtag, paused=tournament.paused,
+            is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=tiebreak_place,
         )
 
     attempt = await crud.get_attempt(session, entry.id, daily_word.id)
@@ -147,6 +182,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             has_word_today=True, already_played=False, day_number=daily_word.day_number, max_attempts=MAX_ATTEMPTS,
             callsign=entry.callsign, tournament_title=tournament_title, base_title=tournament.title,
             is_endless=is_endless, hashtag=tournament.hashtag,
+            is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=tiebreak_place,
         )
 
     already_played = attempt.solved or attempt.attempts_used >= MAX_ATTEMPTS
@@ -168,7 +204,8 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         base_title=tournament.title,
         is_endless=is_endless,
         hashtag=tournament.hashtag,
-        next_word_at=next_publish_at().isoformat() if already_played else None,
+        next_word_at=next_publish_at().isoformat() if already_played and not is_tiebreak else None,
+        is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=tiebreak_place,
     )
 
 
@@ -203,7 +240,7 @@ async def submit_guess(payload: GuessRequest, session: AsyncSession = Depends(ge
 
     await crud.save_guess(session, attempt, guess, solved, game_over, points)
 
-    if game_over and tournament.status == TournamentStatus.tiebreak:
+    if game_over and (tournament.status == TournamentStatus.tiebreak or tournament.type == TournamentType.tiebreak):
         # как только все участники раунда доиграли — сразу разрешаем его, не дожидаясь
         # дедлайна, чтобы продолжение (при остаточной ничьей) стало доступно тут же
         await tiebreak.resolve_ready_rounds(session, tournament)

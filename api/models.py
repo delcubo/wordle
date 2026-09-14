@@ -24,6 +24,7 @@ class TournamentType(str, enum.Enum):
     knockout = "knockout"          # игра на вылет для 2^n игроков, сетка задаётся вручную
     championship = "championship"  # standard N дней + тай-брейк + плей-офф топ-2^n
     endless = "endless"            # бессрочная игра без очков и таблицы — только слово дня
+    tiebreak = "tiebreak"          # распределение мест за один день раундами по числу попыток (см. api/tiebreak.py)
 
 
 class TournamentStatus(str, enum.Enum):
@@ -91,6 +92,11 @@ class Tournament(Base):
     bracket_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # сколько основных раундов решает исход пары в сетке (по умолчанию 1)
     rounds_per_match: Mapped[int] = mapped_column(Integer, default=1)
+
+    # Только для tiebreak — ручные замены слов превью-очереди первых раундов
+    # (номер дня розыгрыша -> слово), пока сам раунд с этим номером ещё не
+    # наступил. См. api/crud.py::get_tiebreak_word_queue.
+    word_overrides: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     status: Mapped[TournamentStatus] = mapped_column(
         SAEnum(TournamentStatus), default=TournamentStatus.draft
@@ -290,11 +296,14 @@ class PlayoffGame(Base):
 
 class TiebreakRound(Base):
     """
-    Общий раунд тай-брейка для группы участников championship, полностью
-    совпавших и по очкам, и по числу пропусков (см. scoring.groups_needing_tiebreak)
-    — один DailyWord, доступный только участникам этой группы (см.
+    Общий раунд тай-брейка для группы участников, которых нужно распределить
+    по местам — один DailyWord, доступный только участникам этой группы (см.
     TiebreakParticipant); место внутри группы определяется числом попыток на
-    это слово (обычные Attempt, как и для любого другого дня).
+    это слово (обычные Attempt, как и для любого другого дня). Используется в
+    двух местах: (1) championship — только для участников, полностью совпавших
+    и по очкам, и по числу пропусков после основного этапа (см.
+    scoring.groups_needing_tiebreak); (2) розыгрыш типа tiebreak целиком — тут
+    корневая группа это сразу все участники розыгрыша (см. api/tiebreak.py).
 
     Если после раунда часть группы всё ещё равна, для этой подгруппы создаётся
     новый TiebreakRound с previous_round_id, указывающим на текущий, и

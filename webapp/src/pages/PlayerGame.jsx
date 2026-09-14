@@ -83,11 +83,17 @@ export default function PlayerGame() {
 
     if (!data.has_word_today) {
       setGameOver(true);
-      setMessage(
-        data.paused
-          ? "Розыгрыш временно приостановлен админом."
-          : "Слово дня сегодня недоступно — розыгрыш ещё не начался или уже завершён."
-      );
+      if (data.paused) {
+        setMessage("Розыгрыш временно приостановлен админом.");
+      } else if (data.is_tiebreak && !data.tiebreak_started) {
+        setMessage("Тай-брейк ещё не начался.");
+      } else if (data.is_tiebreak && data.tiebreak_place) {
+        setMessage(`Тай-брейк завершён — ваше место: ${data.tiebreak_place}.`);
+      } else if (data.is_tiebreak) {
+        setMessage("Раунд ещё разрешается — подождите немного.");
+      } else {
+        setMessage("Слово дня сегодня недоступно — розыгрыш ещё не начался или уже завершён.");
+      }
       setIsError(false);
       return;
     }
@@ -100,7 +106,11 @@ export default function PlayerGame() {
     setIsError(false);
 
     if (finished) {
-      setMessage(data.solved ? "Вы уже угадали слово сегодня!" : "Попытки на сегодня исчерпаны.");
+      setMessage(
+        data.is_tiebreak
+          ? (data.solved ? "Угадано! Ждём остальных участников раунда." : "Попытки исчерпаны. Ждём остальных участников раунда.")
+          : (data.solved ? "Вы уже угадали слово сегодня!" : "Попытки на сегодня исчерпаны.")
+      );
       setModal({
         title: data.tournament_title,
         callsign: data.callsign,
@@ -110,6 +120,7 @@ export default function PlayerGame() {
         grid: data.previous_results,
         answerWord: data.answer_word,
         countdownTarget: data.next_word_at,
+        message: data.is_tiebreak ? "Как только все доиграют раунд, места распределятся или откроется следующий раунд." : null,
         baseTitle: data.base_title,
         dayNumber: data.day_number,
         isEndless: data.is_endless,

@@ -29,6 +29,13 @@ async def render_tournament_title(
     session: AsyncSession, tournament: Tournament, round_number: int | None = None
 ) -> str:
     title = tournament.title
+
+    if tournament.type == TournamentType.tiebreak:
+        # У этого типа нет ни duration_days, ни стадий сетки — round_number тут
+        # раундовый номер дня активного раунда участника (см.
+        # api/routers/game.py::_entry_round_number), не календарный день.
+        return f"{title} · раунд {round_number}" if round_number else title
+
     bracket_phase = tournament.type == TournamentType.knockout or tournament.status in (
         TournamentStatus.tiebreak, TournamentStatus.playoff,
     )

@@ -17,6 +17,7 @@ from api.schemas import (
     DailyWordOut, ConfirmWordRequest,
     StandingsResponse, StandingsRowOut, DailyCell,
     TiebreakRoundOut, TiebreakParticipantOut, TiebreakStartResponse, TiebreakOverrideRequest,
+    TiebreakWordQueueEntry, SetTiebreakWordRequest, TiebreakResultsOut,
     PlayoffMatchOut, BracketRound1Request, MatchOverrideRequest, PlayoffWordQueueEntry, SetPlayoffWordRequest,
     DayResultOverrideRequest, DayResultOverrideResponse,
     ThemeOut, ThemeUpdateRequest,
@@ -241,13 +242,13 @@ async def create_tournament(
     if t_type == TournamentType.knockout and not payload.bracket_size:
         raise HTTPException(status_code=400, detail="Для розыгрыша на вылет нужно указать размер сетки")
 
-    no_duration_types = (TournamentType.knockout, TournamentType.endless)
+    no_duration_types = (TournamentType.knockout, TournamentType.endless, TournamentType.tiebreak)
     tournament = Tournament(
         title=payload.title,
         type=t_type,
         start_date=payload.start_date,
         duration_days=payload.duration_days if t_type not in no_duration_types else None,
-        scoring_rules=payload.scoring_rules if t_type != TournamentType.endless else None,
+        scoring_rules=payload.scoring_rules if t_type not in (TournamentType.endless, TournamentType.tiebreak) else None,
         skip_flag_symbol=payload.skip_flag_symbol,
         bracket_size=payload.bracket_size,
         rounds_per_match=payload.rounds_per_match,
@@ -529,12 +530,14 @@ async def get_upcoming_word(tournament_id: int, session: AsyncSession = Depends(
     """
     Слово на ближайший ещё не наступивший день — то, что админ может подтвердить
     или заменить. Работает и для endless (там просто нет верхней границы дней —
-    см. пункт бэклога), но не для knockout — там нет слова дня вне пар сетки.
+    см. пункт бэклога), но не для knockout — там нет слова дня вне пар сетки, и
+    не для tiebreak — там день не календарный, а раундовый (см. crud.get_tiebreak_word_queue),
+    и предсоздание "завтрашнего" слова тут сбило бы нумерацию дней раундов.
     """
     tournament = await crud.get_tournament(session, tournament_id)
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
-    if tournament.type == TournamentType.knockout:
+    if tournament.type in (TournamentType.knockout, TournamentType.tiebreak):
         raise HTTPException(status_code=400, detail="У этого типа розыгрыша нет ежедневного слова")
 
     current_day = day_number_for_date(tournament.start_date, today())
@@ -557,7 +560,7 @@ async def get_today_word(tournament_id: int, session: AsyncSession = Depends(get
     tournament = await crud.get_tournament(session, tournament_id)
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
-    if tournament.type == TournamentType.knockout:
+    if tournament.type in (TournamentType.knockout, TournamentType.tiebreak):
         raise HTTPException(status_code=400, detail="У этого типа розыгрыша нет слова дня")
 
     current_day = day_number_for_date(tournament.start_date, today())
@@ -746,6 +749,65 @@ async def override_tiebreak_round(
     rounds = await tiebreak.get_rounds_view(session, tournament.id)
     updated = next(r for r in rounds if r["id"] == round_.id)
     return _tiebreak_round_response(updated)
+
+
+# ---------- Тай-брейк (тип розыгрыша целиком) ----------
+
+async def _require_tiebreak_tournament(session: AsyncSession, tournament_id: int) -> Tournament:
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    if tournament.type != TournamentType.tiebreak:
+        raise HTTPException(status_code=400, detail="Этот розыгрыш не типа «тай-брейк»")
+    return tournament
+
+
+@router.get("/tournaments/{tournament_id}/tiebreak-words", response_model=list[TiebreakWordQueueEntry])
+async def get_tiebreak_words(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    tournament = await _require_tiebreak_tournament(session, tournament_id)
+    queue = await crud.get_tiebreak_word_queue(session, tournament)
+    return [TiebreakWordQueueEntry(**q) for q in queue]
+
+
+@router.post("/tournaments/{tournament_id}/tiebreak-words/{day_number}", response_model=TiebreakWordQueueEntry)
+async def set_tiebreak_word(
+    tournament_id: int, day_number: int, payload: SetTiebreakWordRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    tournament = await _require_tiebreak_tournament(session, tournament_id)
+    if await crud.get_daily_word_by_day(session, tournament_id, day_number) is not None:
+        raise HTTPException(status_code=400, detail="Этот раунд уже наступил — слово менять поздно")
+
+    already_used = await crud.get_all_used_words(session, tournament_id)
+    error = validate_manual_word(payload.word, already_used)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    word = canonical_word(payload.word)
+    await crud.set_tiebreak_word_override(session, tournament, day_number, word)
+    return TiebreakWordQueueEntry(day_number=day_number, word=word, editable=True)
+
+
+@router.post("/tournaments/{tournament_id}/tiebreak-words/{day_number}/reroll", response_model=TiebreakWordQueueEntry)
+async def reroll_tiebreak_word_slot(
+    tournament_id: int, day_number: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    tournament = await _require_tiebreak_tournament(session, tournament_id)
+    if await crud.get_daily_word_by_day(session, tournament_id, day_number) is not None:
+        raise HTTPException(status_code=400, detail="Этот раунд уже наступил — слово менять поздно")
+
+    word = await tiebreak.reroll_tiebreak_word(session, tournament, day_number)
+    return TiebreakWordQueueEntry(day_number=day_number, word=word, editable=True)
+
+
+@router.get("/tournaments/{tournament_id}/tiebreak-results", response_model=TiebreakResultsOut)
+async def get_tiebreak_results(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    tournament = await _require_tiebreak_tournament(session, tournament_id)
+    # тот же лениво-вычисляемый паттерн, что у get_tiebreak_state: заводит
+    # корневой раунд, если уже наступил день старта, и разрешает раунды с
+    # прошедшим дедлайном — прямо при просмотре, без фоновых задач
+    await tiebreak.ensure_started(session, tournament)
+    await tiebreak.resolve_ready_rounds(session, tournament)
+    return TiebreakResultsOut(**await tiebreak.build_results(session, tournament))
 
 
 # ---------- Сетка плей-офф ----------
