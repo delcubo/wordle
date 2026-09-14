@@ -260,6 +260,69 @@ async def add_all_users(session: AsyncSession, tournament: Tournament) -> int:
     return count
 
 
+async def transfer_entries(
+    session: AsyncSession, from_tournament: Tournament, to_tournament: Tournament, entry_ids: list[int]
+) -> list[dict]:
+    """
+    Массовый переброс выбранных участий из from_tournament в to_tournament —
+    см. пункт бэклога про переброску игроков. Каждый entry_id обрабатывается
+    независимо (best-effort): позывной переносится, если свободен в целевом
+    розыгрыше, иначе этот игрок пропускается (ничего не меняется ни в одном
+    из двух розыгрышей) с причиной в результате, остальные переносятся как
+    обычно. Три случая по игроку в целевом розыгрыше:
+      - не участвовал — создаётся новая запись с перенесённым позывным;
+      - есть неактивная запись — реактивируется, позывной перезаписывается
+        перенесённым (с проверкой на занятость);
+      - уже активен там — запись не трогается (позывной остаётся прежним),
+        только отключается в исходном розыгрыше.
+    В исходном розыгрыше участие отключается (active=False), история и очки
+    не удаляются — как при обычном ручном отключении.
+    """
+    results = []
+    for entry_id in entry_ids:
+        entry = await session.get(TournamentEntry, entry_id)
+        if entry is None or entry.tournament_id != from_tournament.id:
+            results.append({"entry_id": entry_id, "callsign": "", "ok": False, "message": "Участие не найдено"})
+            continue
+
+        callsign = entry.callsign
+        existing = await get_entry_including_inactive(session, to_tournament.id, entry.user_id)
+
+        if existing is not None and existing.active:
+            await set_entry_active(session, entry.id, False)
+            results.append({
+                "entry_id": entry.id, "callsign": existing.callsign, "ok": True,
+                "message": "Уже участвовал в целевом розыгрыше — позывной там не изменён",
+            })
+            continue
+
+        if existing is not None:
+            if callsign != existing.callsign and await callsign_taken(session, to_tournament.id, callsign):
+                results.append({
+                    "entry_id": entry.id, "callsign": callsign, "ok": False,
+                    "message": f"Позывной «{callsign}» уже занят в «{to_tournament.title}»",
+                })
+                continue
+            await edit_entry_callsign(session, existing.id, callsign)
+            await set_entry_hidden(session, existing.id, entry.hidden_from_standings)
+            await set_entry_active(session, existing.id, True)
+            await set_entry_active(session, entry.id, False)
+            results.append({"entry_id": entry.id, "callsign": callsign, "ok": True, "message": None})
+            continue
+
+        if await callsign_taken(session, to_tournament.id, callsign):
+            results.append({
+                "entry_id": entry.id, "callsign": callsign, "ok": False,
+                "message": f"Позывной «{callsign}» уже занят в «{to_tournament.title}»",
+            })
+            continue
+        await create_entry(session, to_tournament, entry.user_id, callsign, entry.hidden_from_standings)
+        await set_entry_active(session, entry.id, False)
+        results.append({"entry_id": entry.id, "callsign": callsign, "ok": True, "message": None})
+
+    return results
+
+
 async def set_entry_active(session: AsyncSession, entry_id: int, active: bool) -> TournamentEntry | None:
     entry = await session.get(TournamentEntry, entry_id)
     if entry is None:

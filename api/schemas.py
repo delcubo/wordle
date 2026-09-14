@@ -165,6 +165,24 @@ class EntryHiddenRequest(BaseModel):
     hidden_from_standings: bool
 
 
+# ---------- Переброс игроков между розыгрышами ----------
+
+class EntriesTransferRequest(BaseModel):
+    entry_ids: list[int]
+    to_tournament_id: int
+
+
+class EntryTransferResult(BaseModel):
+    entry_id: int
+    callsign: str
+    ok: bool
+    message: str | None = None  # причина отказа (ok=False) либо примечание при успехе (ok=True)
+
+
+class EntriesTransferResponse(BaseModel):
+    results: list[EntryTransferResult]
+
+
 # ---------- Daily word confirmation ----------
 
 class DailyWordOut(BaseModel):

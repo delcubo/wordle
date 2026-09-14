@@ -13,6 +13,7 @@ from api.schemas import (
     UserCreateRequest, UserOut, UserEditRequest, UserTournamentInfo, UserArchiveRequest,
     TournamentConfigRequest, TournamentOut, TournamentSettingsUpdateRequest, TournamentPauseRequest, TournamentArchiveRequest,
     EntryCreateRequest, EntryOut, EntryEditRequest, EntryActiveRequest, EntryHiddenRequest,
+    EntriesTransferRequest, EntriesTransferResponse,
     DailyWordOut, ConfirmWordRequest,
     StandingsResponse, StandingsRowOut, DailyCell,
     TiebreakRoundOut, TiebreakParticipantOut, TiebreakStartResponse, TiebreakOverrideRequest,
@@ -448,6 +449,30 @@ async def add_all_entries(
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
     await crud.add_all_users(session, tournament)
     return await crud.list_entries(session, tournament_id)
+
+
+@router.post("/tournaments/{tournament_id}/entries/transfer", response_model=EntriesTransferResponse)
+async def transfer_entries(
+    tournament_id: int, payload: EntriesTransferRequest, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
+):
+    """Массовый переброс выбранных игроков из этого розыгрыша в другой — см.
+    crud.transfer_entries. Best-effort: игрока с занятым в целевом розыгрыше
+    позывным просто пропускает (ничего для него не меняет), остальных
+    переносит как обычно — причины отказов возвращаются в ответе."""
+    from_tournament = await crud.get_tournament(session, tournament_id)
+    if from_tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    if payload.to_tournament_id == tournament_id:
+        raise HTTPException(status_code=400, detail="Целевой розыгрыш совпадает с исходным")
+    to_tournament = await crud.get_tournament(session, payload.to_tournament_id)
+    if to_tournament is None:
+        raise HTTPException(status_code=404, detail="Целевой розыгрыш не найден")
+    if to_tournament.archived:
+        raise HTTPException(status_code=400, detail="Целевой розыгрыш в архиве")
+    if not payload.entry_ids:
+        raise HTTPException(status_code=400, detail="Не выбрано ни одного игрока")
+    results = await crud.transfer_entries(session, from_tournament, to_tournament, payload.entry_ids)
+    return EntriesTransferResponse(results=results)
 
 
 @router.patch("/entries/{entry_id}/active", response_model=EntryOut)

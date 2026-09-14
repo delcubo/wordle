@@ -117,7 +117,7 @@ export default function AdminDashboard() {
           <div style={isMobile ? {} : { flex: "2 1 500px" }}>
             {selected ? (
               <>
-                <EntriesPanel tournament={selected} users={users} />
+                <EntriesPanel tournament={selected} users={users} allTournaments={tournaments} />
                 {selected.type !== "knockout" && <TodayWordPanel tournament={selected} />}
                 <WordConfirmPanel tournament={selected} />
                 {selected.type !== "knockout" && <WordHistoryPanel tournament={selected} />}
@@ -925,7 +925,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   );
 }
 
-function EntriesPanel({ tournament, users }) {
+function EntriesPanel({ tournament, users, allTournaments }) {
   const isMobile = useIsMobile();
   const [entries, setEntries] = useState([]);
   const [userId, setUserId] = useState("");
@@ -934,6 +934,10 @@ function EntriesPanel({ tournament, users }) {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [openMenuId, setOpenMenuId] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [transferTo, setTransferTo] = useState("");
+  const [transferring, setTransferring] = useState(false);
+  const [transferMsg, setTransferMsg] = useState(null);
 
   async function refresh() {
     setEntries(await api(`/api/admin/tournaments/${tournament.id}/entries`));
@@ -941,6 +945,8 @@ function EntriesPanel({ tournament, users }) {
 
   useEffect(() => {
     refresh();
+    setSelectedIds(new Set());
+    setTransferMsg(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tournament.id]);
 
@@ -948,6 +954,9 @@ function EntriesPanel({ tournament, users }) {
   const availableUsers = users.filter((u) => !connectedUserIds.has(u.id) && !u.archived);
   const activeCount = entries.filter((e) => e.active).length;
   const inactiveCount = entries.length - activeCount;
+  // Другие неархивные розыгрыши — только в них есть смысл перебрасывать
+  // участников (см. пункт бэклога про переброску между розыгрышами).
+  const transferTargets = allTournaments.filter((t) => t.id !== tournament.id && !t.archived);
 
   const query = search.trim().toLowerCase();
   const filteredEntries = entries.filter((e) => {
@@ -955,6 +964,60 @@ function EntriesPanel({ tournament, users }) {
     const u = users.find((x) => x.id === e.user_id);
     return e.callsign.toLowerCase().includes(query) || (u?.admin_note || "").toLowerCase().includes(query);
   });
+  const selectableVisible = filteredEntries.filter((e) => e.active);
+  const allVisibleSelected = selectableVisible.length > 0 && selectableVisible.every((e) => selectedIds.has(e.id));
+
+  function toggleSelect(entryId) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(entryId)) next.delete(entryId);
+      else next.add(entryId);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedIds((prev) => {
+      if (allVisibleSelected) {
+        const next = new Set(prev);
+        selectableVisible.forEach((e) => next.delete(e.id));
+        return next;
+      }
+      const next = new Set(prev);
+      selectableVisible.forEach((e) => next.add(e.id));
+      return next;
+    });
+  }
+
+  async function handleTransfer() {
+    const target = transferTargets.find((t) => t.id === Number(transferTo));
+    if (!target) return;
+    if (!window.confirm(`Перебросить выбранных игроков (${selectedIds.size}) в «${target.title}»? В «${tournament.title}» они будут отключены (статистика останется).`)) {
+      return;
+    }
+    setTransferring(true);
+    setTransferMsg(null);
+    try {
+      const res = await api(`/api/admin/tournaments/${tournament.id}/entries/transfer`, {
+        method: "POST",
+        body: JSON.stringify({ entry_ids: Array.from(selectedIds), to_tournament_id: target.id }),
+      });
+      const failed = res.results.filter((r) => !r.ok);
+      const okCount = res.results.length - failed.length;
+      setTransferMsg(
+        failed.length === 0
+          ? `Перенесено: ${okCount} из ${res.results.length}.`
+          : `Перенесено: ${okCount} из ${res.results.length}. Не удалось: ${failed.map((f) => `«${f.callsign || "?"}» (${f.message})`).join(", ")}`
+      );
+      setSelectedIds(new Set());
+      setTransferTo("");
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setTransferring(false);
+    }
+  }
 
   async function handleAdd(e) {
     e.preventDefault();
@@ -1033,9 +1096,19 @@ function EntriesPanel({ tournament, users }) {
     return (
       <div key={e.id} style={{ background: "#242426", borderRadius: 10, padding: 12, marginBottom: 8, opacity: e.active ? 1 : 0.5 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 500 }}>{e.callsign}</div>
-            <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>{u?.admin_note || `Игрок #${e.user_id}`}</div>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+            {e.active && transferTargets.length > 0 && (
+              <input
+                type="checkbox"
+                checked={selectedIds.has(e.id)}
+                onChange={() => toggleSelect(e.id)}
+                style={{ marginTop: 3 }}
+              />
+            )}
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 500 }}>{e.callsign}</div>
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>{u?.admin_note || `Игрок #${e.user_id}`}</div>
+            </div>
           </div>
           <button
             onClick={() => setOpenMenuId(isMenuOpen ? null : e.id)}
@@ -1128,6 +1201,12 @@ function EntriesPanel({ tournament, users }) {
         <button type="submit" style={buttonStyle}>Подключить</button>
       </form>
       {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
+      {transferMsg && (
+        <div style={{ fontSize: 13, marginBottom: 8, background: "#242426", borderRadius: 6, padding: "6px 10px" }}>
+          {transferMsg}
+          <button onClick={() => setTransferMsg(null)} style={{ ...ghostButtonStyle, fontSize: 11, marginLeft: 8, padding: "1px 6px" }}>×</button>
+        </div>
+      )}
 
       <input
         placeholder="🔎 Поиск по позывному или игроку..."
@@ -1136,6 +1215,24 @@ function EntriesPanel({ tournament, users }) {
         style={{ ...inputStyle, width: "100%", marginBottom: 8, boxSizing: "border-box" }}
       />
 
+      {selectedIds.size > 0 && transferTargets.length > 0 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8, background: "#242426", borderRadius: 6, padding: 8 }}>
+          <span style={{ fontSize: 13 }}>Выбрано: {selectedIds.size}</span>
+          <select value={transferTo} onChange={(e) => setTransferTo(e.target.value)} style={{ ...inputStyle, fontSize: 13 }}>
+            <option value="" disabled>Перебросить в...</option>
+            {transferTargets.map((t) => (
+              <option key={t.id} value={t.id}>{t.title}</option>
+            ))}
+          </select>
+          <button onClick={handleTransfer} disabled={!transferTo || transferring} style={{ ...buttonStyle, fontSize: 12, opacity: !transferTo || transferring ? 0.6 : 1 }}>
+            {transferring ? "Переброс..." : "Перебросить"}
+          </button>
+          <button onClick={() => setSelectedIds(new Set())} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+            Отменить выбор
+          </button>
+        </div>
+      )}
+
       <div style={{ maxHeight: 360, overflowY: "auto" }}>
         {isMobile ? (
           filteredEntries.map(renderCard)
@@ -1143,6 +1240,13 @@ function EntriesPanel({ tournament, users }) {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ textAlign: "left", opacity: 0.7, fontSize: 13 }}>
+                {transferTargets.length > 0 && (
+                  <th style={thStyle}>
+                    {selectableVisible.length > 0 && (
+                      <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAllVisible} />
+                    )}
+                  </th>
+                )}
                 <th style={thStyle}>Позывной</th>
                 <th style={thStyle}>Игрок</th>
                 <th style={thStyle}>Статус</th>
@@ -1154,6 +1258,13 @@ function EntriesPanel({ tournament, users }) {
                 const u = users.find((x) => x.id === e.user_id);
                 return (
                   <tr key={e.id} style={{ borderTop: "1px solid #2a2a2c", opacity: e.active ? 1 : 0.5 }}>
+                    {transferTargets.length > 0 && (
+                      <td style={tdStyle}>
+                        {e.active && (
+                          <input type="checkbox" checked={selectedIds.has(e.id)} onChange={() => toggleSelect(e.id)} />
+                        )}
+                      </td>
+                    )}
                     <td style={tdStyle}>{e.callsign}</td>
                     <td style={{ ...tdStyle, opacity: 0.7 }}>{u?.admin_note || `Игрок #${e.user_id}`}</td>
                     <td style={tdStyle}>
