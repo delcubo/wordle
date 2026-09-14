@@ -110,6 +110,9 @@ export default function PlayerGame() {
         grid: data.previous_results,
         answerWord: data.answer_word,
         countdownTarget: data.next_word_at,
+        baseTitle: data.base_title,
+        dayNumber: data.day_number,
+        isEndless: data.is_endless,
       });
     } else {
       setMessage("");
@@ -388,6 +391,9 @@ export default function PlayerGame() {
           message={modal.message}
           countdownTarget={modal.countdownTarget}
           gameEnded={modal.gameEnded}
+          baseTitle={modal.baseTitle}
+          dayNumber={modal.dayNumber}
+          isEndless={modal.isEndless}
           onClose={() => setModal(null)}
         />
       )}

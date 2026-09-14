@@ -204,6 +204,8 @@ class TodayWordStatus(BaseModel):
     max_attempts: int = 6
     callsign: str | None = None
     tournament_title: str | None = None
+    base_title: str | None = None  # название розыгрыша без "#деньN"/стадии — для формата копируемого отчёта в бессрочном режиме
+    is_endless: bool = False
     hashtag: str | None = None
     next_word_at: str | None = None  # ISO-момент публикации следующего слова — для попапа-обратного отсчёта
     paused: bool = False

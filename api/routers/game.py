@@ -133,18 +133,20 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
     entry, tournament, daily_word = await _resolve_context(session, token, tournament_id)
     round_number = await _entry_bracket_round(session, tournament_id, entry.id)
     tournament_title = await render_tournament_title(session, tournament, round_number)
+    is_endless = tournament.type == TournamentType.endless
 
     if daily_word is None:
         return TodayWordStatus(
             has_word_today=False, already_played=False, callsign=entry.callsign, tournament_title=tournament_title,
-            hashtag=tournament.hashtag, paused=tournament.paused,
+            base_title=tournament.title, is_endless=is_endless, hashtag=tournament.hashtag, paused=tournament.paused,
         )
 
     attempt = await crud.get_attempt(session, entry.id, daily_word.id)
     if attempt is None:
         return TodayWordStatus(
             has_word_today=True, already_played=False, day_number=daily_word.day_number, max_attempts=MAX_ATTEMPTS,
-            callsign=entry.callsign, tournament_title=tournament_title, hashtag=tournament.hashtag,
+            callsign=entry.callsign, tournament_title=tournament_title, base_title=tournament.title,
+            is_endless=is_endless, hashtag=tournament.hashtag,
         )
 
     already_played = attempt.solved or attempt.attempts_used >= MAX_ATTEMPTS
@@ -163,6 +165,8 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         max_attempts=MAX_ATTEMPTS,
         callsign=entry.callsign,
         tournament_title=tournament_title,
+        base_title=tournament.title,
+        is_endless=is_endless,
         hashtag=tournament.hashtag,
         next_word_at=next_publish_at().isoformat() if already_played else None,
     )

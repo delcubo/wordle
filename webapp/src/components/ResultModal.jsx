@@ -42,10 +42,13 @@ function Countdown({ target }) {
  *    показывается тикающий обратный отсчёт (как на реальном Wordle)
  *  - gameEnded: розыгрыш для этого игрока окончен насовсем (проигрыш в сетке
  *    на вылет) — вместо отсчёта показывается "Игра окончена"
+ *  - baseTitle, dayNumber, isEndless: только для копируемого текста в
+ *    бессрочном режиме — см. handleCopy, свой формат отчёта по этому шаблону
  *  - onClose
  */
 export default function ResultModal({
-  title, callsign, hashtag, attemptsUsed, solved, grid, answerWord, message, countdownTarget, gameEnded, onClose,
+  title, callsign, hashtag, attemptsUsed, solved, grid, answerWord, message, countdownTarget, gameEnded,
+  baseTitle, dayNumber, isEndless, onClose,
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -53,10 +56,19 @@ export default function ResultModal({
 
   async function handleCopy() {
     const emojiGrid = grid.map((row) => row.map((s) => EMOJI[s] || "⬜").join("")).join("\n");
-    const lines = [title];
-    if (callsign) lines.push(`Игрок: ${callsign}`);
-    lines.push(`Попытки: ${attemptsLabel}`);
-    lines.push("", emojiGrid);
+    let lines;
+    if (isEndless && baseTitle) {
+      // Отдельный формат отчёта для бессрочного режима — см. пункт бэклога.
+      lines = [`▪️ ${baseTitle.toUpperCase()} ▪️`];
+      const meta = [callsign, dayNumber != null ? `#день${dayNumber}` : null, attemptsLabel].filter(Boolean);
+      lines.push(`🧠 ${meta.join(" · ")}`);
+      lines.push("", emojiGrid);
+    } else {
+      lines = [title];
+      if (callsign) lines.push(`Игрок: ${callsign}`);
+      lines.push(`Попытки: ${attemptsLabel}`);
+      lines.push("", emojiGrid);
+    }
     if (hashtag) lines.push("", hashtag);
     try {
       await navigator.clipboard.writeText(lines.join("\n"));
