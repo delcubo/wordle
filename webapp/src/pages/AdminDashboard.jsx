@@ -13,6 +13,16 @@ function useIsMobile(breakpoint = 640) {
   return isMobile;
 }
 
+// Всегда актуальное значение для отбрасывания устаревших ответов — если
+// админ успел переключиться на другой розыгрыш/матч, пока запрос летал,
+// применять его результат уже нельзя (иначе на экране повиснут данные не
+// того розыгрыша под правильным заголовком). См. refresh() в панелях ниже.
+function useLatest(value) {
+  const ref = useRef(value);
+  ref.current = value;
+  return ref;
+}
+
 const DEFAULT_SCORING = { "1": 10, "2": 5, "3": 4, "4": 3, "5": 2, "6": 1 };
 const TYPE_LABEL = { standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат", endless: "Бессрочная игра" };
 const STATUS_LABEL = { draft: "черновик", active: "идёт", tiebreak: "тай-брейк", playoff: "плей-офф", finished: "завершён" };
@@ -927,6 +937,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
 
 function EntriesPanel({ tournament, users, allTournaments }) {
   const isMobile = useIsMobile();
+  const tournamentIdRef = useLatest(tournament.id);
   const [entries, setEntries] = useState([]);
   const [userId, setUserId] = useState("");
   const [callsign, setCallsign] = useState("");
@@ -940,7 +951,9 @@ function EntriesPanel({ tournament, users, allTournaments }) {
   const [transferMsg, setTransferMsg] = useState(null);
 
   async function refresh() {
-    setEntries(await api(`/api/admin/tournaments/${tournament.id}/entries`));
+    const id = tournament.id;
+    const data = await api(`/api/admin/tournaments/${id}/entries`);
+    if (tournamentIdRef.current === id) setEntries(data);
   }
 
   useEffect(() => {
@@ -1320,14 +1333,17 @@ function EntriesPanel({ tournament, users, allTournaments }) {
 }
 
 function TodayWordPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
   const [word, setWord] = useState(null);
   const [notApplicable, setNotApplicable] = useState(false);
   const [excluded, setExcluded] = useState(false);
   const [yesterday, setYesterday] = useState(null);
 
   async function refresh() {
+    const id = tournament.id;
     try {
-      const data = await api(`/api/admin/tournaments/${tournament.id}/words/today`);
+      const data = await api(`/api/admin/tournaments/${id}/words/today`);
+      if (tournamentIdRef.current !== id) return;
       setWord(data);
       setExcluded(false);
       setNotApplicable(false);
@@ -1335,13 +1351,14 @@ function TodayWordPanel({ tournament }) {
       // у неё нет фиксированного диапазона дней, чтобы держать это в истории
       // "по умолчанию" (см. пункт бэклога: вчера/сегодня/завтра).
       if (tournament.type === "endless" && data.day_number > 1) {
-        const history = await api(`/api/admin/tournaments/${tournament.id}/words`);
+        const history = await api(`/api/admin/tournaments/${id}/words`);
+        if (tournamentIdRef.current !== id) return;
         setYesterday(history.find((w) => w.day_number === data.day_number - 1) || null);
       } else {
         setYesterday(null);
       }
     } catch (e) {
-      setNotApplicable(true);
+      if (tournamentIdRef.current === id) setNotApplicable(true);
     }
   }
 
@@ -1384,20 +1401,24 @@ function TodayWordPanel({ tournament }) {
 }
 
 function WordConfirmPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
   const [word, setWord] = useState(null);
   const [override, setOverride] = useState("");
   const [error, setError] = useState("");
   const [notApplicable, setNotApplicable] = useState(false);
 
   async function refresh() {
+    const id = tournament.id;
     setError("");
     setNotApplicable(false);
     try {
-      const data = await api(`/api/admin/tournaments/${tournament.id}/words/upcoming`);
-      setWord(data);
+      const data = await api(`/api/admin/tournaments/${id}/words/upcoming`);
+      if (tournamentIdRef.current === id) setWord(data);
     } catch (e) {
-      setNotApplicable(true);
-      setError(e.message);
+      if (tournamentIdRef.current === id) {
+        setNotApplicable(true);
+        setError(e.message);
+      }
     }
   }
 
@@ -1475,11 +1496,14 @@ function WordConfirmPanel({ tournament }) {
 }
 
 function WordHistoryPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
   const [words, setWords] = useState(null);
   const [open, setOpen] = useState(false);
 
   async function refresh() {
-    setWords(await api(`/api/admin/tournaments/${tournament.id}/words`));
+    const id = tournament.id;
+    const data = await api(`/api/admin/tournaments/${id}/words`);
+    if (tournamentIdRef.current === id) setWords(data);
   }
 
   useEffect(() => {
@@ -1529,6 +1553,7 @@ function WordHistoryPanel({ tournament }) {
 }
 
 function StandingsPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
   const [standings, setStandings] = useState(null);
   const [editing, setEditing] = useState(null); // {participantId, day} | null
   const [form, setForm] = useState({ attempts_used: 1, solved: true, note: "" });
@@ -1649,7 +1674,9 @@ function StandingsPanel({ tournament }) {
   }
 
   async function refresh() {
-    setStandings(await api(`/api/admin/tournaments/${tournament.id}/standings`));
+    const id = tournament.id;
+    const data = await api(`/api/admin/tournaments/${id}/standings`);
+    if (tournamentIdRef.current === id) setStandings(data);
   }
 
   useEffect(() => {
@@ -1792,6 +1819,7 @@ function StandingsPanel({ tournament }) {
 }
 
 function TiebreakPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
   const [rounds, setRounds] = useState(null);
   const [error, setError] = useState("");
   const [overridingRoundId, setOverridingRoundId] = useState(null);
@@ -1799,11 +1827,15 @@ function TiebreakPanel({ tournament }) {
   const [orderNote, setOrderNote] = useState("");
 
   async function refresh() {
+    const id = tournament.id;
     try {
-      setRounds(await api(`/api/admin/tournaments/${tournament.id}/tiebreak`));
-      setError("");
+      const data = await api(`/api/admin/tournaments/${id}/tiebreak`);
+      if (tournamentIdRef.current === id) {
+        setRounds(data);
+        setError("");
+      }
     } catch (e) {
-      setError(e.message);
+      if (tournamentIdRef.current === id) setError(e.message);
     }
   }
 
@@ -1931,17 +1963,22 @@ function formatAttempts(attemptsUsed, solved) {
 }
 
 function MatchWordQueue({ matchId }) {
+  const matchIdRef = useLatest(matchId);
   const [queue, setQueue] = useState(null);
   const [editingNum, setEditingNum] = useState(null);
   const [wordForm, setWordForm] = useState("");
   const [error, setError] = useState("");
 
   async function refresh() {
+    const id = matchId;
     try {
-      setQueue(await api(`/api/admin/bracket/matches/${matchId}/words`));
-      setError("");
+      const data = await api(`/api/admin/bracket/matches/${id}/words`);
+      if (matchIdRef.current === id) {
+        setQueue(data);
+        setError("");
+      }
     } catch (e) {
-      setError(e.message);
+      if (matchIdRef.current === id) setError(e.message);
     }
   }
 
@@ -2023,6 +2060,7 @@ function MatchWordQueue({ matchId }) {
 }
 
 function BracketPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
   const [entries, setEntries] = useState([]);
   const [matches, setMatches] = useState(null);
   const [pairSelections, setPairSelections] = useState([]);
@@ -2032,16 +2070,23 @@ function BracketPanel({ tournament }) {
   const [wordQueueOpenId, setWordQueueOpenId] = useState(null); // matchId | null
 
   async function refresh() {
+    const id = tournament.id;
     try {
-      setMatches(await api(`/api/admin/tournaments/${tournament.id}/bracket`));
-      setError("");
+      const data = await api(`/api/admin/tournaments/${id}/bracket`);
+      if (tournamentIdRef.current === id) {
+        setMatches(data);
+        setError("");
+      }
     } catch (e) {
-      setError(e.message);
+      if (tournamentIdRef.current === id) setError(e.message);
     }
   }
 
   useEffect(() => {
-    api(`/api/admin/tournaments/${tournament.id}/entries`).then(setEntries).catch(() => {});
+    const id = tournament.id;
+    api(`/api/admin/tournaments/${id}/entries`).then((data) => {
+      if (tournamentIdRef.current === id) setEntries(data);
+    }).catch(() => {});
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tournament.id]);
