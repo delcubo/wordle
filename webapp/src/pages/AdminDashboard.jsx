@@ -968,6 +968,7 @@ function EntriesPanel({ tournament, users, allTournaments }) {
   const availableUsers = users.filter((u) => !connectedUserIds.has(u.id) && !u.archived);
   const activeCount = entries.filter((e) => e.active).length;
   const inactiveCount = entries.length - activeCount;
+  const playedTodayCount = entries.filter((e) => e.active && e.played_today).length;
   // Другие неархивные розыгрыши — только в них есть смысл перебрасывать
   // участников (см. пункт бэклога про переброску между розыгрышами).
   const transferTargets = allTournaments.filter((t) => t.id !== tournament.id && !t.archived);
@@ -1208,6 +1209,9 @@ function EntriesPanel({ tournament, users, allTournaments }) {
       </div>
       <p style={{ opacity: 0.7, fontSize: 13, marginTop: 4 }}>
         Подключено: {activeCount}{inactiveCount > 0 ? ` · Отключено: ${inactiveCount}` : ""}
+        {tournament.type === "endless" && activeCount > 0 && (
+          <> · <span style={{ color: "#538d4e" }}>Сыграло сегодня: {playedTodayCount}</span></>
+        )}
       </p>
       <form onSubmit={handleAdd} style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         <select value={userId} onChange={(e) => setUserId(e.target.value)} style={inputStyle} required>
