@@ -950,6 +950,8 @@ function EntriesPanel({ tournament, users, allTournaments }) {
   const [transferring, setTransferring] = useState(false);
   const [transferMsg, setTransferMsg] = useState(null);
   const [copiedEntryId, setCopiedEntryId] = useState(null);
+  const [editingCallsignId, setEditingCallsignId] = useState(null);
+  const [callsignForm, setCallsignForm] = useState("");
 
   async function refresh() {
     const id = tournament.id;
@@ -1070,6 +1072,22 @@ function EntriesPanel({ tournament, users, allTournaments }) {
     refresh();
   }
 
+  async function saveCallsign(entry) {
+    setError("");
+    const trimmed = callsignForm.trim();
+    if (!trimmed) return;
+    try {
+      await api(`/api/admin/entries/${entry.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ callsign: trimmed }),
+      });
+      setEditingCallsignId(null);
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   function copyLink(entry) {
     const u = users.find((x) => x.id === entry.user_id);
     if (!u) return;
@@ -1110,6 +1128,7 @@ function EntriesPanel({ tournament, users, allTournaments }) {
   function renderCard(e) {
     const u = users.find((x) => x.id === e.user_id);
     const isMenuOpen = openMenuId === e.id;
+    const isEditingCallsign = editingCallsignId === e.id;
 
     function runAction(fn) {
       setOpenMenuId(null);
@@ -1129,7 +1148,30 @@ function EntriesPanel({ tournament, users, allTournaments }) {
               />
             )}
             <div>
-              <div style={{ fontSize: 14, fontWeight: 500 }}>{e.callsign}</div>
+              {isEditingCallsign ? (
+                <div style={{ display: "flex", gap: 4 }}>
+                  <input
+                    autoFocus
+                    value={callsignForm}
+                    onChange={(ev) => setCallsignForm(ev.target.value)}
+                    onKeyDown={(ev) => { if (ev.key === "Enter") saveCallsign(e); if (ev.key === "Escape") setEditingCallsignId(null); }}
+                    style={{ ...inputStyle, padding: "2px 6px", fontSize: 13, width: 110 }}
+                  />
+                  <button onClick={() => saveCallsign(e)} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
+                  <button onClick={() => setEditingCallsignId(null)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>Отмена</button>
+                </div>
+              ) : (
+                <div style={{ fontSize: 14, fontWeight: 500 }}>
+                  {e.callsign}
+                  <button
+                    onClick={() => { setEditingCallsignId(e.id); setCallsignForm(e.callsign); }}
+                    title="Изменить позывной"
+                    style={{ ...ghostButtonStyle, marginLeft: 6, padding: "0px 6px", fontSize: 11 }}
+                  >
+                    ✎
+                  </button>
+                </div>
+              )}
               <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>{u?.admin_note || `Игрок #${e.user_id}`}</div>
             </div>
           </div>
@@ -1285,6 +1327,7 @@ function EntriesPanel({ tournament, users, allTournaments }) {
             <tbody>
               {filteredEntries.map((e) => {
                 const u = users.find((x) => x.id === e.user_id);
+                const isEditingCallsign = editingCallsignId === e.id;
                 return (
                   <tr key={e.id} style={{ borderTop: "1px solid #2a2a2c", opacity: e.active ? 1 : 0.5 }}>
                     {transferTargets.length > 0 && (
@@ -1294,7 +1337,32 @@ function EntriesPanel({ tournament, users, allTournaments }) {
                         )}
                       </td>
                     )}
-                    <td style={tdStyle}>{e.callsign}</td>
+                    <td style={tdStyle}>
+                      {isEditingCallsign ? (
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <input
+                            autoFocus
+                            value={callsignForm}
+                            onChange={(ev) => setCallsignForm(ev.target.value)}
+                            onKeyDown={(ev) => { if (ev.key === "Enter") saveCallsign(e); if (ev.key === "Escape") setEditingCallsignId(null); }}
+                            style={{ ...inputStyle, padding: "2px 6px", fontSize: 13, width: 110 }}
+                          />
+                          <button onClick={() => saveCallsign(e)} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
+                          <button onClick={() => setEditingCallsignId(null)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>Отмена</button>
+                        </div>
+                      ) : (
+                        <>
+                          {e.callsign}
+                          <button
+                            onClick={() => { setEditingCallsignId(e.id); setCallsignForm(e.callsign); }}
+                            title="Изменить позывной"
+                            style={{ ...ghostButtonStyle, marginLeft: 6, padding: "0px 6px", fontSize: 11 }}
+                          >
+                            ✎
+                          </button>
+                        </>
+                      )}
+                    </td>
                     <td style={{ ...tdStyle, opacity: 0.7 }}>{u?.admin_note || `Игрок #${e.user_id}`}</td>
                     <td style={tdStyle}>
                       {e.active ? (
