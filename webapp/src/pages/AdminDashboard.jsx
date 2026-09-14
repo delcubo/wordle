@@ -949,6 +949,7 @@ function EntriesPanel({ tournament, users, allTournaments }) {
   const [transferTo, setTransferTo] = useState("");
   const [transferring, setTransferring] = useState(false);
   const [transferMsg, setTransferMsg] = useState(null);
+  const [copiedEntryId, setCopiedEntryId] = useState(null);
 
   async function refresh() {
     const id = tournament.id;
@@ -1068,6 +1069,14 @@ function EntriesPanel({ tournament, users, allTournaments }) {
     refresh();
   }
 
+  function copyLink(entry) {
+    const u = users.find((x) => x.id === entry.user_id);
+    if (!u) return;
+    navigator.clipboard?.writeText(`${window.location.origin}/play/${u.access_token}`);
+    setCopiedEntryId(entry.id);
+    setTimeout(() => setCopiedEntryId(null), 1500);
+  }
+
   async function handleResetToday(entry) {
     if (!window.confirm(`Сбросить попытку «${entry.callsign}» за сегодня? Игрок сможет сыграть сегодняшнее слово заново с нуля — введённые буквы и результат за сегодня будут стёрты без возможности отмены.`)) {
       return;
@@ -1137,12 +1146,15 @@ function EntriesPanel({ tournament, users, allTournaments }) {
           // бэклога), и плавающее меню обрезалось бы этой прокруткой, если
           // карточка ближе к нижнему краю видимой части списка.
           <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8, paddingTop: 8, borderTop: "1px solid #3a3a3c" }}>
+            <button onClick={() => copyLink(e)} style={{ ...ghostButtonStyle, textAlign: "left", fontSize: 12 }}>
+              {copiedEntryId === e.id ? "Скопировано!" : "Копировать ссылку"}
+            </button>
             <button onClick={() => runAction(toggleActive)} style={{ ...ghostButtonStyle, textAlign: "left", fontSize: 12 }}>
               {e.active ? "Отключить" : "Подключить"}
             </button>
             {tournament.type !== "knockout" && (
               <button onClick={() => runAction(toggleHidden)} style={{ ...ghostButtonStyle, textAlign: "left", fontSize: 12 }}>
-                {e.hidden_from_standings ? "Учитывать в таблице" : "Не учитывать в таблице"}
+                {e.hidden_from_standings ? "В таблице" : "Не в таблице"}
               </button>
             )}
             {tournament.type !== "knockout" && e.active && (
@@ -1303,12 +1315,15 @@ function EntriesPanel({ tournament, users, allTournaments }) {
                     </td>
                     <td style={tdStyle}>
                       <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        <button onClick={() => copyLink(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                          {copiedEntryId === e.id ? "Скопировано!" : "Копировать ссылку"}
+                        </button>
                         <button onClick={() => toggleActive(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
                           {e.active ? "Отключить" : "Подключить"}
                         </button>
                         {tournament.type !== "knockout" && (
                           <button onClick={() => toggleHidden(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
-                            {e.hidden_from_standings ? "Учитывать в таблице" : "Не учитывать в таблице"}
+                            {e.hidden_from_standings ? "В таблице" : "Не в таблице"}
                           </button>
                         )}
                         {tournament.type !== "knockout" && e.active && (
