@@ -18,7 +18,7 @@ export default function AdminLogin() {
       setError("Неверный пароль");
       return;
     }
-    navigate("/admin");
+    navigate("/alvipa/dashboard");
   }
 
   return (

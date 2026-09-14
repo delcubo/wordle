@@ -14,7 +14,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         <Route path="/play/:token" element={<MyTournaments />} />
         <Route path="/play/:token/:tournamentId" element={<PlayerGame />} />
         <Route path="/alvipa" element={<AdminLogin />} />
-        <Route path="/admin" element={<AdminDashboard />} />
+        <Route path="/alvipa/dashboard" element={<AdminDashboard />} />
         <Route path="/" element={null} />
       </Routes>
     </BrowserRouter>
