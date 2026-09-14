@@ -2,6 +2,9 @@ import { useState, useEffect } from "react";
 
 const EMOJI = { correct: "🟩", present: "🟨", absent: "⬜" };
 const CELL_COLOR = { correct: "var(--correct)", present: "var(--present)", absent: "var(--absent)" };
+// Эмодзи по итогу попытки в копируемом отчёте бессрочного режима — см. пункт бэклога.
+const ENDLESS_RESULT_EMOJI = { 1: "🏆", 2: "🎯", 3: "🧠", 4: "🙂", 5: "😅", 6: "😰" };
+const ENDLESS_FAILED_EMOJI = "💀";
 
 function formatCountdown(ms) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -60,8 +63,9 @@ export default function ResultModal({
     if (isEndless && baseTitle) {
       // Отдельный формат отчёта для бессрочного режима — см. пункт бэклога.
       lines = [`▪️ ${baseTitle.toUpperCase()} ▪️`];
+      const resultEmoji = solved ? ENDLESS_RESULT_EMOJI[attemptsUsed] : ENDLESS_FAILED_EMOJI;
       const meta = [callsign, dayNumber != null ? `#день${dayNumber}` : null, attemptsLabel].filter(Boolean);
-      lines.push(`🧠 ${meta.join(" · ")}`);
+      lines.push(`${resultEmoji} ${meta.join(" · ")}`);
       lines.push("", emojiGrid);
     } else {
       lines = [title];
