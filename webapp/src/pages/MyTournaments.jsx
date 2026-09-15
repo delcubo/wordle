@@ -27,7 +27,7 @@ export default function MyTournaments() {
 
   return (
     <div style={{ ...pageStyle, ...themeVars(theme) }}>
-      <h2>Мои розыгрыши</h2>
+      <h2>Мои игры</h2>
       {error && <div style={{ color: "var(--error)" }}>{error}</div>}
       {tournaments && tournaments.length === 0 && <div style={{ opacity: 0.7 }}>Вы пока не подключены ни к одному розыгрышу.</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 10, width: 320 }}>

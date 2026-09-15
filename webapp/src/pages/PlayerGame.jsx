@@ -360,7 +360,7 @@ export default function PlayerGame() {
   return (
     <Centered theme={theme}>
       <Link to={`/play/${token}`} style={{ color: "var(--muted)", fontSize: 13, marginBottom: 8 }}>
-        ← Мои розыгрыши
+        ← Мои игры
       </Link>
       {tournamentTitle && <h2 style={{ margin: "0 0 4px" }}>{tournamentTitle}</h2>}
       {callsign && <div style={{ opacity: 0.6, marginBottom: 8 }}>Игрок: {callsign}</div>}
