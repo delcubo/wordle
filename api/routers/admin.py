@@ -403,12 +403,13 @@ async def get_entries(tournament_id: int, session: AsyncSession = Depends(get_se
     tournament = await crud.get_tournament(session, tournament_id)
     if tournament is None or tournament.type != TournamentType.endless:
         return entries
-    played_ids = await crud.get_entries_played_today(session, tournament)
+    attempts_by_entry = await crud.get_entries_played_today(session, tournament)
     return [
         EntryOut(
             id=e.id, user_id=e.user_id, callsign=e.callsign, joined_on_day=e.joined_on_day,
             active=e.active, hidden_from_standings=e.hidden_from_standings,
-            played_today=e.id in played_ids,
+            played_today=e.id in attempts_by_entry,
+            played_today_attempts=attempts_by_entry.get(e.id),
         )
         for e in entries
     ]

@@ -369,25 +369,26 @@ async def list_entries(session: AsyncSession, tournament_id: int) -> list[Tourna
     return list(result.scalars().all())
 
 
-async def get_entries_played_today(session: AsyncSession, tournament: Tournament) -> set[int]:
-    """entry_id участников, уже завершивших сегодняшнее слово (в том же
-    смысле, что already_played на игровой странице — угадал либо исчерпал все
-    6 попыток) — для колонки статуса в бессрочном режиме (см. пункт бэклога).
-    Пустое множество, если сегодня ещё нет слова дня (розыгрыш не начался/на
-    паузе) — вызывающий код в этом случае просто не подсветит никого."""
+async def get_entries_played_today(session: AsyncSession, tournament: Tournament) -> dict[int, int]:
+    """entry_id -> число попыток участников, уже завершивших сегодняшнее
+    слово (в том же смысле, что already_played на игровой странице — угадал
+    либо исчерпал все 6 попыток) — для колонки статуса в бессрочном режиме
+    (см. пункт бэклога). Пустой словарь, если сегодня ещё нет слова дня
+    (розыгрыш не начался/на паузе) — вызывающий код в этом случае просто не
+    подсветит никого."""
     day_number = day_number_for_date(tournament.start_date, today())
     if day_number < 1:
-        return set()
+        return {}
     daily_word = await get_daily_word_by_day(session, tournament.id, day_number)
     if daily_word is None:
-        return set()
+        return {}
     result = await session.execute(
-        select(Attempt.entry_id).where(
+        select(Attempt.entry_id, Attempt.attempts_used).where(
             Attempt.daily_word_id == daily_word.id,
             (Attempt.solved.is_(True)) | (Attempt.attempts_used >= 6),
         )
     )
-    return {row[0] for row in result.all()}
+    return {entry_id: attempts_used for entry_id, attempts_used in result.all()}
 
 
 async def list_entries_for_user(session: AsyncSession, user_id: int) -> list[TournamentEntry]:

@@ -1217,13 +1217,13 @@ function EntriesPanel({ tournament, users, allTournaments }) {
                 style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }}
                 title={e.played_today ? "Уже сыграл сегодняшнее слово" : "Ещё не играл сегодня"}
               >
-                Подключён
+                Подкл.{e.played_today ? ` · ${e.played_today_attempts}/6` : ""}
               </span>
             ) : (
-              <span style={{ opacity: 0.7 }}>Подключён</span>
+              <span style={{ opacity: 0.7 }}>Подкл.</span>
             )
           ) : (
-            <span style={{ opacity: 0.7 }}>Отключён</span>
+            <span style={{ opacity: 0.7 }}>Откл.</span>
           )}
           {tournament.type !== "knockout" && tournament.type !== "tiebreak" && e.hidden_from_standings && (
             <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>
@@ -1374,13 +1374,13 @@ function EntriesPanel({ tournament, users, allTournaments }) {
                             style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }}
                             title={e.played_today ? "Уже сыграл сегодняшнее слово" : "Ещё не играл сегодня"}
                           >
-                            Подключён
+                            Подкл.{e.played_today ? ` · ${e.played_today_attempts}/6` : ""}
                           </span>
                         ) : (
-                          "Подключён"
+                          "Подкл."
                         )
                       ) : (
-                        "Отключён"
+                        "Откл."
                       )}
                       {tournament.type !== "knockout" && tournament.type !== "tiebreak" && e.hidden_from_standings && (
                         <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>

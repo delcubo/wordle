@@ -148,6 +148,9 @@ class EntryOut(BaseModel):
     # ли участник уже сегодняшнее слово. Для остальных типов розыгрыша не
     # считается (там видно из таблицы/сетки) и остаётся None.
     played_today: bool | None = None
+    # Число попыток на сегодняшнее слово — только когда played_today=True
+    # (см. пункт бэклога про формат "n/6" рядом со статусом "Подкл.").
+    played_today_attempts: int | None = None
 
     class Config:
         from_attributes = True
