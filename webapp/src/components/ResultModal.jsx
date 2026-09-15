@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 const EMOJI = { correct: "🟩", present: "🟨", absent: "⬜" };
 const CELL_COLOR = { correct: "var(--correct)", present: "var(--present)", absent: "var(--absent)" };
 // Эмодзи по итогу попытки в копируемом отчёте бессрочного режима — см. пункт бэклога.
-const ENDLESS_RESULT_EMOJI = { 1: "🏆", 2: "🎯", 3: "🧠", 4: "🙂", 5: "😅", 6: "😰" };
+const ENDLESS_RESULT_EMOJI = { 1: "🎯", 2: "🧠", 3: "🤓", 4: "😐", 5: "😰", 6: "🤯" };
 const ENDLESS_FAILED_EMOJI = "💀";
 
 function formatCountdown(ms) {
