@@ -24,7 +24,7 @@ async def _load_added_words_into_dictionary_cache():
         for word in await crud.list_added_words(session):
             register_added_word(word.word)
 
-WEBAPP_DIST = os.path.join(os.path.dirname(__file__), "..", "webapp", "dist")
+WEBAPP_DIST = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "webapp", "dist"))
 _index_path = os.path.join(WEBAPP_DIST, "index.html")
 _assets_dir = os.path.join(WEBAPP_DIST, "assets")
 
@@ -44,7 +44,16 @@ async def spa_fallback(full_path: str):
     (/, /login, /play/<token>) — React Router на фронте решает, что показать.
     Не перехватывает /api/* и /assets/*, так как они зарегистрированы выше
     и совпадают раньше в порядке маршрутизации Starlette.
+
+    Реальные статические файлы из webapp/public (favicon.svg и т.п. — Vite
+    копирует их в корень dist при сборке, не в assets/) отдаются как есть,
+    если такой файл действительно есть на диске — иначе браузер вместо иконки
+    получал бы этот же index.html и молча падал обратно на дефолтную иконку
+    вкладки. os.path.realpath — защита от выхода за пределы dist через "..".
     """
+    candidate = os.path.realpath(os.path.join(WEBAPP_DIST, full_path))
+    if full_path and candidate.startswith(WEBAPP_DIST + os.sep) and os.path.isfile(candidate):
+        return FileResponse(candidate)
     if os.path.isfile(_index_path):
         return FileResponse(_index_path)
     return {"detail": "Webapp not built yet — run `npm run build` in webapp/"}
