@@ -124,6 +124,8 @@ export default function PlayerGame() {
         baseTitle: data.base_title,
         dayNumber: data.day_number,
         isEndless: data.is_endless,
+        isStandardReport: data.is_standard_report,
+        streakDays: data.streak_days,
       });
     } else {
       setMessage("");
@@ -405,6 +407,8 @@ export default function PlayerGame() {
           baseTitle={modal.baseTitle}
           dayNumber={modal.dayNumber}
           isEndless={modal.isEndless}
+          isStandardReport={modal.isStandardReport}
+          streakDays={modal.streakDays}
           onClose={() => setModal(null)}
         />
       )}

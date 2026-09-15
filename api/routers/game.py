@@ -161,6 +161,13 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
     tournament_title = await render_tournament_title(session, tournament, round_number)
     is_endless = tournament.type == TournamentType.endless
     is_tiebreak = tournament.type == TournamentType.tiebreak
+    # Тот же формат отчёта, что и у endless (см. ResultModal), но со звездой
+    # вместо ▪️ — для standard/championship, и только пока идёт таблица
+    # основного этапа (до тай-брейка/плей-офф, см. пункт бэклога).
+    is_standard_report = (
+        tournament.type in (TournamentType.standard, TournamentType.championship)
+        and tournament.status not in (TournamentStatus.tiebreak, TournamentStatus.playoff)
+    )
 
     tiebreak_started = False
     tiebreak_place = None
@@ -174,6 +181,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             has_word_today=False, already_played=False, callsign=entry.callsign, tournament_title=tournament_title,
             base_title=tournament.title, is_endless=is_endless, hashtag=tournament.hashtag, paused=tournament.paused,
             is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=tiebreak_place,
+            is_standard_report=is_standard_report,
         )
 
     attempt = await crud.get_attempt(session, entry.id, daily_word.id)
@@ -183,9 +191,13 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             callsign=entry.callsign, tournament_title=tournament_title, base_title=tournament.title,
             is_endless=is_endless, hashtag=tournament.hashtag,
             is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=tiebreak_place,
+            is_standard_report=is_standard_report,
         )
 
     already_played = attempt.solved or attempt.attempts_used >= MAX_ATTEMPTS
+    streak_days = None
+    if already_played and is_standard_report:
+        streak_days = await crud.compute_played_streak(session, tournament.id, entry.id, daily_word.day_number)
     # Раскраску прошлых попыток и (при поражении) сам ответ отдаём всегда, когда
     # есть попытка — не только по завершении: иначе при возврате в недоигранную
     # игру клиент не может восстановить ни цвета, ни номер текущей строки.
@@ -206,6 +218,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         hashtag=tournament.hashtag,
         next_word_at=next_publish_at().isoformat() if already_played and not is_tiebreak else None,
         is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=tiebreak_place,
+        is_standard_report=is_standard_report, streak_days=streak_days,
     )
 
 

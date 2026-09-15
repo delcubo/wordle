@@ -261,6 +261,8 @@ class TodayWordStatus(BaseModel):
     tournament_title: str | None = None
     base_title: str | None = None  # название розыгрыша без "#деньN"/стадии — для формата копируемого отчёта в бессрочном режиме
     is_endless: bool = False
+    is_standard_report: bool = False  # тот же формат отчёта, что в бессрочном режиме (со звездой вместо ▪️), но для standard/championship на этапе таблицы
+    streak_days: int | None = None  # подряд сыгранных дней без пропуска (включая сегодня) — для строки "🔥" в отчёте, см. is_standard_report
     hashtag: str | None = None
     next_word_at: str | None = None  # ISO-момент публикации следующего слова — для попапа-обратного отсчёта
     paused: bool = False

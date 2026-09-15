@@ -45,13 +45,15 @@ function Countdown({ target }) {
  *    показывается тикающий обратный отсчёт (как на реальном Wordle)
  *  - gameEnded: розыгрыш для этого игрока окончен насовсем (проигрыш в сетке
  *    на вылет) — вместо отсчёта показывается "Игра окончена"
- *  - baseTitle, dayNumber, isEndless: только для копируемого текста в
- *    бессрочном режиме — см. handleCopy, свой формат отчёта по этому шаблону
+ *  - baseTitle, dayNumber, isEndless, isStandardReport, streakDays: только
+ *    для копируемого текста в бессрочном/standard/championship-до-тай-брейка
+ *    режимах — см. handleCopy, общий формат отчёта по этому шаблону (рамка
+ *    ▪️ у endless, ★ у остальных)
  *  - onClose
  */
 export default function ResultModal({
   title, callsign, hashtag, attemptsUsed, solved, grid, answerWord, message, countdownTarget, gameEnded,
-  baseTitle, dayNumber, isEndless, onClose,
+  baseTitle, dayNumber, isEndless, isStandardReport, streakDays, onClose,
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -60,12 +62,17 @@ export default function ResultModal({
   async function handleCopy() {
     const emojiGrid = grid.map((row) => row.map((s) => EMOJI[s] || "⬜").join("")).join("\n");
     let lines;
-    if (isEndless && baseTitle) {
-      // Отдельный формат отчёта для бессрочного режима — см. пункт бэклога.
-      lines = [`▪️ ${baseTitle.toUpperCase()} ▪️`];
+    if ((isEndless || isStandardReport) && baseTitle) {
+      // Общий формат отчёта для бессрочного и standard/championship (до
+      // тай-брейка/плей-офф) режимов — см. пункт бэклога.
+      const border = isEndless ? "▪️" : "★";
+      lines = [`${border} ${baseTitle.toUpperCase()} ${border}`];
       const resultEmoji = solved ? ENDLESS_RESULT_EMOJI[attemptsUsed] : ENDLESS_FAILED_EMOJI;
       const meta = [callsign, dayNumber != null ? `#день${dayNumber}` : null, attemptsLabel].filter(Boolean);
       lines.push(`${resultEmoji} ${meta.join(" · ")}`);
+      if (streakDays != null && streakDays >= 2) {
+        lines.push(`🔥 дней подряд без пропуска: ${streakDays}`);
+      }
       lines.push("", emojiGrid);
     } else {
       lines = [title];

@@ -648,6 +648,33 @@ async def list_attempts_for_tournament(session: AsyncSession, tournament_id: int
     return list(result.scalars().all())
 
 
+async def compute_played_streak(session: AsyncSession, tournament_id: int, entry_id: int, through_day: int) -> int:
+    """
+    Число подряд идущих сыгранных дней розыгрыша, считая назад от through_day
+    включительно — для строки "дней подряд без пропуска" в копируемом отчёте
+    (см. пункт бэклога). День считается сыгранным по тому же правилу, что и
+    флаг пропуска в таблице результатов (см. standings_view.compute_standings):
+    попытка завершена (угадано либо исчерпаны все 6 попыток). Дни до
+    подключения участника автоматически обрывают серию тем же образом, что и
+    обычный пропуск — отдельной проверки на joined_on_day не нужно.
+    """
+    result = await session.execute(
+        select(DailyWord.day_number, Attempt.solved, Attempt.attempts_used)
+        .join(Attempt, Attempt.daily_word_id == DailyWord.id)
+        .where(DailyWord.tournament_id == tournament_id, Attempt.entry_id == entry_id)
+    )
+    finished_days = {
+        day_number for day_number, solved, attempts_used in result.all()
+        if solved or attempts_used >= 6
+    }
+    streak = 0
+    day = through_day
+    while day in finished_days:
+        streak += 1
+        day -= 1
+    return streak
+
+
 async def save_guess(
     session: AsyncSession,
     attempt: Attempt,
