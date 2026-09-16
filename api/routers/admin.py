@@ -3,6 +3,8 @@
 типов, подключение игроков к розыгрышу, подтверждение слова дня, таблицы.
 Все эндпоинты, кроме /login, защищены require_admin (см. api/admin_auth.py).
 """
+from datetime import timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -404,12 +406,21 @@ async def get_entries(tournament_id: int, session: AsyncSession = Depends(get_se
     if tournament is None or tournament.type != TournamentType.endless:
         return entries
     attempts_by_entry = await crud.get_entries_played_today(session, tournament)
+
+    def _iso_utc(naive_dt):
+        # started_at/finished_at хранятся как наивный UTC (datetime.utcnow) —
+        # добавляем явную зону, иначе браузер разобрал бы ISO-строку без
+        # смещения как локальное время и время начала/попытки съехало бы.
+        return naive_dt.replace(tzinfo=timezone.utc).isoformat() if naive_dt else None
+
     return [
         EntryOut(
             id=e.id, user_id=e.user_id, callsign=e.callsign, joined_on_day=e.joined_on_day,
             active=e.active, hidden_from_standings=e.hidden_from_standings,
             played_today=e.id in attempts_by_entry,
-            played_today_attempts=attempts_by_entry.get(e.id),
+            played_today_attempts=(attempts_by_entry.get(e.id) or {}).get("attempts_used"),
+            played_today_started_at=_iso_utc((attempts_by_entry.get(e.id) or {}).get("started_at")),
+            played_today_finished_at=_iso_utc((attempts_by_entry.get(e.id) or {}).get("finished_at")),
         )
         for e in entries
     ]

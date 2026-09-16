@@ -942,6 +942,20 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   );
 }
 
+function formatClockTime(iso) {
+  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function formatPlayDuration(startIso, endIso) {
+  const totalSeconds = Math.max(0, Math.round((new Date(endIso) - new Date(startIso)) / 1000));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  if (h > 0) return `${h} ч ${m} мин`;
+  if (m > 0) return `${m} мин`;
+  return `${s} сек`;
+}
+
 function EntriesPanel({ tournament, users, allTournaments }) {
   const isMobile = useIsMobile();
   const tournamentIdRef = useLatest(tournament.id);
@@ -957,6 +971,7 @@ function EntriesPanel({ tournament, users, allTournaments }) {
   const [transferring, setTransferring] = useState(false);
   const [transferMsg, setTransferMsg] = useState(null);
   const [copiedEntryId, setCopiedEntryId] = useState(null);
+  const [hoveredEntryId, setHoveredEntryId] = useState(null);
   const [editingCallsignId, setEditingCallsignId] = useState(null);
   const [callsignForm, setCallsignForm] = useState("");
 
@@ -1217,11 +1232,14 @@ function EntriesPanel({ tournament, users, allTournaments }) {
         <div style={{ fontSize: 12, marginTop: 6 }}>
           {e.active ? (
             tournament.type === "endless" ? (
-              <span
-                style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }}
-                title={e.played_today ? "Уже сыграл сегодняшнее слово" : "Ещё не играл сегодня"}
-              >
-                Подкл.{e.played_today ? ` · ${e.played_today_attempts}/6` : ""}
+              <span style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }}>
+                Подкл.
+                {e.played_today && (
+                  <>
+                    {" "}· {e.played_today_attempts}/6 · {formatClockTime(e.played_today_started_at)} ·{" "}
+                    {formatPlayDuration(e.played_today_started_at, e.played_today_finished_at)}
+                  </>
+                )}
               </span>
             ) : (
               <span style={{ opacity: 0.7 }}>Подкл.</span>
@@ -1375,10 +1393,23 @@ function EntriesPanel({ tournament, users, allTournaments }) {
                       {e.active ? (
                         tournament.type === "endless" ? (
                           <span
-                            style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }}
-                            title={e.played_today ? "Уже сыграл сегодняшнее слово" : "Ещё не играл сегодня"}
+                            onMouseEnter={() => e.played_today && setHoveredEntryId(e.id)}
+                            onMouseLeave={() => setHoveredEntryId(null)}
+                            style={{ color: e.played_today ? "#538d4e" : "#e5a94c", position: "relative" }}
                           >
                             Подкл.{e.played_today ? ` · ${e.played_today_attempts}/6` : ""}
+                            {e.played_today && hoveredEntryId === e.id && (
+                              <div
+                                style={{
+                                  position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)",
+                                  background: "#1c1c1e", border: "1px solid #3a3a3c", borderRadius: 6, padding: "6px 10px",
+                                  whiteSpace: "nowrap", zIndex: 10, marginBottom: 4, pointerEvents: "none",
+                                  color: "#538d4e", fontSize: 12,
+                                }}
+                              >
+                                {formatClockTime(e.played_today_started_at)} · {formatPlayDuration(e.played_today_started_at, e.played_today_finished_at)}
+                              </div>
+                            )}
                           </span>
                         ) : (
                           "Подкл."

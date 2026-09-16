@@ -151,6 +151,10 @@ class EntryOut(BaseModel):
     # Число попыток на сегодняшнее слово — только когда played_today=True
     # (см. пункт бэклога про формат "n/6" рядом со статусом "Подкл.").
     played_today_attempts: int | None = None
+    # Время начала и окончания сегодняшней игры — только когда played_today=True,
+    # для отображения времени начала и продолжительности игры (см. пункт бэклога).
+    played_today_started_at: str | None = None
+    played_today_finished_at: str | None = None
 
     class Config:
         from_attributes = True
