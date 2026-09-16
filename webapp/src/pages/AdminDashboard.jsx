@@ -1262,6 +1262,9 @@ function EntriesPanel({ tournament, users, allTournaments }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <h3 style={{ margin: 0 }}>Участники «{tournament.title}»</h3>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={refresh} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+            Обновить
+          </button>
           {availableUsers.length > 0 && (
             <button onClick={handleAddAll} style={{ ...ghostButtonStyle, fontSize: 12 }}>
               Добавить всех
