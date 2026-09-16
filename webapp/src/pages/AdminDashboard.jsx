@@ -57,7 +57,11 @@ export default function AdminDashboard() {
   async function refreshTournaments() {
     const data = await api("/api/admin/tournaments");
     setTournaments(data);
-    setSelected((prev) => prev ? data.find((t) => t.id === prev.id) || data[0] || null : data[0] || null);
+    // По умолчанию — первый неархивный розыгрыш, а не просто первый в списке
+    // (иначе при первой загрузке могло открыться меню архивного розыгрыша,
+    // если он оказался раньше в ответе API).
+    const firstLive = data.find((t) => !t.archived) || data[0] || null;
+    setSelected((prev) => (prev ? data.find((t) => t.id === prev.id) || firstLive : firstLive));
   }
 
   async function refreshUsers() {
