@@ -1405,9 +1405,10 @@ function EntriesPanel({ tournament, users, allTournaments }) {
                               <div
                                 style={{
                                   position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)",
-                                  background: "#1c1c1e", border: "1px solid #3a3a3c", borderRadius: 6, padding: "6px 10px",
+                                  background: "#ffffff", border: "1px solid #c0c0c0", borderRadius: 4, padding: "4px 8px",
+                                  boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
                                   whiteSpace: "nowrap", zIndex: 10, marginBottom: 4, pointerEvents: "none",
-                                  color: "#538d4e", fontSize: 12,
+                                  color: "#1a1a1a", fontSize: 12,
                                 }}
                               >
                                 {formatClockTime(e.played_today_started_at)} · {formatPlayDuration(e.played_today_started_at, e.played_today_finished_at)}
