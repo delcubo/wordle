@@ -2,9 +2,9 @@ import { useState, useEffect } from "react";
 
 const EMOJI = { correct: "🟩", present: "🟨", absent: "⬜" };
 const CELL_COLOR = { correct: "var(--correct)", present: "var(--present)", absent: "var(--absent)" };
-// Эмодзи по итогу попытки в копируемом отчёте бессрочного режима — см. пункт бэклога.
-const ENDLESS_RESULT_EMOJI = { 1: "🎯", 2: "🧠", 3: "🤓", 4: "😐", 5: "😰", 6: "🤯" };
-const ENDLESS_FAILED_EMOJI = "💀";
+// Эмодзи по итогу попытки в копируемых отчётах (endless и standard/championship) — см. пункт бэклога.
+const RESULT_EMOJI = { 1: "🎯", 2: "🧠", 3: "🤓", 4: "😎", 5: "😐", 6: "😰" };
+const FAILED_EMOJI = "💀";
 
 function formatCountdown(ms) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -67,7 +67,7 @@ export default function ResultModal({
       // тай-брейка/плей-офф) режимов — см. пункт бэклога.
       const border = isEndless ? "▪️" : "★";
       lines = [`${border} ${baseTitle.toUpperCase()} ${border}`];
-      const resultEmoji = solved ? ENDLESS_RESULT_EMOJI[attemptsUsed] : ENDLESS_FAILED_EMOJI;
+      const resultEmoji = solved ? RESULT_EMOJI[attemptsUsed] : FAILED_EMOJI;
       const meta = [callsign, dayNumber != null ? `#день${dayNumber}` : null, attemptsLabel].filter(Boolean);
       lines.push(`${resultEmoji} ${meta.join(" · ")}`);
       if (streakDays != null && streakDays >= 2) {
