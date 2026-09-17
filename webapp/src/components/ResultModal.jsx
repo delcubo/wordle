@@ -68,7 +68,8 @@ export default function ResultModal({
       const border = isEndless ? "▪️" : "★";
       lines = [`${border} ${baseTitle.toUpperCase()} ${border}`];
       const resultEmoji = solved ? RESULT_EMOJI[attemptsUsed] : FAILED_EMOJI;
-      const meta = [callsign, dayNumber != null ? `#день${dayNumber}` : null, attemptsLabel].filter(Boolean);
+      const dayLabel = dayNumber != null ? (isEndless ? `#${dayNumber}` : `#день${dayNumber}`) : null;
+      const meta = [callsign, dayLabel, attemptsLabel].filter(Boolean);
       lines.push(`${resultEmoji} ${meta.join(" · ")}`);
       if (streakDays != null && streakDays >= 2) {
         lines.push(`🔥 дней подряд без пропуска: ${streakDays}`);
