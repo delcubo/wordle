@@ -971,7 +971,6 @@ function EntriesPanel({ tournament, users, allTournaments }) {
   const [transferring, setTransferring] = useState(false);
   const [transferMsg, setTransferMsg] = useState(null);
   const [copiedEntryId, setCopiedEntryId] = useState(null);
-  const [hoveredEntryId, setHoveredEntryId] = useState(null);
   const [editingCallsignId, setEditingCallsignId] = useState(null);
   const [callsignForm, setCallsignForm] = useState("");
 
@@ -1232,20 +1231,16 @@ function EntriesPanel({ tournament, users, allTournaments }) {
         <div style={{ fontSize: 12, marginTop: 6 }}>
           {e.active ? (
             tournament.type === "endless" ? (
-              <span style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }}>
-                Подкл.
-                {e.played_today && (
-                  <>
-                    {" "}· {e.played_today_attempts}/6 · {formatClockTime(e.played_today_started_at)} ·{" "}
-                    {formatPlayDuration(e.played_today_started_at, e.played_today_finished_at)}
-                  </>
-                )}
+              <span style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }} title={e.played_today ? "Подключен" : undefined}>
+                {e.played_today
+                  ? `${e.played_today_attempts}/6 · ${formatClockTime(e.played_today_started_at)} · ${formatPlayDuration(e.played_today_started_at, e.played_today_finished_at)}`
+                  : "Подключен"}
               </span>
             ) : (
-              <span style={{ opacity: 0.7 }}>Подкл.</span>
+              <span style={{ opacity: 0.7 }}>Подключен</span>
             )
           ) : (
-            <span style={{ opacity: 0.7 }}>Откл.</span>
+            <span style={{ opacity: 0.7 }}>Отключен</span>
           )}
           {tournament.type !== "knockout" && tournament.type !== "tiebreak" && e.hidden_from_standings && (
             <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>
@@ -1396,30 +1391,18 @@ function EntriesPanel({ tournament, users, allTournaments }) {
                       {e.active ? (
                         tournament.type === "endless" ? (
                           <span
-                            onMouseEnter={() => e.played_today && setHoveredEntryId(e.id)}
-                            onMouseLeave={() => setHoveredEntryId(null)}
-                            style={{ color: e.played_today ? "#538d4e" : "#e5a94c", position: "relative" }}
+                            title={e.played_today ? "Подключен" : undefined}
+                            style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }}
                           >
-                            Подкл.{e.played_today ? ` · ${e.played_today_attempts}/6` : ""}
-                            {e.played_today && hoveredEntryId === e.id && (
-                              <div
-                                style={{
-                                  position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)",
-                                  background: "#ffffff", border: "1px solid #c0c0c0", borderRadius: 4, padding: "4px 8px",
-                                  boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
-                                  whiteSpace: "nowrap", zIndex: 10, marginBottom: 4, pointerEvents: "none",
-                                  color: "#1a1a1a", fontSize: 12,
-                                }}
-                              >
-                                {formatClockTime(e.played_today_started_at)} · {formatPlayDuration(e.played_today_started_at, e.played_today_finished_at)}
-                              </div>
-                            )}
+                            {e.played_today
+                              ? `${e.played_today_attempts}/6 · ${formatClockTime(e.played_today_started_at)} · ${formatPlayDuration(e.played_today_started_at, e.played_today_finished_at)}`
+                              : "Подключен"}
                           </span>
                         ) : (
-                          "Подкл."
+                          "Подключен"
                         )
                       ) : (
-                        "Откл."
+                        "Отключен"
                       )}
                       {tournament.type !== "knockout" && tournament.type !== "tiebreak" && e.hidden_from_standings && (
                         <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.6, border: "1px solid #3a3a3c", borderRadius: 4, padding: "1px 5px" }}>
