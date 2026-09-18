@@ -9,8 +9,8 @@
 - standard, а также championship до тай-брейка/плей-офф — "{title} #деньN"
   (N зажат в границы [1, duration_days], чтобы не показывать нелепые числа
   до старта или после окончания);
-- endless — тоже "{title} #деньN" (N — порядковый день от старта, без верхней
-  границы, поскольку у неё нет duration_days).
+- endless — "{title} #N" (без слова "день" — см. пункт бэклога; N — порядковый
+  день от старта, без верхней границы, поскольку у неё нет duration_days).
 
 round_number — если известен раунд КОНКРЕТНОГО игрока (см. api/routers/game.py),
 стадия считается по нему; иначе (например, для общего вида в админке) — по
@@ -50,7 +50,7 @@ async def render_tournament_title(
 
     if tournament.type == TournamentType.endless:
         day_number = max(1, day_number_for_date(tournament.start_date, today()))
-        return f"{title} #день{day_number}"
+        return f"{title} #{day_number}"
 
     return title
 
