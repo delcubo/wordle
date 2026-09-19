@@ -291,6 +291,14 @@ class PlayoffGame(Base):
     entry_b_solved: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     entry_b_technical_loss: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Наивный UTC, как Attempt.started_at/finished_at — время первой и
+    # последней попытки стороны, для списка игроков в админке. У игр,
+    # сыгранных до появления этих колонок, остаются NULL.
+    entry_a_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    entry_a_finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    entry_b_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    entry_b_finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     match: Mapped["PlayoffMatch"] = relationship(back_populates="games")
 
 

@@ -144,7 +144,7 @@ class EntryOut(BaseModel):
     joined_on_day: int
     active: bool = True
     hidden_from_standings: bool = False
-    # Заполняется только для бессрочного режима (см. пункт бэклога) — сыграл
+    # Заполняется для бессрочного, standard и knockout режимов (см. пункт бэклога) — сыграл
     # ли участник уже сегодняшнее слово. Для остальных типов розыгрыша не
     # считается (там видно из таблицы/сетки) и остаётся None.
     played_today: bool | None = None
@@ -155,6 +155,9 @@ class EntryOut(BaseModel):
     # для отображения времени начала и продолжительности игры (см. пункт бэклога).
     played_today_started_at: str | None = None
     played_today_finished_at: str | None = None
+    # Только для knockout: есть ли у участника сегодня игра в паре — чтобы
+    # подсвечивать "ещё не играл" только тех, кто сегодня вообще должен играть.
+    has_game_today: bool | None = None
 
     class Config:
         from_attributes = True

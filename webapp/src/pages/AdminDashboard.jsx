@@ -956,6 +956,18 @@ function formatPlayDuration(startIso, endIso) {
   return `${s} сек`;
 }
 
+// Текст статуса участника, у которого сегодня уже есть результат: попытки, время
+// начала, длительность. У игр без меток времени (сыграны до их появления)
+// показываются только попытки.
+function playedTodayText(e) {
+  const parts = [`${e.played_today_attempts}/6`];
+  if (e.played_today_started_at) {
+    parts.push(formatClockTime(e.played_today_started_at));
+    if (e.played_today_finished_at) parts.push(formatPlayDuration(e.played_today_started_at, e.played_today_finished_at));
+  }
+  return parts.join(" · ");
+}
+
 function EntriesPanel({ tournament, users, allTournaments }) {
   const isMobile = useIsMobile();
   const tournamentIdRef = useLatest(tournament.id);
@@ -992,6 +1004,15 @@ function EntriesPanel({ tournament, users, allTournaments }) {
   const activeCount = entries.filter((e) => e.active).length;
   const inactiveCount = entries.length - activeCount;
   const playedTodayCount = entries.filter((e) => e.active && e.played_today).length;
+  // Режимы, где в списке показывается, сыграл ли участник сегодня.
+  const tracksToday = ["endless", "standard", "knockout"].includes(tournament.type);
+  // Зелёный — уже сыграл, жёлтый — ещё нет; в knockout жёлтым только те, у кого
+  // сегодня вообще есть игра (выбывшие/ждущие следующий раунд не подсвечиваются).
+  function todayColor(e) {
+    if (e.played_today) return "#538d4e";
+    if (tournament.type === "knockout" && !e.has_game_today) return undefined;
+    return "#e5a94c";
+  }
   // Другие неархивные розыгрыши — только в них есть смысл перебрасывать
   // участников (см. пункт бэклога про переброску между розыгрышами).
   const transferTargets = allTournaments.filter((t) => t.id !== tournament.id && !t.archived);
@@ -1230,11 +1251,12 @@ function EntriesPanel({ tournament, users, allTournaments }) {
         )}
         <div style={{ fontSize: 12, marginTop: 6 }}>
           {e.active ? (
-            tournament.type === "endless" ? (
-              <span style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }} title={e.played_today ? "Подключен" : undefined}>
-                {e.played_today
-                  ? `${e.played_today_attempts}/6 · ${formatClockTime(e.played_today_started_at)} · ${formatPlayDuration(e.played_today_started_at, e.played_today_finished_at)}`
-                  : "Подключен"}
+            tracksToday ? (
+              <span
+                style={{ color: todayColor(e), opacity: todayColor(e) ? 1 : 0.7 }}
+                title={e.played_today ? "Подключен" : undefined}
+              >
+                {e.played_today ? playedTodayText(e) : "Подключен"}
               </span>
             ) : (
               <span style={{ opacity: 0.7 }}>Подключен</span>
@@ -1274,7 +1296,7 @@ function EntriesPanel({ tournament, users, allTournaments }) {
       </div>
       <p style={{ opacity: 0.7, fontSize: 13, marginTop: 4 }}>
         Подключено: {activeCount}{inactiveCount > 0 ? ` · Отключено: ${inactiveCount}` : ""}
-        {tournament.type === "endless" && activeCount > 0 && (
+        {tracksToday && activeCount > 0 && (
           <> · <span style={{ color: "#538d4e" }}>Сыграло сегодня: {playedTodayCount}</span></>
         )}
       </p>
@@ -1389,14 +1411,12 @@ function EntriesPanel({ tournament, users, allTournaments }) {
                     <td style={{ ...tdStyle, opacity: 0.7 }}>{u?.admin_note || `Игрок #${e.user_id}`}</td>
                     <td style={tdStyle}>
                       {e.active ? (
-                        tournament.type === "endless" ? (
+                        tracksToday ? (
                           <span
                             title={e.played_today ? "Подключен" : undefined}
-                            style={{ color: e.played_today ? "#538d4e" : "#e5a94c" }}
+                            style={{ color: todayColor(e) }}
                           >
-                            {e.played_today
-                              ? `${e.played_today_attempts}/6 · ${formatClockTime(e.played_today_started_at)} · ${formatPlayDuration(e.played_today_started_at, e.played_today_finished_at)}`
-                              : "Подключен"}
+                            {e.played_today ? playedTodayText(e) : "Подключен"}
                           </span>
                         ) : (
                           "Подключен"

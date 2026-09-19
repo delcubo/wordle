@@ -376,9 +376,14 @@ async def get_entries_played_today(session: AsyncSession, tournament: Tournament
     статуса в бессрочном режиме, включая время начала и продолжительность
     игры (см. пункт бэклога). Пустой словарь, если сегодня ещё нет слова дня
     (розыгрыш не начался/на паузе) — вызывающий код в этом случае просто не
-    подсветит никого."""
+    подсветит никого. Для standard тот же смысл (слово текущего дня в
+    пределах duration_days); для knockout — см. get_knockout_today_status."""
+    if tournament.type == TournamentType.knockout:
+        return (await get_knockout_today_status(session, tournament))[0]
     day_number = day_number_for_date(tournament.start_date, today())
     if day_number < 1:
+        return {}
+    if tournament.duration_days is not None and day_number > tournament.duration_days:
         return {}
     daily_word = await get_daily_word_by_day(session, tournament.id, day_number)
     if daily_word is None:
@@ -393,6 +398,41 @@ async def get_entries_played_today(session: AsyncSession, tournament: Tournament
         entry_id: {"attempts_used": attempts_used, "started_at": started_at, "finished_at": finished_at}
         for entry_id, attempts_used, started_at, finished_at in result.all()
     }
+
+
+async def get_knockout_today_status(
+    session: AsyncSession, tournament: Tournament
+) -> tuple[dict[int, dict], set[int]]:
+    """
+    Для розыгрыша на вылет: (уже сыгравшие, все у кого сегодня есть игра).
+    Игра пары считается сегодняшней, если её calendar_date — сегодня; если
+    их несколько (sudden death в тот же день), берётся последняя. Первый
+    элемент — entry_id -> {attempts_used, started_at, finished_at} для тех,
+    кто эту игру уже завершил (started_at/finished_at могут быть None у игр,
+    сыгранных до появления этих колонок); второй — участники, у которых
+    сегодня вообще есть игра (нужно, чтобы не подсвечивать "ещё не играл"
+    тех, кто сегодня не играет — выбыл или ждёт следующий раунд).
+    """
+    played: dict[int, dict] = {}
+    has_game: set[int] = set()
+    today_date = today()
+    for match in await list_playoff_matches(session, tournament.id):
+        games = [g for g in await list_playoff_games(session, match.id) if g.calendar_date == today_date]
+        if not games:
+            continue
+        game = games[-1]
+        for side, entry_id in (("a", match.entry_a_id), ("b", match.entry_b_id)):
+            if entry_id is None:
+                continue
+            has_game.add(entry_id)
+            attempts_used = getattr(game, f"entry_{side}_attempts_used")
+            if attempts_used is not None:
+                played[entry_id] = {
+                    "attempts_used": attempts_used,
+                    "started_at": getattr(game, f"entry_{side}_started_at"),
+                    "finished_at": getattr(game, f"entry_{side}_finished_at"),
+                }
+    return played, has_game
 
 
 async def list_entries_for_user(session: AsyncSession, user_id: int) -> list[TournamentEntry]:
@@ -1098,12 +1138,17 @@ async def save_playoff_guess(
     finished: bool,
 ) -> PlayoffGame:
     """side — 'a' или 'b', какая сторона пары делает ход."""
+    from datetime import datetime
     guesses_field = f"entry_{side}_guesses"
     guesses = [*getattr(game, guesses_field), guess]
     setattr(game, guesses_field, guesses)
+    now = datetime.utcnow()
+    if getattr(game, f"entry_{side}_started_at") is None:
+        setattr(game, f"entry_{side}_started_at", now)
     if finished:
         setattr(game, f"entry_{side}_attempts_used", len(guesses))
         setattr(game, f"entry_{side}_solved", solved)
+        setattr(game, f"entry_{side}_finished_at", now)
     session.add(game)
     await session.commit()
     await session.refresh(game)

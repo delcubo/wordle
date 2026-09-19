@@ -403,9 +403,12 @@ async def add_entry(
 async def get_entries(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
     entries = await crud.list_entries(session, tournament_id)
     tournament = await crud.get_tournament(session, tournament_id)
-    if tournament is None or tournament.type != TournamentType.endless:
+    if tournament is None or tournament.type not in (TournamentType.endless, TournamentType.standard, TournamentType.knockout):
         return entries
     attempts_by_entry = await crud.get_entries_played_today(session, tournament)
+    game_today_ids = None
+    if tournament.type == TournamentType.knockout:
+        game_today_ids = (await crud.get_knockout_today_status(session, tournament))[1]
 
     def _iso_utc(naive_dt):
         # started_at/finished_at хранятся как наивный UTC (datetime.utcnow) —
@@ -421,6 +424,7 @@ async def get_entries(tournament_id: int, session: AsyncSession = Depends(get_se
             played_today_attempts=(attempts_by_entry.get(e.id) or {}).get("attempts_used"),
             played_today_started_at=_iso_utc((attempts_by_entry.get(e.id) or {}).get("started_at")),
             played_today_finished_at=_iso_utc((attempts_by_entry.get(e.id) or {}).get("finished_at")),
+            has_game_today=None if game_today_ids is None else e.id in game_today_ids,
         )
         for e in entries
     ]
