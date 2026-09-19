@@ -641,14 +641,19 @@ async def get_or_create_attempt(session: AsyncSession, entry_id: int, daily_word
     )
     session.add(attempt)
     try:
-        await session.commit()
+        # flush, а не commit: вставленная строка остаётся внутри транзакции и
+        # держит блокировку до save_guess — иначе между созданием и сохранением
+        # первой попытки был бы промежуток без замка, и параллельные запросы
+        # могли бы получить подсказки, не записав попытки (см. пункт про гонки
+        # в разборе безопасности). Второй запрос упрётся в уникальный индекс,
+        # дождётся коммита первого и перечитает уже сохранённое.
+        await session.flush()
     except IntegrityError:
         await session.rollback()
         attempt = await _get_attempt_for_update(session, entry_id, daily_word_id)
         if attempt is None:
             raise
         return attempt
-    await session.refresh(attempt)
     return attempt
 
 
@@ -969,6 +974,23 @@ async def get_all_used_words(session: AsyncSession, tournament_id: int) -> set[s
     """Все слова, уже использованные в розыгрыше — обычные дни, тай-брейк
     (тоже DailyWord) и игры сетки — чтобы новое слово нигде не повторялось."""
     return await _get_used_words(session, tournament_id) | await _get_used_playoff_words(session, tournament_id)
+
+
+async def get_current_playoff_game_for_update(session: AsyncSession, match_id: int) -> PlayoffGame | None:
+    """Последняя игра пары с блокировкой строки (SELECT ... FOR UPDATE) до конца
+    транзакции — для отправки попытки в сетке: без замка параллельные запросы
+    читали один и тот же список попыток, каждый получал подсказку, а
+    записывался только последний (см. bracket_game.submit_guess).
+    populate_existing — чтобы не взять устаревшее состояние из сессии."""
+    result = await session.execute(
+        select(PlayoffGame)
+        .where(PlayoffGame.match_id == match_id)
+        .order_by(PlayoffGame.game_number.desc())
+        .limit(1)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    return result.scalar_one_or_none()
 
 
 async def list_playoff_games(session: AsyncSession, match_id: int) -> list[PlayoffGame]:

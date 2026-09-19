@@ -57,7 +57,10 @@ async def submit_guess(
     session: AsyncSession, tournament: Tournament, match: PlayoffMatch, entry_id: int, guess: str
 ) -> tuple[list[str], bool, int, bool]:
     side = _side_for_entry(match, entry_id)
-    game = await get_current_game(session, match)
+    # Строка игры блокируется до коммита в save_playoff_guess — все проверки
+    # ниже и запись попытки идут по актуальному состоянию, а параллельные
+    # запросы того же игрока выстраиваются в очередь.
+    game = await crud.get_current_playoff_game_for_update(session, match.id)
     if game is None:
         raise ValueError("Игра в этой паре ещё не началась")
     if today() < game.calendar_date:
