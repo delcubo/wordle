@@ -1840,7 +1840,7 @@ function StandingsPanel({ tournament }) {
   const [hoveredCell, setHoveredCell] = useState(null); // {participantId, day} | null
 
   async function handleCopyStandings() {
-    const tags = [standings.hashtag, "#таблица", `#день${standings.current_day}`].filter(Boolean).join(" ");
+    const tags = [standings.hashtag, "#таблица", `#д${standings.current_day}`].filter(Boolean).join(" ");
     const lines = standings.rows.map((r) => `${r.place}. ${r.callsign} — ${r.total_points}`);
     const text = `${tags}\n\n${lines.join("\n")}`;
     try {

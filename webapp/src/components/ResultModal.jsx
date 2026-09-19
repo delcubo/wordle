@@ -33,7 +33,7 @@ function Countdown({ target }) {
 /**
  * Всплывающее окно результата — и для обычного слова дня, и для матча сетки.
  * props:
- *  - title: отрендеренное название розыгрыша (уже с "#деньN" / стадией сетки —
+ *  - title: отрендеренное название розыгрыша (уже с "#дN" / стадией сетки —
  *    см. api/tournament_title.py)
  *  - callsign: позывной игрока — показывается и попадает в копируемый текст
  *  - hashtag: хэштег розыгрыша, заданный админом; если не задан — просто не
@@ -68,7 +68,7 @@ export default function ResultModal({
       const border = isEndless ? "▪️" : "★";
       lines = [`${border} ${baseTitle.toUpperCase()} ${border}`];
       const resultEmoji = solved ? RESULT_EMOJI[attemptsUsed] : FAILED_EMOJI;
-      const dayLabel = dayNumber != null ? (isEndless ? `#${dayNumber}` : `#день${dayNumber}`) : null;
+      const dayLabel = dayNumber != null ? (isEndless ? `#${dayNumber}` : `#д${dayNumber}`) : null;
       const meta = [callsign, dayLabel, attemptsLabel].filter(Boolean);
       lines.push(`${resultEmoji} ${meta.join(" · ")}`);
       if (streakDays != null && streakDays >= 2) {

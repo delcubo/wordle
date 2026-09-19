@@ -6,7 +6,7 @@
 - knockout — всегда "{title} {стадия}" ("1/4 финала", "финал" и т.п.; до
   генерации сетки — заглушка);
 - championship в тай-брейке/плей-офф — так же, как knockout (сетка уже идёт);
-- standard, а также championship до тай-брейка/плей-офф — "{title} #деньN"
+- standard, а также championship до тай-брейка/плей-офф — "{title} #дN"
   (N зажат в границы [1, duration_days], чтобы не показывать нелепые числа
   до старта или после окончания);
 - endless — "{title} #N" (без слова "день" — см. пункт бэклога; N — порядковый
@@ -46,7 +46,7 @@ async def render_tournament_title(
     if tournament.duration_days is not None:
         day_number = day_number_for_date(tournament.start_date, today())
         day_number = max(1, min(day_number, tournament.duration_days))
-        return f"{title} #день{day_number}"
+        return f"{title} #д{day_number}"
 
     if tournament.type == TournamentType.endless:
         day_number = max(1, day_number_for_date(tournament.start_date, today()))
