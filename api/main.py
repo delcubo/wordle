@@ -1,6 +1,6 @@
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -9,7 +9,25 @@ from api.dictionary import register_added_word
 from api.routers import game, admin
 from api import crud
 
-app = FastAPI(title="Wordle Group Game API")
+# Автодокументация (/docs, /redoc, /openapi.json) раскрывает список всех
+# эндпоинтов, включая админские, — включается только явно (ENABLE_DOCS=1).
+_docs_enabled = os.environ.get("ENABLE_DOCS") == "1"
+app = FastAPI(
+    title="Wordle Group Game API",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
+)
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    return response
+
 
 app.include_router(game.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")

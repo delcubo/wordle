@@ -4,6 +4,7 @@
 при успехе выдаётся подписанный cookie-токен (itsdangerous), который проверяется
 на всех /admin/* эндпоинтах, кроме /admin/login.
 """
+import hmac
 import os
 
 from fastapi import Request, HTTPException
@@ -12,7 +13,7 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 COOKIE_NAME = "admin_session"
-SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30  # 30 дней
+SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 дней
 
 _serializer = URLSafeTimedSerializer(SECRET_KEY, salt="admin-session")
 
@@ -22,7 +23,8 @@ def check_password(password: str) -> bool:
         # если пароль не задан в конфиге — считаем, что админ-доступ ещё не настроен,
         # и явно отказываем, а не пропускаем всех подряд.
         return False
-    return password == ADMIN_PASSWORD
+    # постоянное время сравнения — не даёт подбирать пароль по времени ответа
+    return hmac.compare_digest(password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8"))
 
 
 def create_session_token() -> str:

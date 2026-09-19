@@ -5,7 +5,7 @@
 """
 from datetime import timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,7 +27,7 @@ from api.schemas import (
     AddedWordOut, AddedWordCreateRequest,
 )
 from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry, PlayoffMatch, TiebreakRound
-from api.admin_auth import check_password, create_session_token, require_admin, COOKIE_NAME
+from api.admin_auth import check_password, create_session_token, require_admin, COOKIE_NAME, SESSION_MAX_AGE_SECONDS
 from api.dictionary import validate_manual_word, canonical_word, is_valid_word, register_added_word, unregister_added_word
 from api.scoring import calculate_points
 from api.tournament_time import today, day_number_for_date
@@ -40,11 +40,16 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 # ---------- Auth ----------
 
 @router.post("/login")
-async def login(payload: AdminLoginRequest, response: Response):
+async def login(payload: AdminLoginRequest, request: Request, response: Response):
     if not check_password(payload.password):
         raise HTTPException(status_code=401, detail="Неверный пароль")
     token = create_session_token()
-    response.set_cookie(COOKIE_NAME, token, httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30)
+    # secure — только когда запрос реально пришёл по HTTPS (за прокси Railway это
+    # видно по X-Forwarded-Proto), чтобы локальная разработка по http не ломалась
+    is_https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+    response.set_cookie(
+        COOKIE_NAME, token, httponly=True, samesite="strict", secure=is_https, max_age=SESSION_MAX_AGE_SECONDS
+    )
     return {"ok": True}
 
 
