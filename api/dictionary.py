@@ -12,6 +12,7 @@
 с ним исходник scripts/data/russian_words.txt, если понадобится пересобрать
 список заново.
 """
+import hashlib
 import os
 import random
 
@@ -97,6 +98,21 @@ def canonical_word(word: str) -> str | None:
     return _normalized_index().get(normalize_yo(word.lower()))
 
 
+def _seeded_rng(label: str) -> random.Random:
+    """
+    Детерминированный, но не предсказуемый снаружи генератор: в сид входит
+    серверный секрет (SECRET_KEY), которого нет в публичном репозитории.
+    Иначе слово дня можно было бы посчитать заранее по открытым данным —
+    tournament_id и номер дня видны игроку, а алгоритм и список слов лежат в
+    публичном коде. label — например "day:3:7", разные типы слов не
+    пересекаются по сиду.
+    """
+    secret = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+    digest = hashlib.sha256(f"{secret}|{label}".encode("utf-8")).digest()
+    return random.Random(int.from_bytes(digest, "big"))
+
+
+
 def pick_word_for_day(tournament_id: int, day_number: int, already_used: set[str]) -> str:
     """
     Детерминированный выбор слова дня: одинаковый tournament_id + day_number всегда
@@ -105,7 +121,7 @@ def pick_word_for_day(tournament_id: int, day_number: int, already_used: set[str
     использованные слова в этом розыгрыше, передаются из БД).
     """
     words = load_words()
-    rng = random.Random(f"{tournament_id}:{day_number}")
+    rng = _seeded_rng(f"day:{tournament_id}:{day_number}")
     candidates = [w for w in words if w not in already_used]
     if not candidates:
         raise RuntimeError("Словарь исчерпан — слов для нового дня не осталось")
@@ -119,7 +135,7 @@ def pick_word_for_match(match_id: int, game_number: int, already_used: set[str])
     нет единого "номера дня розыгрыша", как у обычных дней).
     """
     words = load_words()
-    rng = random.Random(f"match:{match_id}:{game_number}")
+    rng = _seeded_rng(f"match:{match_id}:{game_number}")
     candidates = [w for w in words if w not in already_used]
     if not candidates:
         raise RuntimeError("Словарь исчерпан — слов для новой игры сетки не осталось")
