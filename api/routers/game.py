@@ -95,6 +95,25 @@ async def my_tournaments(token: str, session: AsyncSession = Depends(get_session
     return result
 
 
+def _unavailable_info(tournament, day_number: int | None = None) -> dict:
+    """
+    Почему у игрока нет слова на сегодня: розыгрыш ещё не начался или уже
+    завершён — чтобы на фронте показать разные тексты вместо общего. Возвращает
+    поля для TodayWordStatus/BracketTodayStatus; пустой словарь, если причина
+    не определена (например, championship между этапами).
+    """
+    if today() < tournament.start_date:
+        return {"unavailable_reason": "not_started", "start_date": tournament.start_date.isoformat()}
+    if tournament.status == TournamentStatus.finished:
+        return {"unavailable_reason": "finished"}
+    if (
+        tournament.type == TournamentType.standard and tournament.duration_days is not None
+        and day_number is not None and day_number > tournament.duration_days
+    ):
+        return {"unavailable_reason": "finished"}
+    return {}
+
+
 async def _resolve_context(session: AsyncSession, token: str, tournament_id: int):
     """
     Находит пользователя, его участие (entry) в указанном розыгрыше и слово на
@@ -182,6 +201,10 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             base_title=tournament.title, is_endless=is_endless, hashtag=tournament.hashtag, paused=tournament.paused,
             is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=tiebreak_place,
             is_standard_report=is_standard_report,
+            **(
+                _unavailable_info(tournament, day_number_for_date(tournament.start_date, today()))
+                if not is_tiebreak and not tournament.paused and tournament.status not in (TournamentStatus.tiebreak, TournamentStatus.playoff) else {}
+            ),
         )
 
     attempt = await crud.get_attempt(session, entry.id, daily_word.id)
@@ -300,9 +323,10 @@ async def get_bracket_today(token: str, tournament_id: int, session: AsyncSessio
     next_word_at = None
     if view.get("match_finished") and view.get("won"):
         next_word_at = next_publish_at().isoformat()
+    unavailable = {} if view.get("has_match") else _unavailable_info(tournament)
     return BracketTodayStatus(
         **view, callsign=entry.callsign, tournament_title=tournament_title, hashtag=tournament.hashtag,
-        next_word_at=next_word_at,
+        next_word_at=next_word_at, **unavailable,
     )
 
 

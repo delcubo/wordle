@@ -279,6 +279,8 @@ class TodayWordStatus(BaseModel):
     is_tiebreak: bool = False  # только для розыгрыша типа tiebreak — переключает текст ожидания/финала на фронте
     tiebreak_started: bool = False  # розыгрыш типа tiebreak уже стартовал (хотя бы корневой раунд создан)
     tiebreak_place: str | None = None  # текущее/итоговое место — "2" или диапазон "2-4", пока группа ещё играет
+    unavailable_reason: str | None = None  # "not_started" / "finished" — почему слова нет (только когда has_word_today=False), для разных текстов на фронте
+    start_date: str | None = None  # ISO-дата старта розыгрыша — для текста "Розыгрыш начнётся 21 сентября" при unavailable_reason="not_started"
 
 
 class BracketTodayStatus(BaseModel):
@@ -304,6 +306,8 @@ class BracketTodayStatus(BaseModel):
     hashtag: str | None = None
     next_word_at: str | None = None
     paused: bool = False
+    unavailable_reason: str | None = None  # см. TodayWordStatus
+    start_date: str | None = None
 
 
 class GuessRequest(BaseModel):

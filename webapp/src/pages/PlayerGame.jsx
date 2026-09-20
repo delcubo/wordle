@@ -76,6 +76,18 @@ export default function PlayerGame() {
     if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current);
   }, []);
 
+  // Текст, когда слова на сегодня нет: "не начался" и "завершён" различаются
+  // (красным, см. isError), остальное — прежний общий текст.
+  function unavailableMessage(data) {
+    if (data.unavailable_reason === "not_started" && data.start_date) {
+      const [y, m, d] = data.start_date.split("-").map(Number);
+      const dateText = new Date(y, m - 1, d).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
+      return { text: `Розыгрыш начнётся ${dateText}`, red: true };
+    }
+    if (data.unavailable_reason === "finished") return { text: "Розыгрыш завершён", red: true };
+    return { text: "Слово дня сегодня недоступно — розыгрыш ещё не начался или уже завершён.", red: false };
+  }
+
   function applyStandardStatus(data) {
     setCallsign(data.callsign || "");
     setTournamentTitle(data.tournament_title || "");
@@ -83,6 +95,7 @@ export default function PlayerGame() {
 
     if (!data.has_word_today) {
       setGameOver(true);
+      let red = false;
       if (data.paused) {
         setMessage("Розыгрыш временно приостановлен админом.");
       } else if (data.is_tiebreak && !data.tiebreak_started) {
@@ -92,9 +105,11 @@ export default function PlayerGame() {
       } else if (data.is_tiebreak) {
         setMessage("Раунд ещё разрешается — подождите немного.");
       } else {
-        setMessage("Слово дня сегодня недоступно — розыгрыш ещё не начался или уже завершён.");
+        const info = unavailableMessage(data);
+        setMessage(info.text);
+        red = info.red;
       }
-      setIsError(false);
+      setIsError(red);
       return;
     }
 
@@ -140,12 +155,9 @@ export default function PlayerGame() {
 
     if (!data.has_match) {
       setGameOver(true);
-      setMessage(
-        data.paused
-          ? "Розыгрыш временно приостановлен админом."
-          : "Слово дня сегодня недоступно — розыгрыш ещё не начался или уже завершён."
-      );
-      setIsError(false);
+      const info = data.paused ? { text: "Розыгрыш временно приостановлен админом.", red: false } : unavailableMessage(data);
+      setMessage(info.text);
+      setIsError(info.red);
       return;
     }
 
