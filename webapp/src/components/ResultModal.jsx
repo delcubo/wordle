@@ -72,7 +72,7 @@ export default function ResultModal({
       const meta = [callsign, dayLabel, attemptsLabel].filter(Boolean);
       lines.push(`${resultEmoji} ${meta.join(" · ")}`);
       if (streakDays != null && streakDays >= 2) {
-        lines.push(`🔥 дней подряд:${streakDays}`);
+        lines.push(`🔥 дней подряд: ${streakDays}`);
       }
       lines.push("", emojiGrid);
     } else {
