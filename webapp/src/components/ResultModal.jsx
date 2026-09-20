@@ -62,6 +62,7 @@ export default function ResultModal({
   async function handleCopy() {
     const emojiGrid = grid.map((row) => row.map((s) => EMOJI[s] || "⬜").join("")).join("\n");
     let lines;
+    let hasStreakLine = false;
     if ((isEndless || isStandardReport) && baseTitle) {
       // Общий формат отчёта для бессрочного и standard/championship (до
       // тай-брейка/плей-офф) режимов — см. пункт бэклога.
@@ -71,17 +72,19 @@ export default function ResultModal({
       const dayLabel = dayNumber != null ? (isEndless ? `#${dayNumber}` : `#д${dayNumber}`) : null;
       const meta = [callsign, dayLabel, attemptsLabel].filter(Boolean);
       lines.push(`${resultEmoji} ${meta.join(" · ")}`);
-      if (streakDays != null && streakDays >= 2) {
-        lines.push(`🔥 дней подряд: ${streakDays}`);
-      }
       lines.push("", emojiGrid);
+      if (streakDays != null && streakDays >= 2) {
+        lines.push("", `🔥 дней подряд: ${streakDays}`);
+        hasStreakLine = true;
+      }
     } else {
       lines = [title];
       if (callsign) lines.push(`Игрок: ${callsign}`);
       lines.push(`Попытки: ${attemptsLabel}`);
       lines.push("", emojiGrid);
     }
-    if (hashtag) lines.push("", hashtag);
+    // хештег идёт сразу под строкой серии, без пустой строки между ними
+    if (hashtag) lines.push(...(hasStreakLine ? [] : [""]), hashtag);
     try {
       await navigator.clipboard.writeText(lines.join("\n"));
       setCopied(true);
