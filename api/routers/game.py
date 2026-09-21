@@ -324,9 +324,14 @@ async def get_bracket_today(token: str, tournament_id: int, session: AsyncSessio
     if view.get("match_finished") and view.get("won"):
         next_word_at = next_publish_at().isoformat()
     unavailable = {} if view.get("has_match") else _unavailable_info(tournament)
+    # tournament_title = "<название> <стадия>" (см. render_tournament_title) —
+    # для копируемого отчёта нужны они по отдельности
+    stage_label = None
+    if tournament_title.startswith(tournament.title + " "):
+        stage_label = tournament_title[len(tournament.title) + 1:]
     return BracketTodayStatus(
         **view, callsign=entry.callsign, tournament_title=tournament_title, hashtag=tournament.hashtag,
-        next_word_at=next_word_at, **unavailable,
+        next_word_at=next_word_at, base_title=tournament.title, stage_label=stage_label, **unavailable,
     )
 
 

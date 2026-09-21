@@ -308,6 +308,8 @@ class BracketTodayStatus(BaseModel):
     paused: bool = False
     unavailable_reason: str | None = None  # см. TodayWordStatus
     start_date: str | None = None
+    base_title: str | None = None  # название розыгрыша без стадии — для копируемого отчёта
+    stage_label: str | None = None  # "1/4 финала" / "финал" и т.п. — метка стадии сетки для копируемого отчёта
 
 
 class GuessRequest(BaseModel):

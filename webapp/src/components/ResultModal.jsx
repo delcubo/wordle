@@ -53,7 +53,7 @@ function Countdown({ target }) {
  */
 export default function ResultModal({
   title, callsign, hashtag, attemptsUsed, solved, grid, answerWord, message, countdownTarget, gameEnded,
-  baseTitle, dayNumber, isEndless, isStandardReport, streakDays, onClose,
+  baseTitle, dayNumber, isEndless, isStandardReport, isBracketReport, stageLabel, streakDays, onClose,
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -63,13 +63,16 @@ export default function ResultModal({
     const emojiGrid = grid.map((row) => row.map((s) => EMOJI[s] || "⬜").join("")).join("\n");
     let lines;
     let hasStreakLine = false;
-    if ((isEndless || isStandardReport) && baseTitle) {
+    if ((isEndless || isStandardReport || isBracketReport) && baseTitle) {
       // Общий формат отчёта для бессрочного и standard/championship (до
       // тай-брейка/плей-офф) режимов — см. пункт бэклога.
-      const border = isEndless ? "▪️" : "★";
+      const border = isEndless ? "▪️" : isBracketReport ? "⚔️" : "★";
       lines = [`${border} ${baseTitle.toUpperCase()} ${border}`];
       const resultEmoji = solved ? RESULT_EMOJI[attemptsUsed] : FAILED_EMOJI;
-      const dayLabel = dayNumber != null ? (isEndless ? `#${dayNumber}` : `#д${dayNumber}`) : null;
+      // у матчей сетки вместо номера дня — метка стадии ("1/4 финала"), без "#"
+      const dayLabel = isBracketReport
+        ? stageLabel || null
+        : dayNumber != null ? (isEndless ? `#${dayNumber}` : `#д${dayNumber}`) : null;
       const meta = [callsign, dayLabel, attemptsLabel].filter(Boolean);
       lines.push(`${resultEmoji} ${meta.join(" · ")}`);
       lines.push("", emojiGrid);

@@ -187,6 +187,9 @@ export default function PlayerGame() {
           message: (data.won ? "Победа!" : "Поражение.") + oppResult,
           countdownTarget: data.won ? data.next_word_at : null,
           gameEnded: !data.won,
+          baseTitle: data.base_title,
+          stageLabel: data.stage_label,
+          isBracketReport: true,
         });
       }
       return;
@@ -206,6 +209,9 @@ export default function PlayerGame() {
           solved: data.solved,
           grid: data.previous_results,
           message: "Вы сыграли, ждём соперника." + opponentNote,
+          baseTitle: data.base_title,
+          stageLabel: data.stage_label,
+          isBracketReport: true,
         });
       }
     } else {
@@ -433,6 +439,8 @@ export default function PlayerGame() {
           isEndless={modal.isEndless}
           isStandardReport={modal.isStandardReport}
           streakDays={modal.streakDays}
+          isBracketReport={modal.isBracketReport}
+          stageLabel={modal.stageLabel}
           onClose={() => setModal(null)}
         />
       )}
