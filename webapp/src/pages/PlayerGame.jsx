@@ -219,7 +219,12 @@ export default function PlayerGame() {
   async function fetchStandardStatus() {
     const res = await fetch(`/api/game/today?token=${encodeURIComponent(token)}&tournament_id=${tournamentId}`);
     if (res.status === 404 || res.status === 403) {
-      setInvalidLink(true);
+      // Сервер различает: неверный токен игрока ("Ссылка недействительна") и
+      // рабочий токен, но недоступный розыгрыш (не участвует / не существует) —
+      // во втором случае можно вернуть игрока в его список игр.
+      let detail = "";
+      try { detail = (await res.json()).detail || ""; } catch (e) { /* ответ без тела */ }
+      setInvalidLink(detail === "Ссылка недействительна" ? "token" : "tournament");
       return null;
     }
     return res.json();
@@ -366,7 +371,14 @@ export default function PlayerGame() {
   if (invalidLink) {
     return (
       <Centered theme={theme}>
-        <p>Эта ссылка недействительна, или вы не участвуете в этом розыгрыше.</p>
+        {invalidLink === "token" ? (
+          <p>Эта ссылка недействительна. Запросите новую у организатора.</p>
+        ) : (
+          <>
+            <p>Вы не участвуете в этом розыгрыше, или он не существует.</p>
+            <Link to={`/play/${token}`} style={{ color: "var(--muted)" }}>← Мои игры</Link>
+          </>
+        )}
       </Centered>
     );
   }
