@@ -638,15 +638,18 @@ async def reroll_word(
 
 @router.get("/tournaments/{tournament_id}/standings", response_model=StandingsResponse)
 async def get_standings(
-    tournament_id: int, completed_only: bool = False,
+    tournament_id: int, as_of_day: int | None = None,
     session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
 ):
     """
-    completed_only=true — таблица только по дням, которые уже полностью
-    прошли (для копируемого/скачиваемого текста/картинки — см. пункт бэклога:
-    иначе тот, кто уже сыграл сегодня, пока остальные ещё нет, временно
-    выглядел бы лидером). Обычная live-таблица в админке (completed_only не
-    передан) по-прежнему включает сегодняшний день, если он уже сыгран.
+    as_of_day — показать таблицу по состоянию на конкретный уже полностью
+    прошедший день (выбор дня в панели — см. пункт бэклога: так админ сам
+    решает, копировать ли live-таблицу с ещё не всеми сыгравшими сегодня, или
+    зафиксированный снимок прошлого дня). Без as_of_day — обычная live-таблица,
+    включает сегодняшний день, если он уже сыгран, как и раньше.
+
+    last_completed_day (в ответе всегда, независимо от as_of_day) — для
+    построения списка дней, доступных для выбора на фронте.
     """
     tournament = await crud.get_tournament(session, tournament_id)
     if tournament is None:
@@ -655,19 +658,23 @@ async def get_standings(
         raise HTTPException(status_code=400, detail="Для этого типа розыгрыша таблица не ведётся")
 
     raw_day = day_number_for_date(tournament.start_date, today())
-    if completed_only:
-        # если розыгрыш уже целиком завершён (сегодня позже последнего дня),
-        # завершены все дни; иначе последний завершённый день — вчерашний
-        # относительно текущего
-        last_day = tournament.duration_days if raw_day > tournament.duration_days else max(0, raw_day - 1)
-        total_days = last_day
-        current_day = last_day
+    # если розыгрыш уже целиком завершён (сегодня позже последнего дня),
+    # завершены все дни; иначе последний завершённый день — вчерашний
+    # относительно текущего (сегодняшний ещё идёт)
+    last_completed_day = tournament.duration_days if raw_day > tournament.duration_days else max(0, raw_day - 1)
+
+    if as_of_day is not None:
+        if as_of_day < 1 or as_of_day > last_completed_day:
+            raise HTTPException(status_code=400, detail="Этот день ещё не завершён полностью")
+        max_day = as_of_day
+        total_days = as_of_day
+        current_day = as_of_day
     else:
-        last_day = None
+        max_day = None
         total_days = tournament.duration_days
         current_day = max(1, min(raw_day, tournament.duration_days))
 
-    rows = await compute_standings(session, tournament, max_day=last_day)
+    rows = await compute_standings(session, tournament, max_day=max_day)
     return StandingsResponse(
         rows=[
             StandingsRowOut(
@@ -687,6 +694,7 @@ async def get_standings(
         ],
         total_days=total_days,
         current_day=current_day,
+        last_completed_day=last_completed_day,
         skip_flag_symbol=tournament.skip_flag_symbol,
         hashtag=tournament.hashtag,
     )

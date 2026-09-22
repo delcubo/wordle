@@ -354,6 +354,7 @@ class StandingsResponse(BaseModel):
     rows: list[StandingsRowOut]
     total_days: int
     current_day: int
+    last_completed_day: int = 0  # для списка дней, доступных для выбора в панели (см. admin.py::get_standings)
     skip_flag_symbol: str
     hashtag: str | None = None
 
