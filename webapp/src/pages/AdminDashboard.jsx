@@ -1867,7 +1867,10 @@ function StandingsPanel({ tournament }) {
 
   function handleCopyStandings() {
     const tags = [standings.hashtag, "#таблица", `#д${standings.current_day}`].filter(Boolean).join(" ");
-    const lines = standings.rows.map((r) => `${r.place}. ${r.callsign} — ${r.total_points}`);
+    // "·", а не "N. " — иначе Telegram распознаёт "1. " как начало
+    // нумерованного списка и при вставке склеивает все строки в один пункт
+    // (см. пункт бэклога)
+    const lines = standings.rows.map((r) => `${r.place} · ${r.callsign} — ${r.total_points}`);
     const text = `${tags}\n\n${lines.join("\n")}`;
     navigator.clipboard.writeText(text).then(
       () => {
