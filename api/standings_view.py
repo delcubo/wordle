@@ -10,7 +10,16 @@ from api.scoring import build_standings, ParticipantDayResult, StandingsRow
 from api.tournament_time import today, day_number_for_date
 
 
-async def compute_standings(session: AsyncSession, tournament: Tournament) -> list[StandingsRow]:
+async def compute_standings(
+    session: AsyncSession, tournament: Tournament, max_day: int | None = None
+) -> list[StandingsRow]:
+    """
+    max_day — ограничивает таблицу днями 1..max_day (используется для
+    копируемой/скачиваемой таблицы "по итогам последнего завершённого дня" —
+    см. admin.py::get_standings — чтобы не давать преимущество тем, кто уже
+    сыграл сегодня, пока остальные ещё нет; None — обычная полная таблица,
+    как для live-панели админа).
+    """
     all_entries = [e for e in await crud.list_entries(session, tournament.id) if not e.hidden_from_standings]
     daily_words = await crud.list_daily_words(session, tournament.id)
     attempts = await crud.list_attempts_for_tournament(session, tournament.id)
@@ -23,17 +32,23 @@ async def compute_standings(session: AsyncSession, tournament: Tournament) -> li
             continue
         attempts_by_entry_and_day.setdefault(a.entry_id, {})[dw.day_number] = a
 
+    last_day = tournament.duration_days if max_day is None else min(max_day, tournament.duration_days)
+
     # Пока участник ни разу не отгадывал слово (ни одной попытки ни за один
-    # день), в таблице его вообще нет — не показываем строку из одних красных
-    # флагов тому, кто просто ещё не начал играть. Как только он сыграл хотя
-    # бы один день, строка появляется целиком, включая пропуски за более
-    # ранние (уже прошедшие) дни, которые он действительно пропустил.
-    entries = [e for e in all_entries if e.id in attempts_by_entry_and_day]
+    # учитываемый день), в таблице его вообще нет — не показываем строку из
+    # одних красных флагов тому, кто просто ещё не начал играть. Как только
+    # он сыграл хотя бы один такой день, строка появляется целиком, включая
+    # пропуски за более ранние (уже прошедшие) дни, которые он действительно
+    # пропустил.
+    entries = [
+        e for e in all_entries
+        if any(day <= last_day for day in attempts_by_entry_and_day.get(e.id, {}))
+    ]
 
     current_day = day_number_for_date(tournament.start_date, today())
 
     daily_results: dict[int, dict[int, ParticipantDayResult]] = {}
-    for day_number in range(1, tournament.duration_days + 1):
+    for day_number in range(1, last_day + 1):
         daily_results[day_number] = {}
         # Сегодняшний день ещё не закончился (дедлайн — начало следующего дня),
         # а будущие дни ещё не наступили вовсе — непройденный день считается
@@ -65,4 +80,4 @@ async def compute_standings(session: AsyncSession, tournament: Tournament) -> li
                     )
 
     entry_dicts = [{"id": e.id, "callsign": e.callsign} for e in entries]
-    return build_standings(entry_dicts, daily_results, tournament.duration_days)
+    return build_standings(entry_dicts, daily_results, last_day)

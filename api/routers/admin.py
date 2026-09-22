@@ -637,14 +637,37 @@ async def reroll_word(
 # ---------- Standings ----------
 
 @router.get("/tournaments/{tournament_id}/standings", response_model=StandingsResponse)
-async def get_standings(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+async def get_standings(
+    tournament_id: int, completed_only: bool = False,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """
+    completed_only=true — таблица только по дням, которые уже полностью
+    прошли (для копируемого/скачиваемого текста/картинки — см. пункт бэклога:
+    иначе тот, кто уже сыграл сегодня, пока остальные ещё нет, временно
+    выглядел бы лидером). Обычная live-таблица в админке (completed_only не
+    передан) по-прежнему включает сегодняшний день, если он уже сыгран.
+    """
     tournament = await crud.get_tournament(session, tournament_id)
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
     if tournament.duration_days is None:
         raise HTTPException(status_code=400, detail="Для этого типа розыгрыша таблица не ведётся")
 
-    rows = await compute_standings(session, tournament)
+    raw_day = day_number_for_date(tournament.start_date, today())
+    if completed_only:
+        # если розыгрыш уже целиком завершён (сегодня позже последнего дня),
+        # завершены все дни; иначе последний завершённый день — вчерашний
+        # относительно текущего
+        last_day = tournament.duration_days if raw_day > tournament.duration_days else max(0, raw_day - 1)
+        total_days = last_day
+        current_day = last_day
+    else:
+        last_day = None
+        total_days = tournament.duration_days
+        current_day = max(1, min(raw_day, tournament.duration_days))
+
+    rows = await compute_standings(session, tournament, max_day=last_day)
     return StandingsResponse(
         rows=[
             StandingsRowOut(
@@ -662,8 +685,8 @@ async def get_standings(tournament_id: int, session: AsyncSession = Depends(get_
             )
             for r in rows
         ],
-        total_days=tournament.duration_days,
-        current_day=max(1, min(day_number_for_date(tournament.start_date, today()), tournament.duration_days)),
+        total_days=total_days,
+        current_day=current_day,
         skip_flag_symbol=tournament.skip_flag_symbol,
         hashtag=tournament.hashtag,
     )

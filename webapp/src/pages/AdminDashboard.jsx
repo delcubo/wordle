@@ -1859,9 +1859,26 @@ function StandingsPanel({ tournament }) {
   const [copied, setCopied] = useState(false);
   const [hoveredCell, setHoveredCell] = useState(null); // {participantId, day} | null
 
+  // Копия/картинка таблицы всегда строится по последнему полностью прошедшему
+  // дню (не сегодняшнему в моменте) — иначе тот, кто уже сыграл сегодня, пока
+  // остальные ещё нет, временно выглядел бы лидером. Поэтому запрашиваем
+  // отдельно, а не берём live-таблицу из состояния панели (в ней сегодняшний
+  // день, если уже сыгран, посчитан).
+  async function fetchCompletedStandings() {
+    const data = await api(`/api/admin/tournaments/${tournament.id}/standings?completed_only=true`);
+    if (data.total_days === 0) {
+      setError("Ещё не прошло ни одного полного дня розыгрыша — таблицу пока не из чего собрать.");
+      return null;
+    }
+    setError("");
+    return data;
+  }
+
   async function handleCopyStandings() {
-    const tags = [standings.hashtag, "#таблица", `#д${standings.current_day}`].filter(Boolean).join(" ");
-    const lines = standings.rows.map((r) => `${r.place}. ${r.callsign} — ${r.total_points}`);
+    const data = await fetchCompletedStandings();
+    if (!data) return;
+    const tags = [data.hashtag, "#таблица", `#д${data.current_day}`].filter(Boolean).join(" ");
+    const lines = data.rows.map((r) => `${r.place}. ${r.callsign} — ${r.total_points}`);
     const text = `${tags}\n\n${lines.join("\n")}`;
     try {
       await navigator.clipboard.writeText(text);
@@ -1872,7 +1889,9 @@ function StandingsPanel({ tournament }) {
     }
   }
 
-  function handleDownloadStandings() {
+  async function handleDownloadStandings() {
+    const standings = await fetchCompletedStandings();
+    if (!standings) return;
     const dpr = window.devicePixelRatio || 1;
     const dayCol = 34;
     const placeCol = 34;
