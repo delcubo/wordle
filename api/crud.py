@@ -815,6 +815,15 @@ async def get_tiebreak_word_queue(session: AsyncSession, tournament: Tournament,
     либо берётся из ручной замены (tournament.word_overrides). Как только раунд
     с этим номером дня реально создан (см. create_tiebreak_round) — слово уже
     зафиксировано и не редактируется (day-word мог быть уже сыгран).
+
+    already_used — одно и то же для всех ещё не зафиксированных слотов (только
+    реально сыгранные слова), а не накапливается по ходу цикла: раньше слово
+    каждого посчитанного слота добавлялось в already_used для следующих, из-за
+    чего правка одного раунда ("Предложить другое слово") сдвигала набор
+    исключений и меняла детерминированный выбор для ДРУГИХ, ещё не тронутых
+    слотов превью (см. пункт бэклога). Реальное создание раунда
+    (create_tiebreak_round) и так учитывает только уже реально сыгранные слова,
+    так что это совпадает с тем, что слот получит на самом деле.
     """
     existing_by_day = {w.day_number: w for w in await list_daily_words(session, tournament.id)}
     already_used = await _get_used_words(session, tournament.id)
@@ -825,11 +834,9 @@ async def get_tiebreak_word_queue(session: AsyncSession, tournament: Tournament,
         existing = existing_by_day.get(day_number)
         if existing is not None:
             queue.append({"day_number": day_number, "word": existing.word, "editable": False})
-            already_used = already_used | {existing.word}
             continue
         override = overrides.get(str(day_number))
         word = override if override else pick_word_for_day(tournament.id, day_number, already_used)
-        already_used = already_used | {word}
         queue.append({"day_number": day_number, "word": word, "editable": True})
     return queue
 
