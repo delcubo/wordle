@@ -885,6 +885,24 @@ async def get_active_tiebreak_round_for_entry(
     return result.scalars().first()
 
 
+async def get_last_tiebreak_round_for_entry(
+    session: AsyncSession, tournament_id: int, entry_id: int
+) -> TiebreakRound | None:
+    """Самый глубокий раунд тай-брейка (по round_number), в котором когда-либо
+    участвовал entry — тот самый раунд, по итогам которого ему досталось
+    окончательное место (раз из него не завели продолжение — см.
+    tiebreak.py::_try_resolve_round). Используется, чтобы показать игроку
+    попап с сеткой его последней попытки, когда тай-брейк для него уже
+    закончился (см. пункт бэклога)."""
+    result = await session.execute(
+        select(TiebreakRound)
+        .join(TiebreakParticipant, TiebreakParticipant.round_id == TiebreakRound.id)
+        .where(TiebreakRound.tournament_id == tournament_id, TiebreakParticipant.entry_id == entry_id)
+        .order_by(TiebreakRound.round_number.desc(), TiebreakRound.id.desc())
+    )
+    return result.scalars().first()
+
+
 async def list_root_tiebreak_rounds(session: AsyncSession, tournament_id: int) -> list[TiebreakRound]:
     """Раунды, с которых началась цепочка тай-брейка (не продолжения) — по одному
     на каждую исходную группу с равными местами."""

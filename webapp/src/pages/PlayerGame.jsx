@@ -101,7 +101,27 @@ export default function PlayerGame() {
       } else if (data.is_tiebreak && !data.tiebreak_started) {
         setMessage("Тай-брейк ещё не начался.");
       } else if (data.is_tiebreak && data.tiebreak_place) {
-        setMessage(`Тай-брейк завершён — ваше место: ${data.tiebreak_place}.`);
+        const finalText = `Тай-брейк завершён — ваше место: ${data.tiebreak_place}.`;
+        setMessage(finalText);
+        // Если есть реальная попытка последнего раунда — попап с её сеткой,
+        // как при обычном завершённом дне, а не пустое поле ввода (см. пункт
+        // бэклога). Бэкенд отдаёт её, только когда место уже окончательное
+        // (не диапазон), так что это не перекрывает "ждём остальных".
+        if (data.previous_guesses && data.previous_guesses.length > 0) {
+          setRows(buildRows(data.previous_guesses, data.previous_results));
+          setLetterStates(buildLetterStates(data.previous_guesses, data.previous_results));
+          setActiveRowIndex(-1);
+          setModal({
+            title: data.tournament_title,
+            callsign: data.callsign,
+            hashtag: data.hashtag,
+            attemptsUsed: data.attempts_used,
+            solved: data.solved,
+            grid: data.previous_results,
+            answerWord: data.answer_word,
+            message: finalText,
+          });
+        }
       } else if (data.is_tiebreak) {
         setMessage("Раунд ещё разрешается — подождите немного.");
       } else {

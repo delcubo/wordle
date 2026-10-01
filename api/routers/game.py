@@ -199,11 +199,33 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             tiebreak_place = await tiebreak.get_entry_place(session, tournament, entry.id)
 
     if daily_word is None:
+        # Тай-брейк уже закончился лично для этого участника (место не диапазон,
+        # а точное число — см. tiebreak.get_entry_place) — вместо пустого поля
+        # ввода отдаём сетку его последней сыгранной попытки, как при обычном
+        # завершённом дне, чтобы фронт показал попап, а не голую доску (см.
+        # пункт бэклога).
+        last_attempt_fields = {}
+        if is_tiebreak and tiebreak_place is not None and "-" not in tiebreak_place:
+            last_round = await crud.get_last_tiebreak_round_for_entry(session, tournament.id, entry.id)
+            last_attempt = (
+                await crud.get_attempt(session, entry.id, last_round.daily_word_id) if last_round else None
+            )
+            if last_attempt is not None:
+                last_daily_word = await crud.get_daily_word_by_id(session, last_round.daily_word_id)
+                last_attempt_fields = dict(
+                    day_number=last_round.round_number,
+                    attempts_used=last_attempt.attempts_used,
+                    solved=last_attempt.solved,
+                    previous_guesses=last_attempt.guesses,
+                    previous_results=[check_guess(g, last_daily_word.word) for g in last_attempt.guesses],
+                    answer_word=last_daily_word.word if not last_attempt.solved else None,
+                )
         return TodayWordStatus(
             has_word_today=False, already_played=False, callsign=entry.callsign, tournament_title=tournament_title,
             base_title=tournament.title, is_endless=is_endless, hashtag=tournament.hashtag, paused=tournament.paused,
             is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=tiebreak_place,
             is_standard_report=is_standard_report,
+            **last_attempt_fields,
             **(
                 _unavailable_info(tournament, day_number_for_date(tournament.start_date, today()))
                 if not is_tiebreak and not tournament.paused and tournament.status not in (TournamentStatus.tiebreak, TournamentStatus.playoff) else {}
