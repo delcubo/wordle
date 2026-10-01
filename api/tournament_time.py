@@ -7,6 +7,8 @@ import os
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from api.models import Tournament, TournamentStatus
+
 _TZ_NAME = os.environ.get("TOURNAMENT_TIMEZONE", "Europe/Moscow")
 TOURNAMENT_TZ = ZoneInfo(_TZ_NAME)
 
@@ -31,3 +33,21 @@ def next_publish_at() -> datetime:
     (см. TodayWordStatus.next_word_at/BracketTodayStatus.next_word_at)."""
     tomorrow = today() + timedelta(days=1)
     return datetime.combine(tomorrow, datetime.min.time(), tzinfo=TOURNAMENT_TZ) + timedelta(minutes=1)
+
+
+def effective_status(tournament: Tournament) -> TournamentStatus:
+    """
+    Статус розыгрыша для показа и для любых решений на его основе — без
+    ручной активации (см. пункт бэклога): раньше розыгрыш оставался "draft",
+    пока админ не нажмёт "Активировать", хотя сама игра (слово дня/раунд
+    тай-брейка/матч сетки) уже заводится лениво по дате старта независимо от
+    этого статуса — получался рассинхрон. draft/active теперь всегда
+    выводятся из даты старта. Явные бизнес-стадии (tiebreak/playoff/finished),
+    которые ставит сама игровая логика по результатам игры, а не по дате,
+    возвращаются как есть — их по дате не вычислить.
+    """
+    if tournament.status in (TournamentStatus.tiebreak, TournamentStatus.playoff, TournamentStatus.finished):
+        return tournament.status
+    if day_number_for_date(tournament.start_date, today()) >= 1:
+        return TournamentStatus.active
+    return TournamentStatus.draft

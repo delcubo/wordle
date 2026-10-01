@@ -754,11 +754,6 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
     }
   }
 
-  async function handleActivate(id) {
-    await api(`/api/admin/tournaments/${id}/activate`, { method: "POST" });
-    onActivated();
-  }
-
   function renderCard(t) {
     return (
       <div
@@ -835,14 +830,6 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           </div>
         ) : (
           <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-            {t.status !== "active" && (
-              <button
-                onClick={(e) => { e.stopPropagation(); handleActivate(t.id); }}
-                style={{ ...ghostButtonStyle, fontSize: 12 }}
-              >
-                Активировать
-              </button>
-            )}
             {(t.status === "active" || t.status === "tiebreak" || t.status === "playoff") && (
               <button
                 onClick={(e) => { e.stopPropagation(); handleTogglePause(t); }}

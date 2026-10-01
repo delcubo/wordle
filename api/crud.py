@@ -119,23 +119,28 @@ async def list_tournaments(session: AsyncSession) -> list[Tournament]:
     return list(result.scalars().all())
 
 
-async def list_active_tournaments(session: AsyncSession) -> list[Tournament]:
-    result = await session.execute(select(Tournament).where(Tournament.status == TournamentStatus.active))
-    return list(result.scalars().all())
-
-
 async def get_other_active_tournament_of_type(
-    session: AsyncSession, tournament_type, exclude_id: int
+    session: AsyncSession, tournament_type, exclude_id: int | None = None
 ) -> Tournament | None:
-    """Ищет уже активный розыгрыш того же типа, кроме самого exclude_id — используется,
-    чтобы не дать активировать вторую бессрочную игру, пока идёт текущая."""
-    result = await session.execute(
-        select(Tournament).where(
-            Tournament.type == tournament_type,
-            Tournament.status == TournamentStatus.active,
-            Tournament.id != exclude_id,
-        )
+    """
+    Ищет другой незавершённый неархивный розыгрыш того же типа (кроме самого
+    exclude_id, если задан) — используется только для бессрочной игры, чтобы
+    не завести вторую одновременно с текущей (см. пункт бэклога про отмену
+    ручной активации). Раньше проверялось по status == active, выставлявшемуся
+    только нажатием "Активировать"; теперь ручной активации нет вовсе
+    (api/tournament_time.py::effective_status выводит active/draft из даты
+    старта), поэтому "уже есть другая" значит "ещё не завершена и не в
+    архиве" — раз статус больше не нужно включать вручную, такой черновик
+    рано или поздно сам начнёт выдавать слова параллельно с первым.
+    """
+    query = select(Tournament).where(
+        Tournament.type == tournament_type,
+        Tournament.status != TournamentStatus.finished,
+        Tournament.archived.is_(False),
     )
+    if exclude_id is not None:
+        query = query.where(Tournament.id != exclude_id)
+    result = await session.execute(query)
     return result.scalars().first()
 
 

@@ -12,7 +12,7 @@ from api.schemas import TodayWordStatus, GuessRequest, GuessResponse, LetterStat
 from api.wordle_logic import check_guess, is_solved
 from api.scoring import calculate_points
 from api.dictionary import is_valid_word
-from api.tournament_time import today, day_number_for_date, next_publish_at
+from api.tournament_time import today, day_number_for_date, next_publish_at, effective_status
 from api.models import TournamentType, TournamentStatus, PlayoffMatchStatus
 from api.tournament_title import render_tournament_title
 from api import crud, tiebreak, bracket_game
@@ -60,10 +60,13 @@ async def _entry_round_number(session: AsyncSession, tournament, entry_id: int) 
     участника сейчас нет ни активного раунда, ни начавшейся пары сетки."""
     if tournament.type == TournamentType.tiebreak:
         round_ = await crud.get_active_tiebreak_round_for_entry(session, tournament.id, entry_id)
-        if round_ is None:
-            return None
-        daily_word = await crud.get_daily_word_by_id(session, round_.daily_word_id)
-        return daily_word.day_number if daily_word else None
+        # round_.round_number — настоящая глубина в цепочке тай-брейка (1, 2, 3...).
+        # НЕ day_number связанного DailyWord: та нумерация сквозная по всему
+        # розыгрышу (см. crud.py::_next_free_day_number) и у параллельных
+        # подгрупп одного и того же уровня (см. tiebreak.py::_try_resolve_round)
+        # отличается, потому что слова для них заводятся по очереди — иначе
+        # игрокам из разных подгрупп одного раунда показывались бы разные номера.
+        return round_.round_number if round_ else None
     return await _entry_bracket_round(session, tournament.id, entry_id)
 
 
@@ -89,7 +92,7 @@ async def my_tournaments(token: str, session: AsyncSession = Depends(get_session
                 title=await render_tournament_title(session, tournament, round_number),
                 type=tournament.type,
                 callsign=entry.callsign,
-                status=tournament.status,
+                status=effective_status(tournament),
             )
         )
     return result

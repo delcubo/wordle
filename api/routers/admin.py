@@ -30,7 +30,7 @@ from api.models import Tournament, TournamentStatus, TournamentType, User, Tourn
 from api.admin_auth import check_password, create_session_token, require_admin, COOKIE_NAME, SESSION_MAX_AGE_SECONDS
 from api.dictionary import validate_manual_word, canonical_word, is_valid_word, register_added_word, unregister_added_word
 from api.scoring import calculate_points
-from api.tournament_time import today, day_number_for_date
+from api.tournament_time import today, day_number_for_date, effective_status
 from api import crud, tiebreak, bracket, bracket_game
 from api.standings_view import compute_standings
 
@@ -230,6 +230,13 @@ async def regenerate_user_link(user_id: int, session: AsyncSession = Depends(get
 
 # ---------- Tournaments ----------
 
+def _tournament_out(tournament: Tournament) -> TournamentOut:
+    """status — вычисленный (см. api.tournament_time.effective_status), а не
+    сырое поле из БД: ручной активации больше нет, draft/active выводятся из
+    даты старта на лету (см. пункт бэклога)."""
+    return TournamentOut.model_validate(tournament).model_copy(update={"status": effective_status(tournament).value})
+
+
 @router.post("/tournaments", response_model=TournamentOut)
 async def create_tournament(
     payload: TournamentConfigRequest, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
@@ -249,6 +256,14 @@ async def create_tournament(
     if t_type == TournamentType.knockout and not payload.bracket_size:
         raise HTTPException(status_code=400, detail="Для розыгрыша на вылет нужно указать размер сетки")
 
+    if t_type == TournamentType.endless:
+        # ручной активации больше нет — проверяем сразу при создании, чтобы не
+        # завести вторую бессрочную игру, которая рано или поздно (по дате
+        # старта) сама начнёт выдавать слова параллельно с текущей
+        other = await crud.get_other_active_tournament_of_type(session, TournamentType.endless)
+        if other is not None:
+            raise HTTPException(status_code=400, detail=f"Уже идёт бессрочная игра «{other.title}» — сначала завершите её")
+
     no_duration_types = (TournamentType.knockout, TournamentType.endless, TournamentType.tiebreak)
     tournament = Tournament(
         title=payload.title,
@@ -266,12 +281,12 @@ async def create_tournament(
     session.add(tournament)
     await session.commit()
     await session.refresh(tournament)
-    return tournament
+    return _tournament_out(tournament)
 
 
 @router.get("/tournaments", response_model=list[TournamentOut])
 async def get_tournaments(session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
-    return await crud.list_tournaments(session)
+    return [_tournament_out(t) for t in await crud.list_tournaments(session)]
 
 
 @router.patch("/tournaments/{tournament_id}", response_model=TournamentOut)
@@ -318,26 +333,7 @@ async def update_tournament_settings(
     session.add(tournament)
     await session.commit()
     await session.refresh(tournament)
-    return tournament
-
-
-@router.post("/tournaments/{tournament_id}/activate", response_model=TournamentOut)
-async def activate_tournament(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
-    tournament = await session.get(Tournament, tournament_id)
-    if tournament is None:
-        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
-    # Несколько розыгрышей теперь МОГУТ быть активны одновременно — предыдущие
-    # активные розыгрыши больше не завершаются автоматически при активации нового.
-    # Исключение — endless: бессрочная игра одна на всех.
-    if tournament.type == TournamentType.endless:
-        other = await crud.get_other_active_tournament_of_type(session, TournamentType.endless, tournament.id)
-        if other is not None:
-            raise HTTPException(status_code=400, detail=f"Уже идёт бессрочная игра «{other.title}» — сначала завершите её")
-    tournament.status = TournamentStatus.active
-    session.add(tournament)
-    await session.commit()
-    await session.refresh(tournament)
-    return tournament
+    return _tournament_out(tournament)
 
 
 @router.patch("/tournaments/{tournament_id}/pause", response_model=TournamentOut)
@@ -350,7 +346,7 @@ async def pause_tournament(
     tournament = await crud.set_tournament_paused(session, tournament_id, payload.paused)
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
-    return tournament
+    return _tournament_out(tournament)
 
 
 @router.patch("/tournaments/{tournament_id}/archive", response_model=TournamentOut)
@@ -363,7 +359,7 @@ async def archive_tournament(
     tournament = await crud.set_tournament_archived(session, tournament_id, payload.archived)
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
-    return tournament
+    return _tournament_out(tournament)
 
 
 # ---------- Tournament entries (подключение игрока к розыгрышу) ----------
