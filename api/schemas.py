@@ -65,6 +65,10 @@ class UserOut(BaseModel):
     created_at: str | None = None
     archived: bool = False
     tournaments: list[UserTournamentInfo] = []
+    # Позывной из последнего (по дате подключения) участия этого игрока в
+    # каком-либо розыгрыше — чтобы подставлять его по умолчанию при подключении
+    # к новому (см. пункт бэклога), None — если игрок ещё нигде не участвовал.
+    last_callsign: str | None = None
 
     class Config:
         from_attributes = True

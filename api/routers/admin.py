@@ -155,18 +155,14 @@ async def remove_added_word(added_id: int, session: AsyncSession = Depends(get_s
 
 # ---------- Users (глобальный список игроков) ----------
 
-async def _user_tournaments(session: AsyncSession, user_id: int) -> list[UserTournamentInfo]:
-    pairs = await crud.list_entries_with_tournament_for_user(session, user_id)
-    return [
-        UserTournamentInfo(tournament_id=t.id, title=t.title, active=e.active)
-        for e, t in pairs
-    ]
-
-
 async def _user_out(session: AsyncSession, user: User) -> UserOut:
+    pairs = await crud.list_entries_with_tournament_for_user(session, user.id)
+    last_callsign = max(pairs, key=lambda p: p[0].joined_at)[0].callsign if pairs else None
     return UserOut(
         id=user.id, access_token=user.access_token, admin_note=user.admin_note, created_at=str(user.created_at),
-        archived=user.archived, tournaments=await _user_tournaments(session, user.id),
+        archived=user.archived,
+        tournaments=[UserTournamentInfo(tournament_id=t.id, title=t.title, active=e.active) for e, t in pairs],
+        last_callsign=last_callsign,
     )
 
 

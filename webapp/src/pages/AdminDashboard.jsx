@@ -955,11 +955,42 @@ function playedTodayText(e) {
   return parts.join(" · ");
 }
 
+// Текстовый инпут с крестиком очистки, который появляется, только когда есть
+// что очищать (см. пункт бэклога про поиск игрока/позывного).
+function ClearableInput({ value, onClear, style, inputStyle: customInputStyle, ...inputProps }) {
+  return (
+    <div style={{ position: "relative", ...style }}>
+      <input
+        {...inputProps}
+        value={value}
+        style={{ ...inputStyle, width: "100%", boxSizing: "border-box", paddingRight: value ? 26 : undefined, ...customInputStyle }}
+      />
+      {value && (
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onClear}
+          aria-label="Очистить"
+          style={{
+            position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)",
+            background: "transparent", border: "none", color: "var(--muted)", cursor: "pointer",
+            fontSize: 16, lineHeight: 1, padding: "2px 4px",
+          }}
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
+}
+
 function EntriesPanel({ tournament, users, allTournaments }) {
   const isMobile = useIsMobile();
   const tournamentIdRef = useLatest(tournament.id);
   const [entries, setEntries] = useState([]);
   const [userId, setUserId] = useState("");
+  const [userQuery, setUserQuery] = useState("");
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [callsign, setCallsign] = useState("");
   const [hideFromStandings, setHideFromStandings] = useState(false);
   const [error, setError] = useState("");
@@ -988,6 +1019,28 @@ function EntriesPanel({ tournament, users, allTournaments }) {
 
   const connectedUserIds = new Set(entries.filter((e) => e.active).map((e) => e.user_id));
   const availableUsers = users.filter((u) => !connectedUserIds.has(u.id) && !u.archived);
+  const userQueryLower = userQuery.trim().toLowerCase();
+  const matchingUsers = userQueryLower
+    ? availableUsers.filter((u) => (u.admin_note || `Игрок #${u.id}`).toLowerCase().includes(userQueryLower))
+    : availableUsers;
+  const MAX_USER_SUGGESTIONS = 50;
+  const shownUsers = matchingUsers.slice(0, MAX_USER_SUGGESTIONS);
+
+  function selectUser(u) {
+    setUserId(String(u.id));
+    setUserQuery(u.admin_note || `Игрок #${u.id}`);
+    setUserMenuOpen(false);
+    // По умолчанию — последний позывной, под которым этот игрок участвовал в
+    // чём-либо, админ может стереть крестиком (см. пункт бэклога).
+    setCallsign(u.last_callsign || "");
+  }
+
+  function clearUserSelection() {
+    setUserId("");
+    setUserQuery("");
+    setUserMenuOpen(false);
+  }
+
   const activeCount = entries.filter((e) => e.active).length;
   const inactiveCount = entries.length - activeCount;
   const playedTodayCount = entries.filter((e) => e.active && e.played_today).length;
@@ -1009,6 +1062,15 @@ function EntriesPanel({ tournament, users, allTournaments }) {
     if (!query) return true;
     const u = users.find((x) => x.id === e.user_id);
     return e.callsign.toLowerCase().includes(query) || (u?.admin_note || "").toLowerCase().includes(query);
+  });
+  // Сортировка по умолчанию: сначала те, кто уже сыграл сегодня, затем ещё не
+  // сыгравшие, последними — отключённые (см. пункт бэклога). Для режимов без
+  // отметки "сегодня" (tracksToday=false) played_today всегда null — первые
+  // две группы сливаются в одну, остаётся только деление активен/отключён.
+  const entrySortRank = (e) => (!e.active ? 2 : tracksToday && e.played_today ? 0 : 1);
+  const sortedEntries = [...filteredEntries].sort((a, b) => {
+    const rankDiff = entrySortRank(a) - entrySortRank(b);
+    return rankDiff !== 0 ? rankDiff : a.callsign.localeCompare(b.callsign, "ru");
   });
   const selectableVisible = filteredEntries.filter((e) => e.active);
   const allVisibleSelected = selectableVisible.length > 0 && selectableVisible.every((e) => selectedIds.has(e.id));
@@ -1068,12 +1130,16 @@ function EntriesPanel({ tournament, users, allTournaments }) {
   async function handleAdd(e) {
     e.preventDefault();
     setError("");
+    if (!userId) {
+      setError("Выберите игрока из списка");
+      return;
+    }
     try {
       await api(`/api/admin/tournaments/${tournament.id}/entries`, {
         method: "POST",
         body: JSON.stringify({ user_id: Number(userId), callsign, hidden_from_standings: hideFromStandings }),
       });
-      setUserId("");
+      clearUserSelection();
       setCallsign("");
       setHideFromStandings(false);
       refresh();
@@ -1288,13 +1354,49 @@ function EntriesPanel({ tournament, users, allTournaments }) {
         )}
       </p>
       <form onSubmit={handleAdd} style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <select value={userId} onChange={(e) => setUserId(e.target.value)} style={inputStyle} required>
-          <option value="" disabled>Выберите игрока</option>
-          {availableUsers.map((u) => (
-            <option key={u.id} value={u.id}>{u.admin_note || `Игрок #${u.id}`}</option>
-          ))}
-        </select>
-        <input placeholder="Позывной для этого розыгрыша" value={callsign} onChange={(e) => setCallsign(e.target.value)} style={inputStyle} required />
+        <div style={{ position: "relative", flex: "1 1 220px" }}>
+          <ClearableInput
+            type="text"
+            placeholder="Выберите игрока — поиск по заметке"
+            value={userQuery}
+            onChange={(e) => { setUserQuery(e.target.value); setUserMenuOpen(true); if (userId) setUserId(""); }}
+            onFocus={() => setUserMenuOpen(true)}
+            onBlur={() => setUserMenuOpen(false)}
+            onClear={clearUserSelection}
+          />
+          {userMenuOpen && shownUsers.length > 0 && (
+            <div
+              style={{
+                position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, marginTop: 2,
+                background: "#1c1c1e", border: "1px solid #3a3a3c", borderRadius: 6,
+                maxHeight: 220, overflowY: "auto",
+              }}
+            >
+              {shownUsers.map((u) => (
+                <div
+                  key={u.id}
+                  onMouseDown={(e) => { e.preventDefault(); selectUser(u); }}
+                  style={{ padding: "6px 10px", cursor: "pointer", fontSize: 13 }}
+                >
+                  {u.admin_note || `Игрок #${u.id}`}
+                </div>
+              ))}
+              {matchingUsers.length > shownUsers.length && (
+                <div style={{ padding: "6px 10px", fontSize: 12, opacity: 0.6 }}>
+                  и ещё {matchingUsers.length - shownUsers.length} — уточните поиск
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <ClearableInput
+          placeholder="Позывной для этого розыгрыша"
+          value={callsign}
+          onChange={(e) => setCallsign(e.target.value)}
+          onClear={() => setCallsign("")}
+          style={{ flex: "1 1 220px" }}
+          required
+        />
         {tournament.type !== "knockout" && tournament.type !== "tiebreak" && (
           <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, opacity: 0.8, cursor: "pointer" }}>
             <input type="checkbox" checked={hideFromStandings} onChange={(e) => setHideFromStandings(e.target.checked)} />
@@ -1311,11 +1413,12 @@ function EntriesPanel({ tournament, users, allTournaments }) {
         </div>
       )}
 
-      <input
+      <ClearableInput
         placeholder="🔎 Поиск по позывному или игроку..."
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        style={{ ...inputStyle, width: "100%", marginBottom: 8, boxSizing: "border-box" }}
+        onClear={() => setSearch("")}
+        style={{ marginBottom: 8 }}
       />
 
       {selectedIds.size > 0 && transferTargets.length > 0 && (
@@ -1338,7 +1441,7 @@ function EntriesPanel({ tournament, users, allTournaments }) {
 
       <div style={{ maxHeight: 360, overflowY: "auto" }}>
         {isMobile ? (
-          filteredEntries.map(renderCard)
+          sortedEntries.map(renderCard)
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
@@ -1357,7 +1460,7 @@ function EntriesPanel({ tournament, users, allTournaments }) {
               </tr>
             </thead>
             <tbody>
-              {filteredEntries.map((e) => {
+              {sortedEntries.map((e) => {
                 const u = users.find((x) => x.id === e.user_id);
                 const isEditingCallsign = editingCallsignId === e.id;
                 return (
