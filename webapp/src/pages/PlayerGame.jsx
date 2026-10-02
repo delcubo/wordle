@@ -120,6 +120,9 @@ export default function PlayerGame() {
             grid: data.previous_results,
             answerWord: data.answer_word,
             message: finalText,
+            baseTitle: data.base_title,
+            dayNumber: data.day_number,
+            isTiebreakReport: true,
           });
         }
       } else if (data.is_tiebreak) {
@@ -160,6 +163,7 @@ export default function PlayerGame() {
         dayNumber: data.day_number,
         isEndless: data.is_endless,
         isStandardReport: data.is_standard_report,
+        isTiebreakReport: data.is_tiebreak,
         streakDays: data.streak_days,
       });
     } else {

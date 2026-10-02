@@ -232,10 +232,16 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             ),
         )
 
+    # Для tiebreak day_number отчёта/заголовка — номер раунда в цепочке
+    # (round_number, уже посчитан выше как round_number), а не сквозной
+    # day_number связанного DailyWord — см. пункт бэклога (та же путаница,
+    # что чинили в _entry_round_number).
+    report_day_number = round_number if is_tiebreak else daily_word.day_number
+
     attempt = await crud.get_attempt(session, entry.id, daily_word.id)
     if attempt is None:
         return TodayWordStatus(
-            has_word_today=True, already_played=False, day_number=daily_word.day_number, max_attempts=MAX_ATTEMPTS,
+            has_word_today=True, already_played=False, day_number=report_day_number, max_attempts=MAX_ATTEMPTS,
             callsign=entry.callsign, tournament_title=tournament_title, base_title=tournament.title,
             is_endless=is_endless, hashtag=tournament.hashtag,
             is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=tiebreak_place,
@@ -252,7 +258,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
     return TodayWordStatus(
         has_word_today=True,
         already_played=already_played,
-        day_number=daily_word.day_number,
+        day_number=report_day_number,
         attempts_used=attempt.attempts_used,
         solved=attempt.solved,
         previous_guesses=attempt.guesses,

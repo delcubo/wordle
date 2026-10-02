@@ -45,15 +45,16 @@ function Countdown({ target }) {
  *    показывается тикающий обратный отсчёт (как на реальном Wordle)
  *  - gameEnded: розыгрыш для этого игрока окончен насовсем (проигрыш в сетке
  *    на вылет) — вместо отсчёта показывается "Игра окончена"
- *  - baseTitle, dayNumber, isEndless, isStandardReport, streakDays: только
- *    для копируемого текста в бессрочном/standard/championship-до-тай-брейка
- *    режимах — см. handleCopy, общий формат отчёта по этому шаблону (рамка
- *    ▪️ у endless, ★ у остальных)
+ *  - baseTitle, dayNumber, isEndless, isStandardReport, isBracketReport,
+ *    stageLabel, isTiebreakReport, streakDays: только для копируемого текста
+ *    в бессрочном/standard/championship-до-тай-брейка/сетке на вылет/тай-брейке
+ *    — см. handleCopy, общий формат отчёта по этому шаблону (рамка ▪️ у
+ *    endless, ★ у standard/championship, ⚔️ у сетки, 🎲 у тай-брейка)
  *  - onClose
  */
 export default function ResultModal({
   title, callsign, hashtag, attemptsUsed, solved, grid, answerWord, message, countdownTarget, gameEnded,
-  baseTitle, dayNumber, isEndless, isStandardReport, isBracketReport, stageLabel, streakDays, onClose,
+  baseTitle, dayNumber, isEndless, isStandardReport, isBracketReport, stageLabel, isTiebreakReport, streakDays, onClose,
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -63,15 +64,18 @@ export default function ResultModal({
     const emojiGrid = grid.map((row) => row.map((s) => EMOJI[s] || "⬜").join("")).join("\n");
     let lines;
     let hasStreakLine = false;
-    if ((isEndless || isStandardReport || isBracketReport) && baseTitle) {
-      // Общий формат отчёта для бессрочного и standard/championship (до
-      // тай-брейка/плей-офф) режимов — см. пункт бэклога.
-      const border = isEndless ? "▪️" : isBracketReport ? "⚔️" : "★";
+    if ((isEndless || isStandardReport || isBracketReport || isTiebreakReport) && baseTitle) {
+      // Общий формат отчёта для бессрочного, standard/championship (до
+      // тай-брейка/плей-офф), сетки на вылет и тай-брейка — см. пункт бэклога.
+      const border = isEndless ? "▪️" : isBracketReport ? "⚔️" : isTiebreakReport ? "🎲" : "★";
       lines = [`${border} ${baseTitle.toUpperCase()} ${border}`];
       const resultEmoji = solved ? RESULT_EMOJI[attemptsUsed] : FAILED_EMOJI;
-      // у матчей сетки вместо номера дня — метка стадии ("1/4 финала"), без "#"
+      // у матчей сетки вместо номера дня — метка стадии ("1/4 финала"), без "#";
+      // у тай-брейка — номер раунда, тоже без "#" (это не хештег)
       const dayLabel = isBracketReport
         ? stageLabel || null
+        : isTiebreakReport
+        ? (dayNumber != null ? `раунд ${dayNumber}` : null)
         : dayNumber != null ? (isEndless ? `#${dayNumber}` : `#д${dayNumber}`) : null;
       const meta = [callsign, dayLabel, attemptsLabel].filter(Boolean);
       lines.push(`${resultEmoji} ${meta.join(" · ")}`);
