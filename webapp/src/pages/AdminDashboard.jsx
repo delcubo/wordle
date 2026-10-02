@@ -1901,11 +1901,119 @@ function TiebreakResultsPanel({ tournament }) {
     return cell.solved ? `${cell.attempts_used}/6` : "X/6";
   }
 
+  // Картинка таблицы тай-брейка с раскладкой по раундам — тот же стиль
+  // рисования, что и у "Скачать таблицу" в StandingsPanel (standard), только
+  // колонки — раунды, а не дни (см. пункт бэклога).
+  function handleDownloadTiebreak() {
+    const dpr = window.devicePixelRatio || 1;
+    const placeColMin = 40;
+    const roundColMin = 50;
+    const font = "14px system-ui, sans-serif";
+    const measureCanvas = document.createElement("canvas");
+    const mctx = measureCanvas.getContext("2d");
+    mctx.font = "bold 14px system-ui, sans-serif";
+    const callsignCol = Math.max(90, ...rows.map((r) => mctx.measureText(r.callsign).width + 20));
+    mctx.font = "bold 13px system-ui, sans-serif";
+    const placeCol = Math.max(placeColMin, ...rows.map((r) => mctx.measureText(r.place || "-").width + 16));
+    mctx.font = "bold 11px system-ui, sans-serif";
+    const roundCol = Math.max(
+      roundColMin,
+      ...data.rounds.map((r) => mctx.measureText(`Раунд ${r.round_number}`).width + 12)
+    );
+
+    const padding = 16;
+    const rowHeight = 28;
+    const headerHeight = 28;
+    const tableWidth = placeCol + callsignCol + roundCol * data.rounds.length;
+    const width = tableWidth + padding * 2;
+    const height = headerHeight + rowHeight * rows.length + padding * 2;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.textBaseline = "middle";
+
+    const tableTop = padding;
+    let x = padding;
+    const colX = { place: x };
+    x += placeCol;
+    colX.callsign = x;
+    x += callsignCol;
+    const roundX = [];
+    for (let i = 0; i < data.rounds.length; i++) {
+      roundX.push(x);
+      x += roundCol;
+    }
+
+    ctx.fillStyle = "#f2f2f2";
+    ctx.fillRect(padding, tableTop, tableWidth, headerHeight);
+    ctx.fillStyle = "#666";
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Место", colX.place + placeCol / 2, tableTop + headerHeight / 2);
+    ctx.textAlign = "left";
+    ctx.fillText("Позывной", colX.callsign + 6, tableTop + headerHeight / 2);
+    ctx.font = "bold 11px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    data.rounds.forEach((r, i) => {
+      ctx.fillText(`Раунд ${r.round_number}`, roundX[i] + roundCol / 2, tableTop + headerHeight / 2);
+    });
+
+    rows.forEach((r, ri) => {
+      const rowY = tableTop + headerHeight + ri * rowHeight;
+      if (ri % 2 === 1) {
+        ctx.fillStyle = "#fafafa";
+        ctx.fillRect(padding, rowY, tableWidth, rowHeight);
+      }
+      ctx.fillStyle = "#1a1a1b";
+      ctx.font = "bold " + font;
+      ctx.textAlign = "center";
+      ctx.fillText(r.place || "-", colX.place + placeCol / 2, rowY + rowHeight / 2);
+      ctx.font = font;
+      ctx.textAlign = "left";
+      ctx.fillText(r.callsign, colX.callsign + 6, rowY + rowHeight / 2);
+      ctx.textAlign = "center";
+      r.cells.forEach((cell, i) => {
+        ctx.fillStyle = cell ? "#1a1a1b" : "#999";
+        ctx.fillText(cellText(cell), roundX[i] + roundCol / 2, rowY + rowHeight / 2);
+      });
+    });
+
+    ctx.strokeStyle = "#ddd";
+    ctx.lineWidth = 1;
+    for (let ri = 0; ri <= rows.length; ri++) {
+      const y = tableTop + headerHeight + ri * rowHeight;
+      ctx.beginPath();
+      ctx.moveTo(padding, y);
+      ctx.lineTo(padding + tableWidth, y);
+      ctx.stroke();
+    }
+
+    canvas.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${tournament.title.replace(/[^\p{L}\p{N}]+/gu, "_")}_тайбрейк.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+
   return (
     <div style={{ ...panelStyle, marginTop: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h3 style={{ margin: 0 }}>Результаты тай-брейка</h3>
-        <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          {data.rounds.length > 0 && (
+            <button onClick={handleDownloadTiebreak} style={ghostButtonStyle}>Скачать</button>
+          )}
+          <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+        </div>
       </div>
       {data.rounds.length === 0 ? (
         <p style={{ opacity: 0.7, fontSize: 13, marginTop: 8 }}>Розыгрыш ещё не начался.</p>
