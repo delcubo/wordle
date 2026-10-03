@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import WordGrid, { FLIP_TOTAL_MS } from "../components/WordGrid.jsx";
+import WordGrid, { FLIP_TOTAL_MS, INVALID_SHAKE_MS } from "../components/WordGrid.jsx";
 import Keyboard from "../components/Keyboard.jsx";
 import ResultModal from "../components/ResultModal.jsx";
 import { fetchTheme, themeVars } from "../theme.js";
@@ -50,8 +50,12 @@ export default function PlayerGame() {
   const [modal, setModal] = useState(null);
   const [theme, setTheme] = useState("dark");
   const [animateRowIndex, setAnimateRowIndex] = useState(null);
+  // { row, key } | null — слово, которого нет в словаре: строка трясётся с
+  // красными буквами вместо надписи об ошибке (надпись меняла размер поля)
+  const [invalidShake, setInvalidShake] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const errorTimeoutRef = useRef(null);
+  const shakeTimeoutRef = useRef(null);
   const keyboardWrapRef = useRef(null);
 
   useEffect(() => {
@@ -72,8 +76,18 @@ export default function PlayerGame() {
     }, 2500);
   }
 
+  function triggerInvalidShake() {
+    setInvalidShake({ row: activeRowIndex, key: Date.now() });
+    if (shakeTimeoutRef.current) clearTimeout(shakeTimeoutRef.current);
+    shakeTimeoutRef.current = setTimeout(() => {
+      setInvalidShake(null);
+      shakeTimeoutRef.current = null;
+    }, INVALID_SHAKE_MS);
+  }
+
   useEffect(() => () => {
     if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current);
+    if (shakeTimeoutRef.current) clearTimeout(shakeTimeoutRef.current);
   }, []);
 
   // Текст, когда слова на сегодня нет: "не начался" и "завершён" различаются
@@ -325,7 +339,11 @@ export default function PlayerGame() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        showTransientError(err.detail || "Слово не найдено в словаре.");
+        if (err.detail === "Такого слова нет в словаре") {
+          triggerInvalidShake();
+        } else {
+          showTransientError(err.detail || "Слово не найдено в словаре.");
+        }
         return;
       }
 
@@ -425,7 +443,7 @@ export default function PlayerGame() {
           {message}
         </div>
       )}
-      <WordGrid rows={rows} currentGuess={currentGuess} activeRowIndex={activeRowIndex} animateRowIndex={animateRowIndex} keyboardRef={keyboardWrapRef} />
+      <WordGrid rows={rows} currentGuess={currentGuess} activeRowIndex={activeRowIndex} animateRowIndex={animateRowIndex} invalidShake={invalidShake} keyboardRef={keyboardWrapRef} />
       <div
         ref={keyboardWrapRef}
         style={{

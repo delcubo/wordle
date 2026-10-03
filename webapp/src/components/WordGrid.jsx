@@ -7,6 +7,11 @@ const COLORS = {
   empty: "var(--absent)",
 };
 
+// Сколько длится тряска + красные буквы при слове, которого нет в словаре
+// (см. invalidShake и PlayerGame.jsx) — вместо надписи об ошибке, чтобы
+// появление текста не меняло размер поля.
+export const INVALID_SHAKE_MS = 600;
+
 const FLIP_DURATION_MS = 450;
 const FLIP_STAGGER_MS = 300;
 // Сколько всего идёт переворот всей строки из 5 букв — чтобы модалка с итогом
@@ -32,6 +37,9 @@ const SAFETY_MARGIN = 24;
  * для неё буквы переворачиваются по очереди, раскрывая цвет в середине переворота
  * (как на wordle.belousov.one); строки, уже пришедшие готовыми (при загрузке
  * страницы), просто показываются раскрашенными без анимации.
+ * invalidShake: { row, key } | null — строка row, на которую только что
+ * отправили слово, которого нет в словаре: её буквы краснеют и строка трясётся
+ * (key меняется при каждом новом срабатывании, чтобы анимация проигралась заново).
  * keyboardRef: ref на обёртку клавиатуры (см. PlayerGame.jsx) — она держится
  * через position:fixed внизу экрана, поэтому её getBoundingClientRect().top
  * — это уже правильная, посчитанная браузером граница видимой области (в
@@ -45,7 +53,7 @@ const SAFETY_MARGIN = 24;
  * столбцов поместились в промежуток между низом шапки (где начинается это
  * поле — обычный поток документа) и верхом клавиатуры.
  */
-export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRowIndex, keyboardRef }) {
+export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRowIndex, invalidShake, keyboardRef }) {
   const containerRef = useRef(null);
   const [tileSize, setTileSize] = useState(56);
   // Довесок к нижнему отступу — выталкивает поле, чтобы его низ ровно упирался
@@ -119,12 +127,22 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
           50.001%, 100% { background: var(--tile-bg); border-color: var(--tile-bg); color: #fff; }
           100% { transform: rotateX(0deg); }
         }
+        @keyframes wordgrid-invalid {
+          0%, 100% { transform: translateX(0); }
+          8%, 24%, 40% { transform: translateX(-4px); }
+          16%, 32%, 48% { transform: translateX(4px); }
+          56% { transform: translateX(-2px); }
+          64% { transform: translateX(2px); }
+          72% { transform: translateX(0); }
+          0%, 100% { color: var(--error); }
+        }
       `}</style>
       <div style={{ display: "grid", gap: GAP }}>
         {rows.map((row, i) => {
           const isActive = i === activeRowIndex;
           const statuses = row.statuses;
           const isAnimating = i === animateRowIndex && statuses;
+          const isShaking = invalidShake && invalidShake.row === i;
 
           const letters = isActive
             ? (currentGuess + "     ").slice(0, 5).split("")
@@ -148,11 +166,12 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
                       color: graded ? "#fff" : "var(--fg)",
                       background: graded ? COLORS[statuses[j]] : "transparent",
                       border: `2px solid ${graded ? COLORS[statuses[j]] : filled ? "var(--border-filled)" : "var(--border)"}`,
+                      ...(isShaking ? { animation: `wordgrid-invalid ${INVALID_SHAKE_MS}ms ease-in-out` } : {}),
                     };
 
                 return (
                   <div
-                    key={j}
+                    key={isShaking ? `${j}-${invalidShake.key}` : j}
                     style={{
                       width: tileSize,
                       height: tileSize,
