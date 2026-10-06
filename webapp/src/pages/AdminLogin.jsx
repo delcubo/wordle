@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ADMIN_BASE } from "../adminBase.js";
 
 export default function AdminLogin() {
   const [password, setPassword] = useState("");
@@ -15,10 +16,13 @@ export default function AdminLogin() {
       body: JSON.stringify({ password }),
     });
     if (!res.ok) {
-      setError("Неверный пароль");
+      // 429 — слишком много неудачных попыток (см. api/admin_auth.py), текст
+      // с оставшимся временем приходит с сервера
+      const err = await res.json().catch(() => ({}));
+      setError(res.status === 429 ? err.detail || "Слишком много попыток, повторите позже" : "Неверный пароль");
       return;
     }
-    navigate("/alvipa/dashboard");
+    navigate(`${ADMIN_BASE}/dashboard`);
   }
 
   return (

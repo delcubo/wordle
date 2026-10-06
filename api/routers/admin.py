@@ -3,6 +3,7 @@
 типов, подключение игроков к розыгрышу, подтверждение слова дня, таблицы.
 Все эндпоинты, кроме /login, защищены require_admin (см. api/admin_auth.py).
 """
+import asyncio
 from datetime import timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -27,7 +28,10 @@ from api.schemas import (
     AddedWordOut, AddedWordCreateRequest,
 )
 from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry, PlayoffMatch, TiebreakRound
-from api.admin_auth import check_password, create_session_token, require_admin, COOKIE_NAME, SESSION_MAX_AGE_SECONDS
+from api.admin_auth import (
+    check_password, create_session_token, require_admin, COOKIE_NAME, SESSION_MAX_AGE_SECONDS,
+    client_ip, login_retry_after, record_login_failure, clear_login_failures,
+)
 from api.dictionary import validate_manual_word, canonical_word, is_valid_word, register_added_word, unregister_added_word
 from api.scoring import calculate_points
 from api.tournament_time import today, day_number_for_date, effective_status
@@ -41,8 +45,21 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 @router.post("/login")
 async def login(payload: AdminLoginRequest, request: Request, response: Response):
+    ip = client_ip(request)
+    retry_after = login_retry_after(ip)
+    if retry_after:
+        minutes = max(1, (retry_after + 59) // 60)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Слишком много неудачных попыток входа. Повторите через {minutes} мин.",
+            headers={"Retry-After": str(retry_after)},
+        )
     if not check_password(payload.password):
+        record_login_failure(ip)
+        # небольшая задержка замедляет подбор, не блокируя остальные запросы
+        await asyncio.sleep(1)
         raise HTTPException(status_code=401, detail="Неверный пароль")
+    clear_login_failures(ip)
     token = create_session_token()
     # secure — только когда запрос реально пришёл по HTTPS (за прокси Railway это
     # видно по X-Forwarded-Proto), чтобы локальная разработка по http не ломалась

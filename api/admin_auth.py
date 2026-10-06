@@ -6,6 +6,7 @@
 """
 import hmac
 import os
+import time
 
 from fastapi import Request, HTTPException
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -25,6 +26,59 @@ def check_password(password: str) -> bool:
         return False
     # постоянное время сравнения — не даёт подбирать пароль по времени ответа
     return hmac.compare_digest(password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8"))
+
+
+# Ограничение неудачных попыток входа по IP (см. пункт бэклога про защиту
+# админки): счётчик в памяти процесса — сервис один, при деплое сбрасывается.
+LOGIN_MAX_FAILS = 5
+LOGIN_WINDOW_SECONDS = 15 * 60
+_login_failures: dict[str, list[float]] = {}
+_MAX_TRACKED_IPS = 10000
+
+
+def client_ip(request: Request) -> str:
+    """
+    IP клиента за прокси Railway: берём ПРАВЫЙ элемент X-Forwarded-For — его
+    дописывает доверенный прокси, а левые элементы клиент может подделать
+    (иначе блокировку обходили бы случайным заголовком). Без заголовка (локальная
+    разработка) — адрес прямого соединения.
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _recent_failures(ip: str, now: float) -> list[float]:
+    recent = [t for t in _login_failures.get(ip, []) if now - t < LOGIN_WINDOW_SECONDS]
+    if recent:
+        _login_failures[ip] = recent
+    else:
+        _login_failures.pop(ip, None)
+    return recent
+
+
+def login_retry_after(ip: str) -> int:
+    """Сколько секунд ещё нельзя пробовать войти с этого IP (0 — можно)."""
+    now = time.time()
+    recent = _recent_failures(ip, now)
+    if len(recent) < LOGIN_MAX_FAILS:
+        return 0
+    return max(1, int(LOGIN_WINDOW_SECONDS - (now - recent[0])) + 1)
+
+
+def record_login_failure(ip: str) -> None:
+    now = time.time()
+    if len(_login_failures) >= _MAX_TRACKED_IPS and ip not in _login_failures:
+        # защита памяти от переполнения чужими IP — выкидываем самые старые записи
+        for old_ip in sorted(_login_failures, key=lambda k: _login_failures[k][-1])[: _MAX_TRACKED_IPS // 10]:
+            _login_failures.pop(old_ip, None)
+    _recent_failures(ip, now)
+    _login_failures.setdefault(ip, []).append(now)
+
+
+def clear_login_failures(ip: str) -> None:
+    _login_failures.pop(ip, None)
 
 
 def create_session_token() -> str:

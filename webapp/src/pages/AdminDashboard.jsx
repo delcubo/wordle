@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ADMIN_BASE } from "../adminBase.js";
 
 function useIsMobile(breakpoint = 640) {
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < breakpoint);
@@ -34,7 +35,7 @@ async function api(path, options = {}) {
     ...options,
   });
   if (res.status === 401) {
-    window.location.href = "/alvipa";
+    window.location.href = ADMIN_BASE;
     throw new Error("unauthorized");
   }
   if (!res.ok) {
@@ -82,7 +83,7 @@ export default function AdminDashboard() {
 
   async function handleLogout() {
     await api("/api/admin/logout", { method: "POST" });
-    navigate("/alvipa");
+    navigate(ADMIN_BASE);
   }
 
   async function handleToggleTheme() {

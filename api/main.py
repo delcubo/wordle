@@ -44,6 +44,13 @@ async def _load_added_words_into_dictionary_cache():
 
 WEBAPP_DIST = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "webapp", "dist"))
 _index_path = os.path.join(WEBAPP_DIST, "index.html")
+# Админка — отдельная страница (a.html, см. webapp/a.html), отдаётся только по
+# адресу ADMIN_PATH: публичный бандл игроков не содержит ни этого адреса, ни
+# кода админки. Сам адрес в публичный репозиторий не зашит — по умолчанию
+# "alvipa" (чтобы существующий адрес не сломался), на проде его стоит задать
+# своим значением через переменную окружения.
+ADMIN_PATH = os.environ.get("ADMIN_PATH", "alvipa").strip("/")
+_admin_index_path = os.path.join(WEBAPP_DIST, "a.html")
 _assets_dir = os.path.join(WEBAPP_DIST, "assets")
 
 if os.path.isdir(_assets_dir):
@@ -68,9 +75,17 @@ async def spa_fallback(full_path: str):
     если такой файл действительно есть на диске — иначе браузер вместо иконки
     получал бы этот же index.html и молча падал обратно на дефолтную иконку
     вкладки. os.path.realpath — защита от выхода за пределы dist через "..".
+    HTML-файлы напрямую не отдаются (иначе /a.html раскрывал бы админскую
+    страницу и имя её скрипта) — только через явные ветки ниже.
     """
+    if ADMIN_PATH and (full_path == ADMIN_PATH or full_path.startswith(ADMIN_PATH + "/")):
+        if os.path.isfile(_admin_index_path):
+            return FileResponse(_admin_index_path)
     candidate = os.path.realpath(os.path.join(WEBAPP_DIST, full_path))
-    if full_path and candidate.startswith(WEBAPP_DIST + os.sep) and os.path.isfile(candidate):
+    if (
+        full_path and candidate.startswith(WEBAPP_DIST + os.sep) and os.path.isfile(candidate)
+        and not candidate.lower().endswith(".html")
+    ):
         return FileResponse(candidate)
     if os.path.isfile(_index_path):
         return FileResponse(_index_path)
