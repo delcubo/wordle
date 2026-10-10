@@ -682,7 +682,10 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [editingSettings, setEditingSettings] = useState(null); // id розыгрыша | null
-  const [settingsForm, setSettingsForm] = useState({ title: "", duration_days: "", hashtag: "", note: "", start_date: "" });
+  const [settingsForm, setSettingsForm] = useState({
+    title: "", duration_days: "", hashtag: "", note: "", start_date: "", notify_admin: false,
+  });
+  const [telegramTest, setTelegramTest] = useState(null); // { ok, detail } | null
   const [showArchive, setShowArchive] = useState(false);
 
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -692,14 +695,27 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
     setEditingSettings(t.id);
     setSettingsForm({
       title: t.title, duration_days: t.duration_days ?? "", hashtag: t.hashtag || "",
-      note: t.note || "", start_date: t.start_date,
+      note: t.note || "", start_date: t.start_date, notify_admin: !!t.notify_admin,
     });
+    setTelegramTest(null);
+  }
+
+  async function handleTelegramTest() {
+    setTelegramTest({ ok: null, detail: "Отправляю..." });
+    try {
+      setTelegramTest(await api("/api/admin/telegram/test", { method: "POST" }));
+    } catch (e) {
+      setTelegramTest({ ok: false, detail: e.message });
+    }
   }
 
   async function handleSaveSettings(t) {
     setError("");
     try {
-      const body = { title: settingsForm.title, hashtag: settingsForm.hashtag, note: settingsForm.note };
+      const body = {
+        title: settingsForm.title, hashtag: settingsForm.hashtag, note: settingsForm.note,
+        notify_admin: settingsForm.notify_admin,
+      };
       if (t.duration_days != null) body.duration_days = Number(settingsForm.duration_days);
       if (t.start_date >= todayIso && settingsForm.start_date !== t.start_date) {
         body.start_date = settingsForm.start_date;
@@ -824,6 +840,26 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
               placeholder="Заметка админа (описание, игрокам не видна)"
               style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", minHeight: 44, resize: "vertical" }}
             />
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+              <input
+                type="checkbox" checked={settingsForm.notify_admin}
+                onChange={(e) => setSettingsForm((f) => ({ ...f, notify_admin: e.target.checked }))}
+              />
+              Уведомлять меня в Telegram, когда игрок закончил партию
+            </label>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 11 }}>
+              <button
+                type="button" onClick={handleTelegramTest}
+                style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}
+              >
+                Отправить тестовое сообщение
+              </button>
+              {telegramTest && (
+                <span style={{ color: telegramTest.ok === false ? "#e5484d" : telegramTest.ok ? "#538d4e" : undefined, opacity: 0.9 }}>
+                  {telegramTest.detail}
+                </span>
+              )}
+            </div>
             <div style={{ display: "flex", gap: 4 }}>
               <button onClick={() => handleSaveSettings(t)} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
               <button onClick={() => setEditingSettings(null)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>Отмена</button>

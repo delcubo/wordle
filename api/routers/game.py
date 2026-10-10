@@ -4,6 +4,9 @@
 человек может участвовать в нескольких розыгрышах одновременно, для игры и
 статуса дополнительно указывается tournament_id.
 """
+import logging
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,10 +15,13 @@ from api.schemas import TodayWordStatus, GuessRequest, GuessResponse, LetterStat
 from api.wordle_logic import check_guess, is_solved
 from api.scoring import calculate_points
 from api.dictionary import is_valid_word
-from api.tournament_time import today, day_number_for_date, next_publish_at, effective_status
+from api.tournament_time import today, day_number_for_date, next_publish_at, effective_status, TOURNAMENT_TZ
 from api.models import TournamentType, TournamentStatus, PlayoffMatchStatus
 from api.tournament_title import render_tournament_title
-from api import crud, tiebreak, bracket_game
+from api import crud, tiebreak, bracket_game, notify
+from api.report import build_report_text
+
+logger = logging.getLogger("wordle.game")
 
 router = APIRouter(prefix="/game", tags=["game"])
 
@@ -117,6 +123,108 @@ def _unavailable_info(tournament, day_number: int | None = None) -> dict:
     return {}
 
 
+async def _daily_report_text(session: AsyncSession, tournament, entry, daily_word, attempt, tournament_title: str) -> str:
+    """
+    Готовый текст отчёта об игре со словом дня (стандартный, бессрочный,
+    тай-брейк) — тот же, что игрок копирует из попапа; его же получает админ в
+    уведомлении (см. api/report.py, api/notify.py).
+    """
+    is_tiebreak = tournament.type == TournamentType.tiebreak
+    is_endless = tournament.type == TournamentType.endless
+    is_standard_report = (
+        tournament.type in (TournamentType.standard, TournamentType.championship)
+        and tournament.status not in (TournamentStatus.tiebreak, TournamentStatus.playoff)
+    )
+    kind = "tiebreak" if is_tiebreak else "endless" if is_endless else "standard" if is_standard_report else None
+
+    day_number = daily_word.day_number
+    if is_tiebreak:
+        # для тай-брейка в отчёте — номер раунда в цепочке, а не сквозной номер дня слова
+        round_ = await crud.get_tiebreak_round_by_daily_word(session, daily_word.id)
+        day_number = round_.round_number if round_ else None
+
+    streak_days = None
+    if kind == "standard" and (attempt.solved or attempt.attempts_used >= MAX_ATTEMPTS):
+        streak_days = await crud.compute_played_streak(session, tournament.id, entry.id, daily_word.day_number)
+
+    return build_report_text(
+        kind=kind,
+        attempts_used=attempt.attempts_used,
+        solved=attempt.solved,
+        grid=[check_guess(g, daily_word.word) for g in attempt.guesses],
+        callsign=entry.callsign,
+        hashtag=tournament.hashtag,
+        base_title=tournament.title,
+        day_number=day_number,
+        streak_days=streak_days,
+        title=tournament_title,
+    )
+
+
+async def _bracket_stage_label(session: AsyncSession, tournament, entry, tournament_title: str | None = None) -> str | None:
+    """Метка стадии сетки ("1/4 финала") — хвост заголовка "<название> <стадия>"
+    (см. render_tournament_title)."""
+    if tournament_title is None:
+        round_number = await _entry_bracket_round(session, tournament.id, entry.id)
+        tournament_title = await render_tournament_title(session, tournament, round_number)
+    if tournament_title.startswith(tournament.title + " "):
+        return tournament_title[len(tournament.title) + 1:]
+    return None
+
+
+def _bracket_report_text(tournament, entry, view: dict, stage_label: str | None) -> str:
+    return build_report_text(
+        kind="bracket",
+        attempts_used=view["attempts_used"],
+        solved=bool(view["solved"]),
+        grid=view["previous_results"],
+        callsign=entry.callsign,
+        hashtag=tournament.hashtag,
+        base_title=tournament.title,
+        stage_label=stage_label,
+    )
+
+
+def _notification_footer(finished_at, order: int | None) -> str:
+    """Строка под отчётом в уведомлении админу: время окончания и порядковый
+    номер среди закончивших это слово."""
+    local = finished_at.replace(tzinfo=timezone.utc).astimezone(TOURNAMENT_TZ)
+    tz_label = {"MSK": "МСК"}.get(local.tzname(), local.tzname())
+    parts = [f"\U0001f552 {local.strftime('%H:%M')} {tz_label}"]
+    if order is not None:
+        parts.append(f"{order}-й по счёту")
+    return " · ".join(parts)
+
+
+async def _notify_daily_finished(session: AsyncSession, tournament, entry, daily_word, attempt) -> None:
+    """Уведомление админу о законченной партии со словом дня. Что бы ни
+    случилось, игре это не мешает (см. api/notify.py)."""
+    if not tournament.notify_admin or not notify.is_configured():
+        return
+    try:
+        round_number = await _entry_round_number(session, tournament, entry.id)
+        title = await render_tournament_title(session, tournament, round_number)
+        text = await _daily_report_text(session, tournament, entry, daily_word, attempt, title)
+        order = await crud.count_finished_attempts_until(session, daily_word.id, attempt.finished_at)
+        notify.notify_admin_in_background(f"{text}\n\n{_notification_footer(attempt.finished_at, order)}")
+    except Exception:
+        logger.exception("Не удалось подготовить уведомление админу")
+
+
+async def _notify_bracket_finished(session: AsyncSession, tournament, entry) -> None:
+    if not tournament.notify_admin or not notify.is_configured():
+        return
+    try:
+        view = await bracket_game.get_player_view(session, tournament, entry)
+        if not view.get("has_match") or view.get("attempts_used") is None:
+            return
+        stage_label = await _bracket_stage_label(session, tournament, entry)
+        text = _bracket_report_text(tournament, entry, view, stage_label)
+        notify.notify_admin_in_background(f"{text}\n\n{_notification_footer(datetime.utcnow(), None)}")
+    except Exception:
+        logger.exception("Не удалось подготовить уведомление админу (сетка)")
+
+
 async def _resolve_context(session: AsyncSession, token: str, tournament_id: int):
     """
     Находит пользователя, его участие (entry) в указанном розыгрыше и слово на
@@ -213,6 +321,9 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             if last_attempt is not None:
                 last_daily_word = await crud.get_daily_word_by_id(session, last_round.daily_word_id)
                 last_attempt_fields = dict(
+                    report_text=await _daily_report_text(
+                        session, tournament, entry, last_daily_word, last_attempt, tournament_title
+                    ),
                     day_number=last_round.round_number,
                     attempts_used=last_attempt.attempts_used,
                     solved=last_attempt.solved,
@@ -264,6 +375,10 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         previous_guesses=attempt.guesses,
         previous_results=[check_guess(g, daily_word.word) for g in attempt.guesses],
         answer_word=daily_word.word if already_played and not attempt.solved else None,
+        report_text=(
+            await _daily_report_text(session, tournament, entry, daily_word, attempt, tournament_title)
+            if already_played else None
+        ),
         max_attempts=MAX_ATTEMPTS,
         callsign=entry.callsign,
         tournament_title=tournament_title,
@@ -305,12 +420,15 @@ async def submit_guess(payload: GuessRequest, session: AsyncSession = Depends(ge
     if game_over and tournament.scoring_rules is not None:
         points = calculate_points(attempts_used, solved, tournament.scoring_rules)
 
-    await crud.save_guess(session, attempt, guess, solved, game_over, points)
+    saved_attempt = await crud.save_guess(session, attempt, guess, solved, game_over, points)
 
     if game_over and (tournament.status == TournamentStatus.tiebreak or tournament.type == TournamentType.tiebreak):
         # как только все участники раунда доиграли — сразу разрешаем его, не дожидаясь
         # дедлайна, чтобы продолжение (при остаточной ничьей) стало доступно тут же
         await tiebreak.resolve_ready_rounds(session, tournament)
+
+    if game_over:
+        await _notify_daily_finished(session, tournament, entry, daily_word, saved_attempt)
 
     return GuessResponse(
         result=[LetterState(letter=g, state=s) for g, s in zip(guess, statuses)],
@@ -357,12 +475,14 @@ async def get_bracket_today(token: str, tournament_id: int, session: AsyncSessio
     unavailable = {} if view.get("has_match") else _unavailable_info(tournament)
     # tournament_title = "<название> <стадия>" (см. render_tournament_title) —
     # для копируемого отчёта нужны они по отдельности
-    stage_label = None
-    if tournament_title.startswith(tournament.title + " "):
-        stage_label = tournament_title[len(tournament.title) + 1:]
+    stage_label = await _bracket_stage_label(session, tournament, entry, tournament_title)
+    report_text = None
+    if view.get("has_match") and view.get("already_played") and view.get("attempts_used") is not None:
+        report_text = _bracket_report_text(tournament, entry, view, stage_label)
     return BracketTodayStatus(
         **view, callsign=entry.callsign, tournament_title=tournament_title, hashtag=tournament.hashtag,
-        next_word_at=next_word_at, base_title=tournament.title, stage_label=stage_label, **unavailable,
+        next_word_at=next_word_at, base_title=tournament.title, stage_label=stage_label,
+        report_text=report_text, **unavailable,
     )
 
 
@@ -396,6 +516,9 @@ async def submit_bracket_guess(payload: GuessRequest, session: AsyncSession = De
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    if game_over:
+        await _notify_bracket_finished(session, tournament, entry)
 
     return GuessResponse(
         result=[LetterState(letter=g, state=s) for g, s in zip(guess, statuses)],

@@ -35,7 +35,7 @@ from api.admin_auth import (
 from api.dictionary import validate_manual_word, canonical_word, is_valid_word, register_added_word, unregister_added_word
 from api.scoring import calculate_points
 from api.tournament_time import today, day_number_for_date, effective_status
-from api import crud, tiebreak, bracket, bracket_game
+from api import crud, tiebreak, bracket, bracket_game, notify
 from api.standings_view import compute_standings
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -79,6 +79,16 @@ async def logout(response: Response):
 @router.get("/me")
 async def me(_: None = Depends(require_admin)):
     return {"ok": True}
+
+
+@router.post("/telegram/test")
+async def telegram_test(_: None = Depends(require_admin)):
+    """Тестовое сообщение в Telegram — чтобы проверить, что бот и chat_id
+    настроены (см. api/notify.py), не дожидаясь настоящей партии игрока."""
+    if not notify.is_configured():
+        return {"ok": False, "detail": "Не заданы переменные TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID на сервере"}
+    ok, detail = await notify.send_admin_message("✅ Тест: уведомления из Вордли работают")
+    return {"ok": ok, "detail": "Сообщение отправлено" if ok else detail}
 
 
 # ---------- Общие настройки сайта ----------
@@ -323,6 +333,9 @@ async def update_tournament_settings(
 
     if payload.note is not None:
         tournament.note = payload.note.strip() or None
+
+    if payload.notify_admin is not None:
+        tournament.notify_admin = payload.notify_admin
 
     if payload.start_date is not None:
         if day_number_for_date(tournament.start_date, today()) >= 1:

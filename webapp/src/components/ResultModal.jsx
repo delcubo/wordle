@@ -2,9 +2,6 @@ import { useState, useEffect } from "react";
 
 const EMOJI = { correct: "🟩", present: "🟨", absent: "⬜" };
 const CELL_COLOR = { correct: "var(--correct)", present: "var(--present)", absent: "var(--absent)" };
-// Эмодзи по итогу попытки в копируемых отчётах (endless и standard/championship) — см. пункт бэклога.
-const RESULT_EMOJI = { 1: "🎯", 2: "🧠", 3: "🤓", 4: "😎", 5: "😐", 6: "😰" };
-const FAILED_EMOJI = "💀";
 
 function formatCountdown(ms) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -45,55 +42,33 @@ function Countdown({ target }) {
  *    показывается тикающий обратный отсчёт (как на реальном Wordle)
  *  - gameEnded: розыгрыш для этого игрока окончен насовсем (проигрыш в сетке
  *    на вылет) — вместо отсчёта показывается "Игра окончена"
- *  - baseTitle, dayNumber, isEndless, isStandardReport, isBracketReport,
- *    stageLabel, isTiebreakReport, streakDays: только для копируемого текста
- *    в бессрочном/standard/championship-до-тай-брейка/сетке на вылет/тай-брейке
- *    — см. handleCopy, общий формат отчёта по этому шаблону (рамка ▪️ у
- *    endless, ★ у standard/championship, ⚔️ у сетки, 🎲 у тай-брейка)
+ *  - reportText: готовый текст отчёта с сервера (api/report.py) — именно он
+ *    копируется по кнопке; тот же текст получает админ в Telegram. Если не
+ *    задан (например, попап "Ничья" в сетке, где отчёта ещё нет) — копируется
+ *    простой общий вид (заголовок, игрок, попытки, сетка)
  *  - onClose
  */
 export default function ResultModal({
   title, callsign, hashtag, attemptsUsed, solved, grid, answerWord, message, countdownTarget, gameEnded,
-  baseTitle, dayNumber, isEndless, isStandardReport, isBracketReport, stageLabel, isTiebreakReport, streakDays, onClose,
+  reportText, onClose,
 }) {
   const [copied, setCopied] = useState(false);
 
   const attemptsLabel = solved ? `${attemptsUsed}/6` : "X/6";
 
   async function handleCopy() {
-    const emojiGrid = grid.map((row) => row.map((s) => EMOJI[s] || "⬜").join("")).join("\n");
-    let lines;
-    let hasStreakLine = false;
-    if ((isEndless || isStandardReport || isBracketReport || isTiebreakReport) && baseTitle) {
-      // Общий формат отчёта для бессрочного, standard/championship (до
-      // тай-брейка/плей-офф), сетки на вылет и тай-брейка — см. пункт бэклога.
-      const border = isEndless ? "▪️" : isBracketReport ? "⚔️" : isTiebreakReport ? "🎲" : "★";
-      lines = [`${border} ${baseTitle.toUpperCase()} ${border}`];
-      const resultEmoji = solved ? RESULT_EMOJI[attemptsUsed] : FAILED_EMOJI;
-      // у матчей сетки вместо номера дня — метка стадии ("1/4 финала"), без "#";
-      // у тай-брейка — номер раунда, тоже без "#" (это не хештег)
-      const dayLabel = isBracketReport
-        ? stageLabel || null
-        : isTiebreakReport
-        ? (dayNumber != null ? `раунд ${dayNumber}` : null)
-        : dayNumber != null ? (isEndless ? `#${dayNumber}` : `#д${dayNumber}`) : null;
-      const meta = [callsign, dayLabel, attemptsLabel].filter(Boolean);
-      lines.push(`${resultEmoji} ${meta.join(" · ")}`);
-      lines.push("", emojiGrid);
-      if (streakDays != null && streakDays >= 2) {
-        lines.push("", `🔥 дней подряд: ${streakDays}`);
-        hasStreakLine = true;
-      }
-    } else {
-      lines = [title];
+    let text = reportText;
+    if (!text) {
+      const emojiGrid = grid.map((row) => row.map((s) => EMOJI[s] || "⬜").join("")).join("\n");
+      const lines = [title];
       if (callsign) lines.push(`Игрок: ${callsign}`);
       lines.push(`Попытки: ${attemptsLabel}`);
       lines.push("", emojiGrid);
+      if (hashtag) lines.push("", hashtag);
+      text = lines.join("\n");
     }
-    // хештег идёт сразу под строкой серии, без пустой строки между ними
-    if (hashtag) lines.push(...(hasStreakLine ? [] : [""]), hashtag);
     try {
-      await navigator.clipboard.writeText(lines.join("\n"));
+      await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (e) {

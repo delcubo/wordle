@@ -109,6 +109,9 @@ class Tournament(Base):
     # автоматически попадали только status=finished, теперь админ сам решает,
     # когда убрать приостановленный или завершённый розыгрыш с глаз долой.
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Присылать админу в Telegram уведомление, когда игрок закончил партию в этом
+    # розыгрыше (см. api/notify.py) — по умолчанию выключено.
+    notify_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     # Заметка админа с описанием розыгрыша — не показывается игрокам.
     note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 

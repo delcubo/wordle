@@ -910,6 +910,27 @@ async def get_last_tiebreak_round_for_entry(
     return result.scalars().first()
 
 
+async def get_tiebreak_round_by_daily_word(session: AsyncSession, daily_word_id: int) -> TiebreakRound | None:
+    """Раунд тай-брейка, для которого заведено это слово (одно слово — один
+    раунд) — нужен, чтобы знать настоящий номер раунда по слову, даже когда
+    раунд уже разрешён и не считается "активным" (см. отчёт игрока)."""
+    result = await session.execute(select(TiebreakRound).where(TiebreakRound.daily_word_id == daily_word_id))
+    return result.scalars().first()
+
+
+async def count_finished_attempts_until(session: AsyncSession, daily_word_id: int, finished_at) -> int:
+    """Сколько попыток по этому слову закончено к моменту finished_at включительно
+    (угадали или исчерпали 6) — порядковый номер "N-й по счёту" в уведомлении админу."""
+    result = await session.execute(
+        select(func.count(Attempt.id)).where(
+            Attempt.daily_word_id == daily_word_id,
+            Attempt.finished_at.is_not(None),
+            Attempt.finished_at <= finished_at,
+        )
+    )
+    return int(result.scalar_one())
+
+
 async def list_root_tiebreak_rounds(session: AsyncSession, tournament_id: int) -> list[TiebreakRound]:
     """Раунды, с которых началась цепочка тай-брейка (не продолжения) — по одному
     на каждую исходную группу с равными местами."""

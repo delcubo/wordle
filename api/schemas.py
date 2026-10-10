@@ -111,6 +111,7 @@ class TournamentOut(BaseModel):
     hashtag: str | None = None
     paused: bool = False
     archived: bool = False
+    notify_admin: bool = False  # присылать админу в Telegram уведомления о завершённых партиях
     note: str | None = None
 
     class Config:
@@ -123,6 +124,7 @@ class TournamentSettingsUpdateRequest(BaseModel):
     hashtag: str | None = None
     note: str | None = None
     start_date: date | None = None  # только пока розыгрыш ещё не стартовал
+    notify_admin: bool | None = None
 
 
 class TournamentPauseRequest(BaseModel):
@@ -283,6 +285,7 @@ class TodayWordStatus(BaseModel):
     is_tiebreak: bool = False  # только для розыгрыша типа tiebreak — переключает текст ожидания/финала на фронте
     tiebreak_started: bool = False  # розыгрыш типа tiebreak уже стартовал (хотя бы корневой раунд создан)
     tiebreak_place: str | None = None  # текущее/итоговое место — "2" или диапазон "2-4", пока группа ещё играет
+    report_text: str | None = None  # готовый текст отчёта для копирования из попапа (api/report.py) — когда партия закончена
     unavailable_reason: str | None = None  # "not_started" / "finished" — почему слова нет (только когда has_word_today=False), для разных текстов на фронте
     start_date: str | None = None  # ISO-дата старта розыгрыша — для текста "Розыгрыш начнётся 21 сентября" при unavailable_reason="not_started"
 
@@ -314,6 +317,7 @@ class BracketTodayStatus(BaseModel):
     start_date: str | None = None
     base_title: str | None = None  # название розыгрыша без стадии — для копируемого отчёта
     stage_label: str | None = None  # "1/4 финала" / "финал" и т.п. — метка стадии сетки для копируемого отчёта
+    report_text: str | None = None  # готовый текст отчёта для копирования из попапа (api/report.py) — когда игра закончена
 
 
 class GuessRequest(BaseModel):

@@ -134,9 +134,7 @@ export default function PlayerGame() {
             grid: data.previous_results,
             answerWord: data.answer_word,
             message: finalText,
-            baseTitle: data.base_title,
-            dayNumber: data.day_number,
-            isTiebreakReport: true,
+            reportText: data.report_text,
           });
         }
       } else if (data.is_tiebreak) {
@@ -173,12 +171,7 @@ export default function PlayerGame() {
         answerWord: data.answer_word,
         countdownTarget: data.next_word_at,
         message: data.is_tiebreak ? "Как только все доиграют раунд, места распределятся или откроется следующий раунд." : null,
-        baseTitle: data.base_title,
-        dayNumber: data.day_number,
-        isEndless: data.is_endless,
-        isStandardReport: data.is_standard_report,
-        isTiebreakReport: data.is_tiebreak,
-        streakDays: data.streak_days,
+        reportText: data.report_text,
       });
     } else {
       setMessage("");
@@ -225,9 +218,7 @@ export default function PlayerGame() {
           message: (data.won ? "Победа!" : "Поражение.") + oppResult,
           countdownTarget: data.won ? data.next_word_at : null,
           gameEnded: !data.won,
-          baseTitle: data.base_title,
-          stageLabel: data.stage_label,
-          isBracketReport: true,
+          reportText: data.report_text,
         });
       }
       return;
@@ -247,9 +238,7 @@ export default function PlayerGame() {
           solved: data.solved,
           grid: data.previous_results,
           message: "Вы сыграли, ждём соперника." + opponentNote,
-          baseTitle: data.base_title,
-          stageLabel: data.stage_label,
-          isBracketReport: true,
+          reportText: data.report_text,
         });
       }
     } else {
@@ -476,13 +465,7 @@ export default function PlayerGame() {
           message={modal.message}
           countdownTarget={modal.countdownTarget}
           gameEnded={modal.gameEnded}
-          baseTitle={modal.baseTitle}
-          dayNumber={modal.dayNumber}
-          isEndless={modal.isEndless}
-          isStandardReport={modal.isStandardReport}
-          streakDays={modal.streakDays}
-          isBracketReport={modal.isBracketReport}
-          stageLabel={modal.stageLabel}
+          reportText={modal.reportText}
           onClose={() => setModal(null)}
         />
       )}
