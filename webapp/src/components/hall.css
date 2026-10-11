@@ -22,7 +22,7 @@
 .hall-roman{color:var(--yellow)}
 .hall-dates{color:#c5ccc6;font-size:14px;letter-spacing:.12em;margin-bottom:12px}
 .hall-winner-label{font-size:11px;color:var(--green2);letter-spacing:.2em;text-transform:uppercase;margin-bottom:5px}
-.hall-winner{font-family:Impact,'Arial Narrow',Arial,sans-serif;font-size:clamp(27px,4vw,36px);letter-spacing:.04em;text-transform:uppercase;margin:0;overflow-wrap:anywhere}
+.hall-winner{font-family:Impact,'Arial Narrow',Arial,sans-serif;font-size:clamp(27px,4vw,36px);letter-spacing:.04em;margin:0;overflow-wrap:anywhere}
 .hall-actions{display:grid;gap:7px}
 .hall-action{display:flex;align-items:center;gap:11px;min-height:42px;padding:8px 12px;text-decoration:none;background:linear-gradient(180deg,#202823,#111613);border:1px solid #45534a;border-radius:10px;color:#f4f6f0;transition:transform .18s,border-color .18s,background .18s;cursor:pointer;font:inherit;text-align:left;width:100%}
 .hall-action:hover:not(:disabled),.hall-action:focus-visible{transform:translateY(-2px);border-color:var(--green2);background:#202c23;outline:none}
