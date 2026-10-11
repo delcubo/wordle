@@ -12,7 +12,7 @@ from datetime import datetime, date
 
 from sqlalchemy import (
     Integer, String, Boolean, Date, DateTime, ForeignKey, UniqueConstraint,
-    Enum as SAEnum, JSON,
+    Enum as SAEnum, JSON, LargeBinary,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -365,6 +365,12 @@ class AppSettings(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     theme: Mapped[str] = mapped_column(String(10), default="dark")  # "dark" | "light"
+    # Зал славы (см. HallEntry): "off" — недоступен игрокам, "test" — виден
+    # только игроку hall_test_user_id (проверка перед открытием), "on" — всем.
+    hall_mode: Mapped[str] = mapped_column(String(10), default="off", server_default="off")
+    hall_test_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class ExcludedWord(Base):
@@ -397,3 +403,33 @@ class AddedWord(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     word: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class HallImage(Base):
+    """Картинка зала славы (таблица / сетка / сертификат) — хранится прямо в БД:
+    отдельного хранилища у сервиса нет, а картинок немного."""
+    __tablename__ = "hall_images"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    content_type: Mapped[str] = mapped_column(String(40))
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class HallEntry(Base):
+    """Запись летописи зала славы: один проведённый турнир и его чемпион.
+    Заводится админом вручную (см. api/routers/hall.py)."""
+    __tablename__ = "hall_entries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(120))        # "Вордл Комбат IV"
+    champion: Mapped[str] = mapped_column(String(80))      # позывной чемпиона
+    date_start: Mapped[date] = mapped_column(Date)
+    date_end: Mapped[date] = mapped_column(Date)
+    # "действующий чемпион" — если ни у одной записи не отмечено, им считается
+    # самая поздняя по date_end
+    is_current: Mapped[bool] = mapped_column(Boolean, default=False)
+    table_image_id: Mapped[int | None] = mapped_column(ForeignKey("hall_images.id", ondelete="SET NULL"), nullable=True)
+    bracket_image_id: Mapped[int | None] = mapped_column(ForeignKey("hall_images.id", ondelete="SET NULL"), nullable=True)
+    certificate_image_id: Mapped[int | None] = mapped_column(ForeignKey("hall_images.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

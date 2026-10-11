@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api.database import async_session_factory
 from api.dictionary import register_added_word
-from api.routers import game, admin
+from api.routers import game, admin, hall
 from api import crud
 
 # Автодокументация (/docs, /redoc, /openapi.json) раскрывает список всех
@@ -31,6 +31,8 @@ async def _security_headers(request: Request, call_next):
 
 app.include_router(game.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
+app.include_router(hall.player_router, prefix="/api")
+app.include_router(hall.admin_router, prefix="/api")
 
 
 @app.on_event("startup")

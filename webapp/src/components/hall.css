@@ -1,0 +1,86 @@
+/* Зал славы — стили перенесены из макета (wordle_kombat_public_page), все
+   селекторы под .hall-page, чтобы не влиять на остальные страницы. */
+.hall-page{--bg:#090c0b;--panel:#111614;--line:#39453b;--green:#6fc65d;--green2:#9ce66b;--yellow:#f1c933;--muted:#a2aaa5;--white:#f4f5ef;--radius:17px;--max:1180px;
+  color:var(--white);font-family:Arial,Helvetica,sans-serif;min-height:100vh;overflow-x:hidden;box-sizing:border-box;
+  background:radial-gradient(ellipse at 50% -10%,#263329 0,transparent 40%),linear-gradient(135deg,#080a09,#101512 55%,#080a09);position:relative}
+.hall-page *{box-sizing:border-box}
+.hall-page:before{content:"";position:absolute;inset:0;pointer-events:none;opacity:.15;background-image:linear-gradient(30deg,transparent 47%,#647066 48%,transparent 49%),linear-gradient(120deg,transparent 47%,#647066 48%,transparent 49%);background-size:68px 68px;-webkit-mask-image:linear-gradient(to bottom,#000,transparent 70%);mask-image:linear-gradient(to bottom,#000,transparent 70%)}
+.hall-page a{color:inherit}
+.hall-wrap{width:min(var(--max),calc(100% - 36px));margin:auto;position:relative}
+.hall-back{display:inline-block;margin:14px 0 0;color:#8c978f;font-size:13px;text-decoration:none}
+.hall-hero{text-align:center;padding:18px 0 26px}
+.hall-eyebrow{color:#c1c8c1;letter-spacing:.34em;text-transform:uppercase;font-size:12px;margin-bottom:6px}
+.hall-logo{display:block;width:min(560px,92%);height:240px;object-fit:contain;margin:0 auto -8px;mix-blend-mode:lighten}
+.hall-section-title{font-family:Impact,'Arial Narrow',Arial,sans-serif;letter-spacing:.15em;text-transform:uppercase;color:var(--yellow);font-size:clamp(18px,3vw,25px);margin:0 0 10px;font-weight:normal}
+.hall-subtitle{font-size:13px;letter-spacing:.18em;color:var(--muted);margin:0}
+.hall-champion{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:22px;align-items:center;padding:25px;border:1px solid #7e9b51;border-radius:var(--radius);background:linear-gradient(110deg,rgba(31,53,35,.72),rgba(13,17,15,.96) 45%),radial-gradient(circle at left,#253c29,transparent 50%);box-shadow:0 0 0 1px #18241b inset,0 14px 45px #0008;position:relative;overflow:hidden}
+.hall-champion:before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;background:linear-gradient(var(--green),var(--yellow))}
+.hall-champion-main{padding-left:8px}
+.hall-tag{display:inline-flex;align-items:center;gap:9px;background:linear-gradient(90deg,#f5d94a,#c4a51b);color:#14170f;font-weight:800;letter-spacing:.14em;text-transform:uppercase;font-size:12px;padding:9px 14px;border-radius:5px;margin-bottom:13px}
+.hall-crown{font-size:18px}
+.hall-tournament-name{font-family:Impact,'Arial Narrow',Arial,sans-serif;font-size:clamp(27px,4vw,43px);line-height:1.05;letter-spacing:.035em;margin:0 0 10px;text-transform:uppercase;font-weight:normal}
+.hall-roman{color:var(--yellow)}
+.hall-dates{color:#c5ccc6;font-size:15px;letter-spacing:.13em;margin-bottom:18px}
+.hall-winner-label{font-size:11px;color:var(--green2);letter-spacing:.2em;text-transform:uppercase;margin-bottom:5px}
+.hall-winner{font-family:Impact,'Arial Narrow',Arial,sans-serif;font-size:clamp(26px,3.5vw,38px);letter-spacing:.04em;text-transform:uppercase;margin:0;overflow-wrap:anywhere}
+.hall-actions{display:grid;gap:9px}
+.hall-action{display:flex;align-items:center;gap:12px;min-height:53px;padding:12px 14px;text-decoration:none;background:linear-gradient(180deg,#202823,#111613);border:1px solid #45534a;border-radius:10px;color:#f4f6f0;transition:transform .18s,border-color .18s,background .18s;cursor:pointer;font:inherit;text-align:left;width:100%}
+.hall-action:hover:not(:disabled),.hall-action:focus-visible{transform:translateY(-2px);border-color:var(--green2);background:#202c23;outline:none}
+.hall-action:disabled{opacity:.4;cursor:default}
+.hall-action-icon{color:var(--green2);font-size:22px;width:28px;text-align:center;flex:none}
+.hall-action.certificate .hall-action-icon{color:var(--yellow)}
+.hall-action-text{font-size:13px;line-height:1.25;flex:1}
+.hall-arrow{font-size:22px;color:var(--green2)}
+.hall-archive{padding:34px 0 42px}
+.hall-archive-head{display:flex;align-items:center;gap:16px;margin-bottom:18px}
+.hall-trophy{font-size:38px;filter:drop-shadow(0 0 12px #eac72b66)}
+.hall-archive-head h2{font-family:Impact,'Arial Narrow',Arial,sans-serif;text-transform:uppercase;letter-spacing:.1em;font-size:clamp(23px,3.5vw,32px);margin:0 0 5px;font-weight:normal}
+.hall-archive-head p{margin:0;color:var(--muted);font-size:13px;letter-spacing:.12em}
+.hall-archive-list{display:grid;gap:14px}
+.hall-tournament{display:grid;grid-template-columns:minmax(0,1fr) 292px;gap:20px;align-items:center;border:1px solid #455448;border-radius:14px;background:linear-gradient(110deg,rgba(24,34,27,.94),rgba(10,13,12,.98) 70%);padding:18px 18px 18px 24px;position:relative;overflow:hidden}
+.hall-tournament:before{content:"";position:absolute;inset:0 auto 0 0;width:4px;background:linear-gradient(var(--green),var(--yellow))}
+.hall-tournament-info{display:grid;grid-template-columns:1fr;gap:8px;min-width:0}
+.hall-tournament h3{font-family:Impact,'Arial Narrow',Arial,sans-serif;text-transform:uppercase;font-size:clamp(23px,3vw,32px);letter-spacing:.04em;margin:0;font-weight:normal}
+.hall-tournament .hall-dates{margin:0;font-size:13px}
+.hall-tournament .hall-winner-label{margin-top:4px}
+.hall-tournament .hall-winner{font-size:25px}
+.hall-tournament .hall-actions{border-left:1px solid #344138;padding-left:18px;gap:7px}
+.hall-tournament .hall-action{min-height:43px;padding:8px 11px}
+.hall-tournament .hall-action-text{font-size:12px}
+.hall-tournament .hall-action-icon{font-size:20px}
+.hall-empty{color:var(--muted);text-align:center;padding:30px 0}
+.hall-foot{border-top:1px solid #29342b;padding:18px 0 26px;text-align:center;color:#8c978f;font-size:11px;letter-spacing:.2em;text-transform:uppercase}
+.hall-foot span{color:var(--green2)}
+.hall-modal{position:fixed;inset:0;background:#000d;display:flex;align-items:center;justify-content:center;padding:20px;z-index:2000}
+.hall-modal-card{width:min(1100px,100%);max-height:100%;display:flex;flex-direction:column;background:#111713;border:1px solid #718c5a;border-radius:16px;padding:18px;box-shadow:0 25px 90px #000}
+.hall-modal-top{display:flex;justify-content:space-between;align-items:start;gap:16px;margin-bottom:12px}
+.hall-modal h2{margin:0 0 4px;font-size:20px;font-weight:bold}
+.hall-modal-note{font-size:12px;color:#8f9a91}
+.hall-close{background:#202a22;border:1px solid #52614e;color:#fff;border-radius:8px;padding:7px 11px;cursor:pointer;font-size:18px}
+.hall-modal-img{min-height:0;overflow:auto;text-align:center}
+.hall-modal-img img{max-width:100%;height:auto;display:inline-block;border-radius:8px}
+.hall-modal-link{display:inline-block;margin-top:12px;color:#0c120d;background:var(--green2);font-weight:700;padding:10px 14px;border-radius:8px;text-decoration:none;align-self:flex-start}
+@media(max-width:760px){
+  .hall-wrap{width:min(100% - 24px,var(--max))}
+  .hall-logo{height:190px}
+  .hall-champion{grid-template-columns:1fr;padding:19px;gap:18px}
+  .hall-tournament{grid-template-columns:1fr;padding:17px;gap:15px}
+  .hall-tournament .hall-actions{border-left:0;border-top:1px solid #344138;padding:13px 0 0;grid-template-columns:repeat(3,minmax(0,1fr))}
+  .hall-tournament .hall-action{flex-direction:column;justify-content:center;text-align:center;gap:5px;padding:9px 5px;min-height:72px}
+  .hall-tournament .hall-action-icon{font-size:21px}
+  .hall-tournament .hall-action-text{font-size:10px}
+  .hall-tournament .hall-arrow{display:none}
+  .hall-archive{padding-top:27px}
+  .hall-archive-head{gap:11px}
+  .hall-archive-head p{letter-spacing:.04em}
+  .hall-tournament h3{font-size:27px}
+}
+@media(max-width:420px){
+  .hall-logo{height:160px}
+  .hall-eyebrow{font-size:10px}
+  .hall-champion{padding:16px}
+  .hall-tournament .hall-actions{gap:5px}
+  .hall-tournament .hall-action-text{font-size:9px}
+  .hall-tournament h3{font-size:24px}
+  .hall-dates{font-size:13px}
+}

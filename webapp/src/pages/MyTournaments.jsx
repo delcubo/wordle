@@ -10,6 +10,15 @@ export default function MyTournaments() {
   const [tournaments, setTournaments] = useState(null);
   const [error, setError] = useState("");
   const [theme, setTheme] = useState("dark");
+  const [hallAvailable, setHallAvailable] = useState(false);
+
+  useEffect(() => {
+    // ссылка на зал славы показывается, только когда он открыт для этого игрока
+    fetch(`/api/game/hall/status?token=${encodeURIComponent(token)}`)
+      .then((r) => (r.ok ? r.json() : { available: false }))
+      .then((d) => setHallAvailable(!!d.available))
+      .catch(() => setHallAvailable(false));
+  }, [token]);
 
   useEffect(() => {
     fetch(`/api/game/my-tournaments?token=${encodeURIComponent(token)}`)
@@ -43,6 +52,12 @@ export default function MyTournaments() {
             </div>
           </Link>
         ))}
+        {hallAvailable && (
+          <Link to={`/play/${token}/hall`} style={cardStyle}>
+            <div style={{ fontWeight: 600 }}>🏆 Зал славы</div>
+            <div style={{ fontSize: 13, opacity: 0.7 }}>Чемпионы прошедших турниров</div>
+          </Link>
+        )}
       </div>
     </div>
   );
