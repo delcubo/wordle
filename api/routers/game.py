@@ -185,14 +185,14 @@ def _bracket_report_text(tournament, entry, view: dict, stage_label: str | None)
     )
 
 
-def _notification_footer(finished_at, order: int | None) -> str:
-    """Строка под отчётом в уведомлении админу: время окончания и порядковый
-    номер среди закончивших это слово."""
+def _notification_footer(finished_at, played: int | None, total: int | None) -> str:
+    """Строка под отчётом в уведомлении админу: время окончания и "сыграло N/M" —
+    сколько участников уже закончили партию из всех, кто играет на этой стадии."""
     local = finished_at.replace(tzinfo=timezone.utc).astimezone(TOURNAMENT_TZ)
     tz_label = {"MSK": "МСК"}.get(local.tzname(), local.tzname())
     parts = [f"\U0001f552 {local.strftime('%H:%M')} {tz_label}"]
-    if order is not None:
-        parts.append(f"{order}-й по счёту")
+    if played is not None and total:
+        parts.append(f"сыграло {played}/{total}")
     return " · ".join(parts)
 
 
@@ -205,8 +205,16 @@ async def _notify_daily_finished(session: AsyncSession, tournament, entry, daily
         round_number = await _entry_round_number(session, tournament, entry.id)
         title = await render_tournament_title(session, tournament, round_number)
         text = await _daily_report_text(session, tournament, entry, daily_word, attempt, title)
-        order = await crud.count_finished_attempts_until(session, daily_word.id, attempt.finished_at)
-        notify.notify_admin_in_background(f"{text}\n\n{_notification_footer(attempt.finished_at, order)}")
+        # M: у тай-брейка — участники именно этого раунда, иначе — подключённые
+        # к розыгрышу (активные) участники; N считается среди них же
+        if tournament.type == TournamentType.tiebreak:
+            round_ = await crud.get_tiebreak_round_by_daily_word(session, daily_word.id)
+            ids = {p.entry_id for p in await crud.list_tiebreak_participants(session, round_.id)} if round_ else set()
+        else:
+            ids = {e.id for e in await crud.list_entries(session, tournament.id) if e.active}
+        played = await crud.count_finished_attempts_until(session, daily_word.id, attempt.finished_at, ids)
+        footer = _notification_footer(attempt.finished_at, played, len(ids))
+        notify.notify_admin_in_background(f"{text}\n\n{footer}")
     except Exception:
         logger.exception("Не удалось подготовить уведомление админу")
 
@@ -220,7 +228,8 @@ async def _notify_bracket_finished(session: AsyncSession, tournament, entry) -> 
             return
         stage_label = await _bracket_stage_label(session, tournament, entry)
         text = _bracket_report_text(tournament, entry, view, stage_label)
-        notify.notify_admin_in_background(f"{text}\n\n{_notification_footer(datetime.utcnow(), None)}")
+        played, total = await crud.count_bracket_stage_progress(session, tournament.id, view["round_number"])
+        notify.notify_admin_in_background(f"{text}\n\n{_notification_footer(datetime.utcnow(), played, total)}")
     except Exception:
         logger.exception("Не удалось подготовить уведомление админу (сетка)")
 

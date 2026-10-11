@@ -918,17 +918,41 @@ async def get_tiebreak_round_by_daily_word(session: AsyncSession, daily_word_id:
     return result.scalars().first()
 
 
-async def count_finished_attempts_until(session: AsyncSession, daily_word_id: int, finished_at) -> int:
-    """Сколько попыток по этому слову закончено к моменту finished_at включительно
-    (угадали или исчерпали 6) — порядковый номер "N-й по счёту" в уведомлении админу."""
-    result = await session.execute(
-        select(func.count(Attempt.id)).where(
-            Attempt.daily_word_id == daily_word_id,
-            Attempt.finished_at.is_not(None),
-            Attempt.finished_at <= finished_at,
-        )
+async def count_finished_attempts_until(
+    session: AsyncSession, daily_word_id: int, finished_at, entry_ids: set[int] | None = None
+) -> int:
+    """Сколько участников закончили это слово к моменту finished_at включительно
+    (угадали или исчерпали 6) — число N в "сыграло N/M" в уведомлении админу.
+    entry_ids — учитывать только этих участников (например, подключённых сейчас)."""
+    query = select(func.count(Attempt.id)).where(
+        Attempt.daily_word_id == daily_word_id,
+        Attempt.finished_at.is_not(None),
+        Attempt.finished_at <= finished_at,
     )
+    if entry_ids is not None:
+        query = query.where(Attempt.entry_id.in_(entry_ids))
+    result = await session.execute(query)
     return int(result.scalar_one())
+
+
+async def count_bracket_stage_progress(session: AsyncSession, tournament_id: int, round_number: int) -> tuple[int, int]:
+    """
+    (сыграло, всего) для стадии сетки: всего — участники пар этой стадии, у
+    которых есть соперник (проходящие без игры в счёт не идут — они не играют);
+    сыграло — те из них, кто уже закончил хотя бы одну игру своей пары (в
+    sudden death повторно не считаются). Для "сыграло N/M" в уведомлении админу.
+    """
+    total = 0
+    played = 0
+    for match in await list_playoff_matches(session, tournament_id):
+        if match.round_number != round_number or match.entry_a_id is None or match.entry_b_id is None:
+            continue
+        games = await list_playoff_games(session, match.id)
+        for side in ("a", "b"):
+            total += 1
+            if any(getattr(g, f"entry_{side}_attempts_used") is not None for g in games):
+                played += 1
+    return played, total
 
 
 async def list_root_tiebreak_rounds(session: AsyncSession, tournament_id: int) -> list[TiebreakRound]:
