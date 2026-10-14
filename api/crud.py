@@ -586,6 +586,13 @@ async def reroll_daily_word(session: AsyncSession, daily_word: DailyWord) -> Dai
     return daily_word
 
 
+async def daily_word_has_attempts(session: AsyncSession, daily_word_id: int) -> bool:
+    """Есть ли хоть одна начатая партия по этому слову (строка Attempt заводится
+    с первой догадки игрока)."""
+    result = await session.execute(select(Attempt.id).where(Attempt.daily_word_id == daily_word_id).limit(1))
+    return result.first() is not None
+
+
 async def list_daily_words(session: AsyncSession, tournament_id: int) -> list[DailyWord]:
     result = await session.execute(
         select(DailyWord).where(DailyWord.tournament_id == tournament_id).order_by(DailyWord.day_number)

@@ -605,8 +605,8 @@ async def get_today_word(tournament_id: int, session: AsyncSession = Depends(get
     """
     Слово сегодняшнего (уже идущего) дня — чисто для справки админу (см. пункт
     #3 бэклога: "upcoming" всегда прыгает на день вперёд и никогда не показывает
-    день, который уже наступил, включая самый первый день розыгрыша). Ничего
-    менять тут нельзя — день уже идёт, участники уже могут по нему играть.
+    день, который уже наступил, включая самый первый день розыгрыша). Менять
+    слово можно только в бессрочной игре и пока никто не начал партию (editable).
     """
     tournament = await crud.get_tournament(session, tournament_id)
     if tournament is None:
@@ -620,7 +620,24 @@ async def get_today_word(tournament_id: int, session: AsyncSession = Depends(get
     if tournament.duration_days is not None and current_day > tournament.duration_days:
         raise HTTPException(status_code=400, detail="Розыгрыш уже завершился")
 
-    return await crud.get_or_suggest_daily_word(session, tournament, current_day)
+    daily_word = await crud.get_or_suggest_daily_word(session, tournament, current_day)
+    out = DailyWordOut.model_validate(daily_word)
+    out.editable = await _daily_word_editable(session, daily_word)
+    return out
+
+
+async def _daily_word_editable(session: AsyncSession, daily_word) -> bool:
+    """Слово можно менять до наступления его дня. В бессрочной игре — ещё и в
+    сам день, пока никто не начал партию (слово игроку не показывается до конца
+    партии, поэтому без единой догадки замена ничего не ломает)."""
+    if daily_word.calendar_date > today():
+        return True
+    if daily_word.calendar_date < today():
+        return False
+    tournament = await crud.get_tournament(session, daily_word.tournament_id)
+    if tournament is None or tournament.type != TournamentType.endless:
+        return False
+    return not await crud.daily_word_has_attempts(session, daily_word.id)
 
 
 @router.post("/words/{daily_word_id}/confirm", response_model=DailyWordOut)
@@ -632,7 +649,7 @@ async def confirm_word(
     if daily_word is None:
         raise HTTPException(status_code=404, detail="Слово не найдено")
 
-    if daily_word.calendar_date <= today():
+    if not await _daily_word_editable(session, daily_word):
         raise HTTPException(status_code=400, detail="Этот день уже наступил — слово менять поздно")
 
     if payload.override_word:
@@ -658,7 +675,7 @@ async def reroll_word(
     if daily_word is None:
         raise HTTPException(status_code=404, detail="Слово не найдено")
 
-    if daily_word.calendar_date <= today():
+    if not await _daily_word_editable(session, daily_word):
         raise HTTPException(status_code=400, detail="Этот день уже наступил — слово менять поздно")
 
     return await crud.reroll_daily_word(session, daily_word)

@@ -1613,6 +1613,8 @@ function TodayWordPanel({ tournament }) {
   const [notApplicable, setNotApplicable] = useState(false);
   const [excluded, setExcluded] = useState(false);
   const [yesterday, setYesterday] = useState(null);
+  const [override, setOverride] = useState("");
+  const [error, setError] = useState("");
 
   async function refresh() {
     const id = tournament.id;
@@ -1647,13 +1649,30 @@ function TodayWordPanel({ tournament }) {
     setExcluded(true);
   }
 
+  // Замена слова сегодняшнего дня — только в бессрочной игре и пока никто не
+  // начал партию (word.editable приходит с сервера, он же перепроверяет).
+  async function handleChange(path, body) {
+    setError("");
+    try {
+      await api(path, { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) });
+      setOverride("");
+      setExcluded(false);
+      await refresh();
+    } catch (e) {
+      setError(e.message);
+      await refresh();
+    }
+  }
+
   if (notApplicable || !word) return null;
 
   return (
     <div style={{ ...panelStyle, marginTop: 20 }}>
       <h3 style={{ marginTop: 0 }}>Слово сегодня — день {word.day_number} ({word.calendar_date})</h3>
       <p style={{ fontSize: 13, opacity: 0.7, marginTop: -4 }}>
-        День уже идёт, менять слово поздно — это просто справка для админа.
+        {word.editable
+          ? "Слово можно заменить, пока никто не начал играть — после первой догадки любого игрока оно блокируется."
+          : "День уже идёт, менять слово поздно — это просто справка для админа."}
       </p>
       {yesterday && (
         <div style={{ fontSize: 13, opacity: 0.6, marginBottom: 8 }}>
@@ -1671,6 +1690,22 @@ function TodayWordPanel({ tournament }) {
           {excluded ? "Исключено из будущих слов" : "🚫 Исключить из словаря"}
         </button>
       </div>
+      {word.editable && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+          <button onClick={() => handleChange(`/api/admin/words/${word.id}/reroll`)} style={ghostButtonStyle}>
+            Предложить другое слово
+          </button>
+          <input placeholder="Или ввести своё слово" value={override} onChange={(e) => setOverride(e.target.value)} style={inputStyle} maxLength={5} />
+          <button
+            onClick={() => handleChange(`/api/admin/words/${word.id}/confirm`, { override_word: override.trim().toLowerCase() })}
+            disabled={override.trim().length !== 5}
+            style={ghostButtonStyle}
+          >
+            Заменить
+          </button>
+        </div>
+      )}
+      {error && <div style={{ color: "#e5484d", marginTop: 8 }}>{error}</div>}
     </div>
   );
 }

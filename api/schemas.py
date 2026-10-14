@@ -209,6 +209,8 @@ class DailyWordOut(BaseModel):
     word: str
     calendar_date: date
     status: str
+    # заполняется только в /words/today: можно ли ещё заменить слово сегодняшнего дня
+    editable: bool = False
 
     class Config:
         from_attributes = True
