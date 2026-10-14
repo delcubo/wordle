@@ -1,0 +1,14 @@
+# Конфигурация деплоя на Amvera (https://amvera.ru): собирается наш обычный
+# Dockerfile (он уже собирает и фронтенд, и бэкенд, а при старте накатывает
+# миграции). Порт — тот же, что слушает uvicorn в Dockerfile (по умолчанию у
+# Amvera 80, у нас 8000).
+meta:
+  environment: docker
+  toolchain:
+    name: docker
+
+build:
+  dockerfile: Dockerfile
+
+run:
+  containerPort: 8000

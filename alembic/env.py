@@ -10,7 +10,9 @@ from api.database import Base, DATABASE_URL
 from api import models  # noqa: F401 — регистрирует все модели в Base.metadata
 
 config = context.config
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+# % в адресе (например, закодированный пароль) надо удвоить: configparser
+# иначе принимает его за синтаксис подстановки и падает
+config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

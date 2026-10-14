@@ -20,3 +20,4 @@ webapp/dist/
 .DS_Store
 .vscode/
 .idea/
+backups/
