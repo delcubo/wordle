@@ -112,6 +112,7 @@ class TournamentOut(BaseModel):
     paused: bool = False
     archived: bool = False
     notify_admin: bool = False  # присылать админу в Telegram уведомления о завершённых партиях
+    first_place: int = 1  # только tiebreak: с какого места разыгрывается диапазон (показ мест)
     note: str | None = None
 
     class Config:
@@ -125,6 +126,7 @@ class TournamentSettingsUpdateRequest(BaseModel):
     note: str | None = None
     start_date: date | None = None  # только пока розыгрыш ещё не стартовал
     notify_admin: bool | None = None
+    first_place: int | None = None  # только tiebreak
 
 
 class TournamentPauseRequest(BaseModel):
@@ -251,6 +253,8 @@ class TiebreakResultRow(BaseModel):
 class TiebreakResultsOut(BaseModel):
     rounds: list[TiebreakResultRound]
     rows: list[TiebreakResultRow]
+    first_place: int = 1  # первое разыгрываемое место (места в rows уже сдвинуты)
+    last_place: int | None = None  # последнее — по числу участников; None, пока никто не играет
 
 
 # ---------- Player-facing game ----------

@@ -686,7 +686,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   const [error, setError] = useState("");
   const [editingSettings, setEditingSettings] = useState(null); // id розыгрыша | null
   const [settingsForm, setSettingsForm] = useState({
-    title: "", duration_days: "", hashtag: "", note: "", start_date: "", notify_admin: false,
+    title: "", duration_days: "", hashtag: "", note: "", start_date: "", notify_admin: false, first_place: 1,
   });
   const [telegramTest, setTelegramTest] = useState(null); // { ok, detail } | null
   const [showArchive, setShowArchive] = useState(false);
@@ -699,6 +699,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
     setSettingsForm({
       title: t.title, duration_days: t.duration_days ?? "", hashtag: t.hashtag || "",
       note: t.note || "", start_date: t.start_date, notify_admin: !!t.notify_admin,
+      first_place: t.first_place ?? 1,
     });
     setTelegramTest(null);
   }
@@ -719,6 +720,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
         title: settingsForm.title, hashtag: settingsForm.hashtag, note: settingsForm.note,
         notify_admin: settingsForm.notify_admin,
       };
+      if (t.type === "tiebreak") body.first_place = Number(settingsForm.first_place) || 1;
       if (t.duration_days != null) body.duration_days = Number(settingsForm.duration_days);
       if (t.start_date >= todayIso && settingsForm.start_date !== t.start_date) {
         body.start_date = settingsForm.start_date;
@@ -843,6 +845,17 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
               placeholder="Заметка админа (описание, игрокам не видна)"
               style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", minHeight: 44, resize: "vertical" }}
             />
+            {t.type === "tiebreak" && (
+              <label style={{ fontSize: 11, opacity: 0.8 }}>
+                Первое разыгрываемое место (например, 13, если разыгрываются места 13-15)
+                <input
+                  type="number" min={1}
+                  value={settingsForm.first_place}
+                  onChange={(e) => setSettingsForm((f) => ({ ...f, first_place: e.target.value }))}
+                  style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", marginTop: 2, width: 90, display: "block" }}
+                />
+              </label>
+            )}
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
               <input
                 type="checkbox" checked={settingsForm.notify_admin}
@@ -2047,7 +2060,14 @@ function TiebreakResultsPanel({ tournament }) {
   return (
     <div style={{ ...panelStyle, marginTop: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h3 style={{ margin: 0 }}>Результаты тай-брейка</h3>
+        <h3 style={{ margin: 0 }}>
+          Результаты тай-брейка
+          {data.last_place != null && (
+            <span style={{ fontWeight: 400, fontSize: 13, opacity: 0.7 }}>
+              {" "}· места {data.last_place > data.first_place ? `${data.first_place}–${data.last_place}` : data.first_place}
+            </span>
+          )}
+        </h3>
         <div style={{ display: "flex", gap: 8 }}>
           {data.rounds.length > 0 && (
             <button onClick={handleDownloadTiebreak} style={ghostButtonStyle}>Скачать</button>

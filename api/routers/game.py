@@ -315,6 +315,10 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         if tiebreak_started:
             tiebreak_place = await tiebreak.get_entry_place(session, tournament, entry.id)
 
+    # логика ниже идёт по относительному месту, игроку показываем со сдвигом на
+    # первое разыгрываемое место (см. tiebreak.shift_place)
+    shown_tiebreak_place = tiebreak.shift_place(tiebreak_place, tournament.first_place)
+
     if daily_word is None:
         # Тай-брейк уже закончился лично для этого участника (место не диапазон,
         # а точное число — см. tiebreak.get_entry_place) — вместо пустого поля
@@ -343,7 +347,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         return TodayWordStatus(
             has_word_today=False, already_played=False, callsign=entry.callsign, tournament_title=tournament_title,
             base_title=tournament.title, is_endless=is_endless, hashtag=tournament.hashtag, paused=tournament.paused,
-            is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=tiebreak_place,
+            is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=shown_tiebreak_place,
             is_standard_report=is_standard_report,
             **last_attempt_fields,
             **(
@@ -364,7 +368,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             has_word_today=True, already_played=False, day_number=report_day_number, max_attempts=MAX_ATTEMPTS,
             callsign=entry.callsign, tournament_title=tournament_title, base_title=tournament.title,
             is_endless=is_endless, hashtag=tournament.hashtag,
-            is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=tiebreak_place,
+            is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=shown_tiebreak_place,
             is_standard_report=is_standard_report,
         )
 
@@ -395,7 +399,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         is_endless=is_endless,
         hashtag=tournament.hashtag,
         next_word_at=next_publish_at().isoformat() if already_played and not is_tiebreak else None,
-        is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=tiebreak_place,
+        is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=shown_tiebreak_place,
         is_standard_report=is_standard_report, streak_days=streak_days,
     )
 

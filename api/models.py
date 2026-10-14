@@ -109,6 +109,11 @@ class Tournament(Base):
     # автоматически попадали только status=finished, теперь админ сам решает,
     # когда убрать приостановленный или завершённый розыгрыш с глаз долой.
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Только для tiebreak: с какого места начинается разыгрываемый диапазон
+    # (например, 13 — разыгрываются места 13-15). Влияет только на показ мест в
+    # результатах и игрокам (api/tiebreak.py::shift_place); сам расчёт идёт по
+    # относительным местам 1..N.
+    first_place: Mapped[int] = mapped_column(Integer, default=1)
     # Присылать админу в Telegram уведомление, когда игрок закончил партию в этом
     # розыгрыше (см. api/notify.py) — по умолчанию выключено.
     notify_admin: Mapped[bool] = mapped_column(Boolean, default=False)

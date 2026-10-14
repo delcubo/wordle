@@ -338,6 +338,13 @@ async def update_tournament_settings(
     if payload.notify_admin is not None:
         tournament.notify_admin = payload.notify_admin
 
+    if payload.first_place is not None:
+        if tournament.type != TournamentType.tiebreak:
+            raise HTTPException(status_code=400, detail="Первое место настраивается только у тай-брейка")
+        if not (1 <= payload.first_place <= 9999):
+            raise HTTPException(status_code=400, detail="Место должно быть числом от 1 до 9999")
+        tournament.first_place = payload.first_place
+
     if payload.start_date is not None:
         if day_number_for_date(tournament.start_date, today()) >= 1:
             raise HTTPException(status_code=400, detail="Розыгрыш уже начался — дату старта менять поздно")
@@ -994,7 +1001,15 @@ async def get_tiebreak_results(tournament_id: int, session: AsyncSession = Depen
     # прошедшим дедлайном — прямо при просмотре, без фоновых задач
     await tiebreak.ensure_started(session, tournament)
     await tiebreak.resolve_ready_rounds(session, tournament)
-    return TiebreakResultsOut(**await tiebreak.build_results(session, tournament))
+    results = await tiebreak.build_results(session, tournament)
+    # места показываем со сдвигом на первое разыгрываемое место (см. shift_place)
+    first_place = tournament.first_place or 1
+    players = sum(1 for row in results["rows"] if row["place"] is not None)
+    for row in results["rows"]:
+        row["place"] = tiebreak.shift_place(row["place"], first_place)
+    return TiebreakResultsOut(
+        **results, first_place=first_place, last_place=first_place + players - 1 if players else None
+    )
 
 
 # ---------- Сетка плей-офф ----------

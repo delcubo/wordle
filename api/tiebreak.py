@@ -227,6 +227,18 @@ async def build_results(session: AsyncSession, tournament: Tournament) -> dict:
     }
 
 
+def shift_place(place: str | None, first_place: int | None) -> str | None:
+    """Место для показа с учётом того, с какого места разыгрывается тай-брейк
+    (Tournament.first_place): "2" -> "14", "2-3" -> "14-15" при first_place=13.
+    Внутренний расчёт остаётся по относительным местам — сдвигается только то,
+    что показываем админу и игрокам."""
+    offset = (first_place or 1) - 1
+    if not place or offset == 0:
+        return place
+    parts = place.split("-")
+    return "-".join(str(int(p) + offset) for p in parts)
+
+
 async def get_entry_place(session: AsyncSession, tournament: Tournament, entry_id: int) -> str | None:
     """Текущее место entry в розыгрыше типа tiebreak — диапазон вида "2-4",
     пока группа ещё не разошлась до конца, точное число, когда место уже не
