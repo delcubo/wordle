@@ -366,15 +366,27 @@ async def get_player_view(session: AsyncSession, tournament: Tournament, entry) 
     }
 
 
+def game_word_editable(game: PlayoffGame, match: PlayoffMatch) -> bool:
+    """Слово игры можно менять до её дня, а в сам день — пока ни у одной из
+    сторон нет ни одной догадки (слово игроку не показывается до конца партии,
+    так что пустая сетка ничего не выдаёт). Прошедший день или решённая пара —
+    уже нельзя."""
+    if game.calendar_date > today():
+        return True
+    if game.calendar_date < today() or match.status == PlayoffMatchStatus.finished:
+        return False
+    return not (game.entry_a_guesses or game.entry_b_guesses)
+
+
 async def get_word_queue(session: AsyncSession, match: PlayoffMatch) -> list[dict]:
     """
     Очередь из 3 слов пары — первое уже действующее (или сразу станет им),
     второе и третье — превью на случай ничьей/повторной ничьей, ещё не
     существующих как PlayoffGame. Игры с 4-й дальше не входят в очередь —
     для них слово всегда генерируется автоматически в момент ничьей (см.
-    пункт бэклога). Редактируемо: игра 1, пока не наступил её день; игры 2/3 —
-    всегда, пока сами ещё не наступили (после наступления они уже реальные
-    PlayoffGame и подчиняются тому же правилу "пока не наступил день").
+    пункт бэклога). Редактируемо: игры 2/3 — пока не созданы; созданная игра
+    (в т.ч. игра 1) — до её дня и в сам день, пока никто не сделал ни одной
+    догадки (см. game_word_editable).
     """
     games = await crud.list_playoff_games(session, match.id)
     games_by_number = {g.game_number: g for g in games}
@@ -386,7 +398,7 @@ async def get_word_queue(session: AsyncSession, match: PlayoffMatch) -> list[dic
         existing = games_by_number.get(game_number)
         if existing is not None:
             word = existing.word
-            editable = existing.calendar_date > today()
+            editable = game_word_editable(existing, match)
         else:
             override = overrides.get(str(game_number))
             if override:

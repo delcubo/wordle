@@ -1110,8 +1110,8 @@ async def set_bracket_word(
     games = await crud.list_playoff_games(session, match.id)
     existing = next((g for g in games if g.game_number == game_number), None)
     if existing is not None:
-        if existing.calendar_date <= today():
-            raise HTTPException(status_code=400, detail="Эта игра уже наступила — слово менять поздно")
+        if not bracket_game.game_word_editable(existing, match):
+            raise HTTPException(status_code=400, detail="Игра уже началась (есть догадки) или закончилась — слово менять поздно")
         await crud.set_playoff_game_word(session, existing, word)
     else:
         await crud.set_playoff_word_override(session, match, game_number, word)
@@ -1134,8 +1134,8 @@ async def reroll_bracket_word(
 
     games = await crud.list_playoff_games(session, match.id)
     existing = next((g for g in games if g.game_number == game_number), None)
-    if existing is not None and existing.calendar_date <= today():
-        raise HTTPException(status_code=400, detail="Эта игра уже наступила — слово менять поздно")
+    if existing is not None and not bracket_game.game_word_editable(existing, match):
+        raise HTTPException(status_code=400, detail="Игра уже началась (есть догадки) или закончилась — слово менять поздно")
 
     await bracket_game.reroll_word_queue_slot(session, match, game_number)
 
