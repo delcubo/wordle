@@ -2102,14 +2102,88 @@ function StandingsPanel({ tournament }) {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [hoveredCell, setHoveredCell] = useState(null); // {participantId, day} | null
+  // Разбор ничьих по итогам тай-брейка (см. пункт бэклога): окончательный порядок
+  // внутри групп с общим местом — место со звёздочкой, как "2*".
+  const [tieOpen, setTieOpen] = useState(false);
+  const [tieData, setTieData] = useState(null); // ответ /tie-groups | null
+  const [tieState, setTieState] = useState({}); // place группы -> { use, order, source }
+  const [tieBusy, setTieBusy] = useState(false);
+  const [tieError, setTieError] = useState("");
+
+  const placeLabel = (r) => `${r.place}${r.tie_resolved ? "*" : ""}`;
+  // Пояснение под таблицей в копии и картинке, если есть места, определённые
+  // тай-брейком (со звёздочкой)
+  const TIE_FOOTNOTE = "* - по результатам тай-брейка";
+  const hasTieResolved = () => standings.rows.some((r) => r.tie_resolved);
+
+  function initTieState(data) {
+    const next = {};
+    for (const g of data.groups) {
+      const order = g.applied_order || g.suggested_order || g.members.map((m) => m.entry_id);
+      next[g.place] = {
+        use: Boolean(g.applied_order || g.suggested_order),
+        order,
+        source: g.applied_source || g.suggested_source || "вручную",
+      };
+    }
+    setTieState(next);
+  }
+
+  async function openTies() {
+    setTieOpen(true);
+    setTieError("");
+    try {
+      const data = await api(`/api/admin/tournaments/${tournament.id}/tie-groups`);
+      setTieData(data);
+      initTieState(data);
+    } catch (e) {
+      setTieError(e.message);
+    }
+  }
+
+  function moveTie(place, index, delta) {
+    setTieState((prev) => {
+      const st = prev[place];
+      const order = [...st.order];
+      const target = index + delta;
+      if (target < 0 || target >= order.length) return prev;
+      [order[index], order[target]] = [order[target], order[index]];
+      return { ...prev, [place]: { ...st, order, use: true, source: "вручную" } };
+    });
+  }
+
+  async function saveTies(resolutions) {
+    setTieBusy(true);
+    setTieError("");
+    try {
+      const data = await api(`/api/admin/tournaments/${tournament.id}/tie-resolutions`, {
+        method: "PUT",
+        body: JSON.stringify({ resolutions }),
+      });
+      setTieData(data);
+      initTieState(data);
+      await refresh();
+    } catch (e) {
+      setTieError(e.message);
+    } finally {
+      setTieBusy(false);
+    }
+  }
+
+  function handleApplyTies() {
+    const resolutions = tieData.groups
+      .filter((g) => tieState[g.place]?.use)
+      .map((g) => ({ entry_ids: tieState[g.place].order, source: tieState[g.place].source }));
+    saveTies(resolutions);
+  }
 
   function handleCopyStandings() {
     const tags = [standings.hashtag, "#таблица", `#д${standings.current_day}`].filter(Boolean).join(" ");
     // "·", а не "N. " — иначе Telegram распознаёт "1. " как начало
     // нумерованного списка и при вставке склеивает все строки в один пункт
     // (см. пункт бэклога)
-    const lines = standings.rows.map((r) => `${r.place} · ${r.callsign} — ${r.total_points}`);
-    const text = `${tags}\n\n${lines.join("\n")}`;
+    const lines = standings.rows.map((r) => `${placeLabel(r)} · ${r.callsign} — ${r.total_points}`);
+    const text = `${tags}\n\n${lines.join("\n")}${hasTieResolved() ? `\n\n${TIE_FOOTNOTE}` : ""}`;
     navigator.clipboard.writeText(text).then(
       () => {
         setCopied(true);
@@ -2134,8 +2208,11 @@ function StandingsPanel({ tournament }) {
     const rowHeight = 28;
     const headerHeight = 28;
     const tableWidth = placeCol + callsignCol + totalCol + dayCol * standings.total_days;
-    const width = tableWidth + padding * 2;
-    const height = headerHeight + rowHeight * standings.rows.length + padding * 2;
+    const footnoteHeight = hasTieResolved() ? 26 : 0;
+    mctx.font = "12px system-ui, sans-serif";
+    const footnoteWidth = footnoteHeight ? mctx.measureText(TIE_FOOTNOTE).width : 0;
+    const width = Math.max(tableWidth, footnoteWidth) + padding * 2;
+    const height = headerHeight + rowHeight * standings.rows.length + padding * 2 + footnoteHeight;
 
     const canvas = document.createElement("canvas");
     canvas.width = width * dpr;
@@ -2184,7 +2261,7 @@ function StandingsPanel({ tournament }) {
       ctx.fillStyle = "#1a1a1b";
       ctx.font = font;
       ctx.textAlign = "center";
-      ctx.fillText(String(r.place), colX.place + placeCol / 2, rowY + rowHeight / 2);
+      ctx.fillText(placeLabel(r), colX.place + placeCol / 2, rowY + rowHeight / 2);
       ctx.textAlign = "left";
       ctx.fillText(r.callsign, colX.callsign + 6, rowY + rowHeight / 2);
       ctx.textAlign = "center";
@@ -2206,6 +2283,13 @@ function StandingsPanel({ tournament }) {
       ctx.moveTo(padding, y);
       ctx.lineTo(padding + tableWidth, y);
       ctx.stroke();
+    }
+
+    if (footnoteHeight) {
+      ctx.fillStyle = "#666";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText(TIE_FOOTNOTE, padding, tableTop + headerHeight + rowHeight * standings.rows.length + 16);
     }
 
     canvas.toBlob((blob) => {
@@ -2294,6 +2378,10 @@ function StandingsPanel({ tournament }) {
             {copied ? "Скопировано!" : "Скопировать таблицу"}
           </button>
           <button onClick={handleDownloadStandings} style={ghostButtonStyle}>Скачать таблицу</button>
+          {tournament.type === "standard" && selectedDay === "current"
+            && standings.rows.some((r) => r.place.includes("-") || r.tie_resolved) && (
+            <button onClick={openTies} style={ghostButtonStyle}>Разобрать ничьи</button>
+          )}
           <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
         </div>
       </div>
@@ -2302,6 +2390,76 @@ function StandingsPanel({ tournament }) {
         Клик по ячейке дня — ручная корректировка результата (исключительные случаи). Наведите на цифру — покажутся попытки этого дня.
       </p>
       {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
+      {tieOpen && (
+        <div style={{ background: "#242426", borderRadius: 6, padding: 10, marginBottom: 12, maxWidth: 560 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <strong style={{ fontSize: 14 }}>Окончательные места по итогам тай-брейка</strong>
+            <button onClick={() => setTieOpen(false)} style={{ ...ghostButtonStyle, fontSize: 11, padding: "1px 8px" }}>Закрыть</button>
+          </div>
+          {tieError && <div style={{ color: "#e5484d", fontSize: 12, marginTop: 6 }}>{tieError}</div>}
+          {!tieData ? (
+            !tieError && <p style={{ fontSize: 12, opacity: 0.7 }}>Загрузка...</p>
+          ) : !tieData.can_resolve ? (
+            <p style={{ fontSize: 12, opacity: 0.8 }}>{tieData.reason}</p>
+          ) : tieData.groups.length === 0 ? (
+            <p style={{ fontSize: 12, opacity: 0.8 }}>Разделённых мест нет.</p>
+          ) : (
+            <>
+              <p style={{ fontSize: 12, opacity: 0.7, margin: "6px 0" }}>
+                Порядок предложен по найденному тай-брейку, его можно поправить стрелками. Места, определённые тай-брейком, помечаются звёздочкой (например, 2*).
+              </p>
+              {tieData.groups.map((g) => {
+                const st = tieState[g.place];
+                if (!st) return null;
+                const startPlace = parseInt(g.place.split("-")[0], 10);
+                const nameOf = (id) => g.members.find((m) => m.entry_id === id)?.callsign || id;
+                return (
+                  <div key={g.place} style={{ borderTop: "1px solid #3a3a3c", paddingTop: 8, marginTop: 8 }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+                      <input
+                        type="checkbox" checked={st.use}
+                        onChange={(e) => setTieState((prev) => ({ ...prev, [g.place]: { ...prev[g.place], use: e.target.checked } }))}
+                      />
+                      <span>Места {g.place} · {g.points} очк.</span>
+                      {g.applied_order && <span style={{ color: "#538d4e", fontSize: 12 }}>✓ применено</span>}
+                    </label>
+                    <div style={{ fontSize: 11, opacity: 0.7, margin: "2px 0 4px 22px" }}>
+                      {st.source === "вручную"
+                        ? "Порядок задан вручную"
+                        : `По тай-брейку «${st.source}»`}
+                      {!g.suggested_order && !g.applied_order && g.suggestion_note ? `. ${g.suggestion_note}` : ""}
+                    </div>
+                    <div style={{ marginLeft: 22 }}>
+                      {st.order.map((id, i) => (
+                        <div key={id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "2px 0" }}>
+                          <span style={{ width: 28, fontWeight: 700 }}>{startPlace + i}*</span>
+                          <span style={{ flex: 1, wordBreak: "break-word" }}>{nameOf(id)}</span>
+                          <button
+                            onClick={() => moveTie(g.place, i, -1)} disabled={i === 0}
+                            style={{ ...ghostButtonStyle, padding: "0 6px", fontSize: 12, opacity: i === 0 ? 0.3 : 1 }}
+                          >↑</button>
+                          <button
+                            onClick={() => moveTie(g.place, i, 1)} disabled={i === st.order.length - 1}
+                            style={{ ...ghostButtonStyle, padding: "0 6px", fontSize: 12, opacity: i === st.order.length - 1 ? 0.3 : 1 }}
+                          >↓</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                <button onClick={handleApplyTies} disabled={tieBusy} style={{ ...buttonStyle, fontSize: 12, opacity: tieBusy ? 0.6 : 1 }}>
+                  {tieBusy ? "Сохраняю..." : "Применить отмеченные"}
+                </button>
+                <button onClick={() => saveTies([])} disabled={tieBusy} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                  Сбросить всё
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
       <table style={{ borderCollapse: "collapse", fontSize: 13, minWidth: 400 }}>
         <thead>
           <tr>
@@ -2316,7 +2474,7 @@ function StandingsPanel({ tournament }) {
         <tbody>
           {standings.rows.map((r) => (
             <tr key={r.participant_id} style={{ borderTop: "1px solid #2a2a2c" }}>
-              <td style={tdStyle}>{r.place}</td>
+              <td style={tdStyle}>{placeLabel(r)}</td>
               <td style={tdStyle}>{r.callsign}</td>
               <td style={{ ...tdStyle, fontWeight: 700 }}>{r.total_points}</td>
               {r.daily.map((d, i) => {

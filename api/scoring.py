@@ -36,6 +36,9 @@ class StandingsRow:
     total_points: int
     place: str             # "1", "2-3" и т.п. — уже с учётом дележа мест
     daily: list[ParticipantDayResult] = field(default_factory=list)
+    # Место определено тай-брейком, а не очками (см. tie_resolutions в
+    # build_standings) — в таблице помечается звёздочкой.
+    tie_resolved: bool = False
 
 
 def build_standings(
@@ -43,6 +46,7 @@ def build_standings(
     daily_results: dict[int, dict[int, ParticipantDayResult]],
     # daily_results[day_number][participant_id] = ParticipantDayResult
     total_days: int,
+    tie_resolutions: list[list[int]] | None = None,
 ) -> list[StandingsRow]:
     """
     Строит итоговую таблицу: сумма очков по всем дням + список по дням (с флагами
@@ -54,7 +58,15 @@ def build_standings(
     тай-брейк таблицы. Только при полном совпадении и очков, и пропусков
     участники делят место в формате "2-3" (диапазон), следующий участник
     получает место сразу после диапазона (competition ranking).
+
+    tie_resolutions — окончательный порядок для групп с общим местом по итогам
+    тай-брейка (см. пункт бэклога): список упорядоченных списков id участников,
+    лучший первым. Порядок применяется, только если состав группы (равные очки и
+    пропуски) в точности совпадает с одним из списков; тогда каждый получает своё
+    место (2 и 3 вместо "2-3") и флаг tie_resolved. Устаревший список (состав
+    группы изменился) просто игнорируется.
     """
+    resolution_by_set = {frozenset(ids): list(ids) for ids in (tie_resolutions or [])}
     totals: dict[int, int] = {}
     skips: dict[int, int] = {}
     for p in participants:
@@ -90,8 +102,15 @@ def build_standings(
         else:
             place_label = f"{i + 1}-{j + 1}"
 
-        for k in range(i, j + 1):
-            p = ordered[k]
+        members = ordered[i:j + 1]
+        resolved_order = None
+        if j > i:
+            resolved_order = resolution_by_set.get(frozenset(p["id"] for p in members))
+        if resolved_order is not None:
+            by_id = {p["id"]: p for p in members}
+            members = [by_id[pid] for pid in resolved_order]
+
+        for offset, p in enumerate(members):
             pid = p["id"]
             daily_list = []
             for day in range(1, total_days + 1):
@@ -107,8 +126,9 @@ def build_standings(
                     participant_id=pid,
                     callsign=p["callsign"],
                     total_points=totals[pid],
-                    place=place_label,
+                    place=str(i + 1 + offset) if resolved_order is not None else place_label,
                     daily=daily_list,
+                    tie_resolved=resolved_order is not None,
                 )
             )
         i = j + 1

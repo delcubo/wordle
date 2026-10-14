@@ -355,7 +355,39 @@ class StandingsRowOut(BaseModel):
     callsign: str
     total_points: int
     place: str
+    tie_resolved: bool = False  # место определено тай-брейком (показывается со звёздочкой)
     daily: list[DailyCell]
+
+
+class TieGroupMember(BaseModel):
+    entry_id: int
+    callsign: str
+
+
+class TieGroupOut(BaseModel):
+    place: str  # исходный общий диапазон, например "2-3"
+    points: int
+    members: list[TieGroupMember]
+    suggested_order: list[int] | None = None  # entry_id, лучший первым — по найденному тай-брейку
+    suggested_source: str | None = None  # название тай-брейка, откуда взят порядок
+    suggestion_note: str | None = None  # почему предложения нет / что с ним не так
+    applied_order: list[int] | None = None  # уже применённый порядок
+    applied_source: str | None = None
+
+
+class TieGroupsResponse(BaseModel):
+    can_resolve: bool
+    reason: str | None = None
+    groups: list[TieGroupOut] = []
+
+
+class TieResolutionItem(BaseModel):
+    entry_ids: list[int]  # лучший первым
+    source: str = ""
+
+
+class TieResolutionsRequest(BaseModel):
+    resolutions: list[TieResolutionItem]
 
 
 class StandingsResponse(BaseModel):

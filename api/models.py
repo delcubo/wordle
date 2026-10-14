@@ -112,6 +112,10 @@ class Tournament(Base):
     # Присылать админу в Telegram уведомление, когда игрок закончил партию в этом
     # розыгрыше (см. api/notify.py) — по умолчанию выключено.
     notify_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Окончательный порядок для групп с общим местом по итогам тай-брейка (только
+    # standard): [{"entry_ids": [лучший, ..., худший], "source": "название"}].
+    # Применяется к итоговой таблице — см. api/scoring.py::build_standings.
+    tie_resolutions: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # Заметка админа с описанием розыгрыша — не показывается игрокам.
     note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 

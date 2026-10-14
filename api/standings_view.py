@@ -11,7 +11,8 @@ from api.tournament_time import today, day_number_for_date
 
 
 async def compute_standings(
-    session: AsyncSession, tournament: Tournament, max_day: int | None = None
+    session: AsyncSession, tournament: Tournament, max_day: int | None = None,
+    apply_tie_resolutions: bool = True,
 ) -> list[StandingsRow]:
     """
     max_day — ограничивает таблицу днями 1..max_day (используется для
@@ -19,6 +20,10 @@ async def compute_standings(
     см. admin.py::get_standings — чтобы не давать преимущество тем, кто уже
     сыграл сегодня, пока остальные ещё нет; None — обычная полная таблица,
     как для live-панели админа).
+
+    Порядок мест по итогам тай-брейка (tournament.tie_resolutions) применяется
+    только к итоговой таблице (max_day=None) и только если не отключён —
+    apply_tie_resolutions=False нужен, чтобы увидеть сами ничьи при их разборе.
     """
     all_entries = [e for e in await crud.list_entries(session, tournament.id) if not e.hidden_from_standings]
     daily_words = await crud.list_daily_words(session, tournament.id)
@@ -80,4 +85,7 @@ async def compute_standings(
                     )
 
     entry_dicts = [{"id": e.id, "callsign": e.callsign} for e in entries]
-    return build_standings(entry_dicts, daily_results, last_day)
+    resolutions = None
+    if apply_tie_resolutions and max_day is None and tournament.tie_resolutions:
+        resolutions = [r["entry_ids"] for r in tournament.tie_resolutions]
+    return build_standings(entry_dicts, daily_results, last_day, tie_resolutions=resolutions)
