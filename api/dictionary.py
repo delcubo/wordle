@@ -133,9 +133,19 @@ def pick_word_for_match(match_id: int, game_number: int, already_used: set[str])
     Детерминированный выбор слова для конкретной игры внутри пары сетки —
     аналог pick_word_for_day, но сид строится из id пары и номера игры (у пар
     нет единого "номера дня розыгрыша", как у обычных дней).
+
+    Слово зависит от already_used только если "основной" выбор по сиду в нём
+    уже есть: тогда берётся следующий по тому же сиду. Раньше выбор шёл из
+    списка, отфильтрованного по already_used, поэтому любое изменение набора
+    использованных слов (замена слова соседней игры пары, слово из другой
+    пары) сдвигало и все остальные превью очереди.
     """
     words = load_words()
     rng = _seeded_rng(f"match:{match_id}:{game_number}")
+    for _ in range(200):
+        word = words[rng.randrange(len(words))]
+        if word not in already_used:
+            return word
     candidates = [w for w in words if w not in already_used]
     if not candidates:
         raise RuntimeError("Словарь исчерпан — слов для новой игры сетки не осталось")

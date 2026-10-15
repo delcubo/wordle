@@ -139,6 +139,7 @@ async def get_bracket_view(session: AsyncSession, tournament_id: int) -> list[di
     result = []
     for m in matches:
         game = await bracket_game.get_current_game(session, m)
+        all_games = await crud.list_playoff_games(session, m.id)
         result.append({
             "id": m.id,
             "round_number": m.round_number,
@@ -158,5 +159,16 @@ async def get_bracket_view(session: AsyncSession, tournament_id: int) -> list[di
             "status": m.status,
             "scheduled_date": m.scheduled_date,
             "admin_note": m.admin_note,
+            "games": [
+                {
+                    "game_number": g.game_number,
+                    "is_sudden_death": g.is_sudden_death,
+                    "entry_a_attempts_used": g.entry_a_attempts_used,
+                    "entry_a_solved": g.entry_a_solved,
+                    "entry_b_attempts_used": g.entry_b_attempts_used,
+                    "entry_b_solved": g.entry_b_solved,
+                }
+                for g in all_games
+            ],
         })
     return result

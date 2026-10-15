@@ -1099,8 +1099,8 @@ async def override_match(
 
 @router.get("/bracket/matches/{match_id}/words", response_model=list[PlayoffWordQueueEntry])
 async def get_bracket_word_queue(match_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
-    """Очередь из 3 слов пары (текущее + 2 превью на случай ничьей) — см.
-    пункт бэклога. С игры 4 слова снова генерируются автоматически."""
+    """Очередь слов пары (текущее + превью на случай ничьей, WORD_QUEUE_SIZE штук).
+    Дальше слова снова генерируются автоматически."""
     match = await session.get(PlayoffMatch, match_id)
     if match is None:
         raise HTTPException(status_code=404, detail="Пара не найдена")
@@ -1112,13 +1112,14 @@ async def set_bracket_word(
     match_id: int, game_number: int, payload: SetPlayoffWordRequest,
     session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
 ):
-    if game_number not in (1, 2, 3):
-        raise HTTPException(status_code=400, detail="Слово можно задать только для игр 1-3 этой пары")
+    if not 1 <= game_number <= bracket_game.WORD_QUEUE_SIZE:
+        raise HTTPException(status_code=400, detail=f"Слово можно задать только для игр 1-{bracket_game.WORD_QUEUE_SIZE} этой пары")
     match = await session.get(PlayoffMatch, match_id)
     if match is None:
         raise HTTPException(status_code=404, detail="Пара не найдена")
 
     already_used = await crud.get_all_used_words(session, match.tournament_id)
+    already_used = already_used | await bracket_game.sibling_queue_words(session, match, game_number)
     error = validate_manual_word(payload.word, already_used)
     if error:
         raise HTTPException(status_code=400, detail=error)
@@ -1143,8 +1144,8 @@ async def reroll_bracket_word(
 ):
     """"Предложить другое слово" для пары сетки — то же, что реролл обычного
     слова дня, только для слота очереди (см. пункт бэклога)."""
-    if game_number not in (1, 2, 3):
-        raise HTTPException(status_code=400, detail="Слово можно задать только для игр 1-3 этой пары")
+    if not 1 <= game_number <= bracket_game.WORD_QUEUE_SIZE:
+        raise HTTPException(status_code=400, detail=f"Слово можно задать только для игр 1-{bracket_game.WORD_QUEUE_SIZE} этой пары")
     match = await session.get(PlayoffMatch, match_id)
     if match is None:
         raise HTTPException(status_code=404, detail="Пара не найдена")

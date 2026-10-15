@@ -438,6 +438,16 @@ class TiebreakOverrideRequest(BaseModel):
 
 # ---------- Сетка плей-офф ----------
 
+class PlayoffGameResultOut(BaseModel):
+    """Результат одной игры пары (обычной или доп. раунда после ничьей)."""
+    game_number: int
+    is_sudden_death: bool = False
+    entry_a_attempts_used: int | None = None
+    entry_a_solved: bool | None = None
+    entry_b_attempts_used: int | None = None
+    entry_b_solved: bool | None = None
+
+
 class PlayoffMatchOut(BaseModel):
     id: int
     round_number: int
@@ -457,6 +467,9 @@ class PlayoffMatchOut(BaseModel):
     status: str
     scheduled_date: date | None
     admin_note: str | None = None
+    # все игры пары по порядку — чтобы в таблице были видны и результаты раундов,
+    # закончившихся ничьей, а не только текущей игры
+    games: list[PlayoffGameResultOut] = []
 
 
 class BracketRound1Request(BaseModel):

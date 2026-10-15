@@ -25,6 +25,9 @@ from api.dictionary import pick_word_for_match, pick_alternative_word
 from api import crud
 
 MAX_ATTEMPTS = 6
+# Сколько первых игр пары админ может задать заранее (текущая + превью на случай
+# ничьей). С игры WORD_QUEUE_SIZE + 1 слова снова генерируются автоматически.
+WORD_QUEUE_SIZE = 5
 
 
 def _side_for_entry(match: PlayoffMatch, entry_id: int) -> str:
@@ -380,11 +383,11 @@ def game_word_editable(game: PlayoffGame, match: PlayoffMatch) -> bool:
 
 async def get_word_queue(session: AsyncSession, match: PlayoffMatch) -> list[dict]:
     """
-    Очередь из 3 слов пары — первое уже действующее (или сразу станет им),
+    Очередь из WORD_QUEUE_SIZE слов пары — первое уже действующее (или сразу станет им),
     второе и третье — превью на случай ничьей/повторной ничьей, ещё не
     существующих как PlayoffGame. Игры с 4-й дальше не входят в очередь —
     для них слово всегда генерируется автоматически в момент ничьей (см.
-    пункт бэклога). Редактируемо: игры 2/3 — пока не созданы; созданная игра
+    пункт бэклога). Редактируемо: игры 2..N — пока не созданы; созданная игра
     (в т.ч. игра 1) — до её дня и в сам день, пока никто не сделал ни одной
     догадки (см. game_word_editable).
     """
@@ -394,7 +397,7 @@ async def get_word_queue(session: AsyncSession, match: PlayoffMatch) -> list[dic
     already_used = await crud.get_all_used_words(session, match.tournament_id)
 
     queue = []
-    for game_number in (1, 2, 3):
+    for game_number in range(1, WORD_QUEUE_SIZE + 1):
         existing = games_by_number.get(game_number)
         if existing is not None:
             word = existing.word
@@ -411,6 +414,12 @@ async def get_word_queue(session: AsyncSession, match: PlayoffMatch) -> list[dic
     return queue
 
 
+async def sibling_queue_words(session: AsyncSession, match: PlayoffMatch, game_number: int) -> set[str]:
+    """Слова остальных слотов очереди этой же пары — чтобы замена одного слота
+    не дублировала другой (сами слоты при этом друг от друга не зависят)."""
+    return {q["word"] for q in await get_word_queue(session, match) if q["game_number"] != game_number}
+
+
 async def reroll_word_queue_slot(session: AsyncSession, match: PlayoffMatch, game_number: int) -> str:
     """"Предложить другое слово" для слота очереди (см. пункт бэклога — раньше
     в сетке можно было только вручную задать своё слово, без реролла, в
@@ -420,6 +429,7 @@ async def reroll_word_queue_slot(session: AsyncSession, match: PlayoffMatch, gam
     games = await crud.list_playoff_games(session, match.id)
     existing = next((g for g in games if g.game_number == game_number), None)
     already_used = await crud.get_all_used_words(session, match.tournament_id)
+    already_used = already_used | await sibling_queue_words(session, match, game_number)
 
     if existing is not None:
         new_word = pick_alternative_word(already_used, exclude=existing.word)

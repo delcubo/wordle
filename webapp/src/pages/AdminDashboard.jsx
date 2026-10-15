@@ -2747,6 +2747,27 @@ function formatAttempts(attemptsUsed, solved) {
   return `(${solved ? attemptsUsed : "X"}/6)`;
 }
 
+// Результат стороны пары по ВСЕМ сыгранным играм: одна игра — как раньше "(3/6)",
+// после ничьей — по порядку "(3 · 4 · X)", "–" там, где сторона не сыграла.
+// Игра, по которой ещё нет ни одного результата (только что созданный доп.
+// раунд), не показывается.
+function formatMatchResults(m, side) {
+  const other = side === "a" ? "b" : "a";
+  const played = (m?.games || []).filter(
+    (g) => g[`entry_${side}_attempts_used`] != null || g[`entry_${other}_attempts_used`] != null
+  );
+  if (played.length === 0) return "";
+  if (played.length === 1) {
+    const g = played[0];
+    return formatAttempts(g[`entry_${side}_attempts_used`], g[`entry_${side}_solved`]);
+  }
+  const parts = played.map((g) => {
+    const used = g[`entry_${side}_attempts_used`];
+    return used == null ? "–" : g[`entry_${side}_solved`] ? used : "X";
+  });
+  return `(${parts.join(" · ")})`;
+}
+
 function MatchWordQueue({ matchId }) {
   const matchIdRef = useLatest(matchId);
   const [queue, setQueue] = useState(null);
@@ -2802,7 +2823,7 @@ function MatchWordQueue({ matchId }) {
   return (
     <div style={{ padding: 8, background: "#232325", borderRadius: 6 }}>
       <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 4 }}>
-        Очередь слов — 1: текущее, 2-3: превью на случай ничьей. С 4-й игры слова генерируются автоматически.
+        Очередь слов — 1: текущее, 2-5: превью на случай ничьей (каждое слово задаётся независимо). С 6-й игры слова генерируются автоматически.
       </div>
       {error && <div style={{ color: "#e5484d", fontSize: 11, marginBottom: 4 }}>{error}</div>}
       {queue.map((q) => (
@@ -2984,9 +3005,9 @@ function BracketPanel({ tournament }) {
                       <div style={{ opacity: 0.6, fontSize: 11, textTransform: "uppercase" }}>слово: {m.word}</div>
                     )}
                   </td>
-                  <td style={tdStyle}>{m.entry_a_callsign || "— пусто —"} {formatAttempts(m.entry_a_attempts_used, m.entry_a_solved)}</td>
+                  <td style={tdStyle}>{m.entry_a_callsign || "— пусто —"} {formatMatchResults(m, "a")}</td>
                   <td style={tdStyle}>—</td>
-                  <td style={tdStyle}>{m.entry_b_callsign || "— пусто —"} {formatAttempts(m.entry_b_attempts_used, m.entry_b_solved)}</td>
+                  <td style={tdStyle}>{m.entry_b_callsign || "— пусто —"} {formatMatchResults(m, "b")}</td>
                   <td style={{ ...tdStyle, opacity: 0.7 }}>
                     {m.winner_entry_id
                       ? <>победил: {m.winner_entry_id === m.entry_a_id ? m.entry_a_callsign : m.entry_b_callsign}
@@ -3057,7 +3078,7 @@ function BracketPanel({ tournament }) {
   );
 }
 
-const BOX_W = 170;
+const BOX_W = 200;
 const BOX_H = 44;
 const GAP_Y = 18;
 const COL_GAP = 70;
@@ -3198,8 +3219,8 @@ function BracketImage({ tournament, matches }) {
                   const nameB = m?.entry_b_callsign || "?";
                   const winnerA = m?.winner_entry_id != null && m.winner_entry_id === m.entry_a_id;
                   const winnerB = m?.winner_entry_id != null && m.winner_entry_id === m.entry_b_id;
-                  const attemptsA = formatAttempts(m?.entry_a_attempts_used, m?.entry_a_solved);
-                  const attemptsB = formatAttempts(m?.entry_b_attempts_used, m?.entry_b_solved);
+                  const attemptsA = formatMatchResults(m, "a");
+                  const attemptsB = formatMatchResults(m, "b");
                   return (
                     <g key={`box-${rIdx}-${i}`}>
                       <rect x={x} y={y} width={BOX_W} height={BOX_H} rx={6} fill={i % 2 === 1 ? "#fafafa" : "#ffffff"} stroke="#ddd" />
