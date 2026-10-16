@@ -2787,7 +2787,7 @@ function formatAttempts(attemptsUsed, solved) {
 }
 
 // Результат стороны пары по ВСЕМ сыгранным играм: одна игра — как раньше "(3/6)",
-// после ничьей — по порядку "(3 · 4 · X)", "–" там, где сторона не сыграла.
+// после ничьей — по порядку "(3 · 4 · X/6)", "–" там, где сторона не сыграла.
 // Игра, по которой ещё нет ни одного результата (только что созданный доп.
 // раунд), не показывается.
 function formatMatchResults(m, side) {
@@ -2804,7 +2804,7 @@ function formatMatchResults(m, side) {
     const used = g[`entry_${side}_attempts_used`];
     return used == null ? "–" : g[`entry_${side}_solved`] ? used : "X";
   });
-  return `(${parts.join(" · ")})`;
+  return `(${parts.join(" · ")}/6)`;
 }
 
 function MatchWordQueue({ matchId }) {
@@ -3117,7 +3117,14 @@ function BracketPanel({ tournament }) {
   );
 }
 
-const BOX_W = 200;
+const BOX_W = 240;
+const MAX_CALLSIGN_CHARS = 14;
+
+// Длинный позывной не должен налезать на результаты и вылезать из ячейки.
+function shortCallsign(name) {
+  const chars = Array.from(name);
+  return chars.length > MAX_CALLSIGN_CHARS ? chars.slice(0, MAX_CALLSIGN_CHARS).join("") + "..." : name;
+}
 const BOX_H = 44;
 const GAP_Y = 18;
 const COL_GAP = 70;
@@ -3265,13 +3272,13 @@ function BracketImage({ tournament, matches }) {
                       <rect x={x} y={y} width={BOX_W} height={BOX_H} rx={6} fill={i % 2 === 1 ? "#fafafa" : "#ffffff"} stroke="#ddd" />
                       <line x1={x} y1={y + BOX_H / 2} x2={x + BOX_W} y2={y + BOX_H / 2} stroke="#ddd" />
                       <text x={x + 8} y={y + BOX_H / 2 - 6} fontSize="13" fill={winnerA ? "#6aaa64" : "#1a1a1b"} fontWeight={winnerA ? "700" : "400"}>
-                        {nameA}
+                        {shortCallsign(nameA)}
                       </text>
                       <text x={x + BOX_W - 8} y={y + BOX_H / 2 - 6} fontSize="11" textAnchor="end" fill={winnerA ? "#6aaa64" : "#999"}>
                         {attemptsA}
                       </text>
                       <text x={x + 8} y={y + BOX_H - 6} fontSize="13" fill={winnerB ? "#6aaa64" : "#1a1a1b"} fontWeight={winnerB ? "700" : "400"}>
-                        {nameB}
+                        {shortCallsign(nameB)}
                       </text>
                       <text x={x + BOX_W - 8} y={y + BOX_H - 6} fontSize="11" textAnchor="end" fill={winnerB ? "#6aaa64" : "#999"}>
                         {attemptsB}
