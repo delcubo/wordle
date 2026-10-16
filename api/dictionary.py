@@ -18,9 +18,11 @@ import random
 
 _WORDS_PATH = os.path.join(os.path.dirname(__file__), "data", "answer_words.txt")
 _EXTRA_WORDS_PATH = os.path.join(os.path.dirname(__file__), "data", "answer_words_extra.txt")
+_EXCLUDED_WORDS_PATH = os.path.join(os.path.dirname(__file__), "data", "excluded_words.txt")
 
 _words_cache: list[str] | None = None
 _normalized_index_cache: dict[str, str] | None = None
+_file_excluded_cache: frozenset[str] | None = None
 
 
 def _read_word_list(path: str) -> list[str]:
@@ -40,6 +42,22 @@ def load_words() -> list[str]:
     if _words_cache is None:
         _words_cache = _read_word_list(_WORDS_PATH) + _read_word_list(_EXTRA_WORDS_PATH)
     return _words_cache
+
+
+def load_file_excluded_words() -> frozenset[str]:
+    """
+    Слова, исключённые из выбора будущих слов дня файлом репозитория
+    (excluded_words.txt) — в дополнение к тем, что админ исключил через панель
+    (таблица ExcludedWord в БД). Файл переживает смену базы данных/хостинга.
+    Написание приводится к каноническому из словаря (е/ё); слова, которых в
+    словаре нет, остаются как есть. Влияет только на выбор будущих слов, как и
+    исключения из БД — на проверку вводимых попыток не влияет.
+    """
+    global _file_excluded_cache
+    if _file_excluded_cache is None:
+        raw = _read_word_list(_EXCLUDED_WORDS_PATH) if os.path.exists(_EXCLUDED_WORDS_PATH) else []
+        _file_excluded_cache = frozenset(canonical_word(w) or w for w in raw)
+    return _file_excluded_cache
 
 
 def normalize_yo(word: str) -> str:

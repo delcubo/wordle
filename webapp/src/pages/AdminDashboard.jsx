@@ -535,6 +535,7 @@ function DictionaryPanel() {
   const [addedWords, setAddedWords] = useState([]);
   const [newAddedWord, setNewAddedWord] = useState("");
   const [addedError, setAddedError] = useState("");
+  const [exportStatus, setExportStatus] = useState("");
 
   async function refresh() {
     setWords(await api("/api/admin/dictionary/excluded"));
@@ -590,6 +591,30 @@ function DictionaryPanel() {
     refreshAdded();
   }
 
+  // Слова, добавленные через админку, живут только в базе данных. Экспорт — по
+  // одному слову на строку, в формате api/data/answer_words_extra.txt: так их
+  // можно сохранить в репозитории и не потерять при переезде на другую базу.
+  const exportText = [...addedWords].map((w) => w.word).sort((a, b) => a.localeCompare(b, "ru")).join("\n") + "\n";
+
+  async function handleCopyExport() {
+    try {
+      await navigator.clipboard.writeText(exportText);
+      setExportStatus("Скопировано — вставьте в api/data/answer_words_extra.txt.");
+    } catch (e) {
+      setExportStatus("Браузер не дал скопировать — воспользуйтесь скачиванием.");
+    }
+    setTimeout(() => setExportStatus(""), 5000);
+  }
+
+  function handleDownloadExport() {
+    const url = URL.createObjectURL(new Blob([exportText], { type: "text/plain;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "added_words.txt";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <>
       <div style={{ ...panelStyle, maxWidth: 500, marginBottom: 16 }}>
@@ -610,6 +635,20 @@ function DictionaryPanel() {
           <button type="submit" style={buttonStyle}>Добавить</button>
         </form>
         {addedError && <div style={{ color: "#e5484d", marginBottom: 8 }}>{addedError}</div>}
+
+        {addedWords.length > 0 && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+            <button
+              onClick={handleCopyExport}
+              title="Список слов для файла api/data/answer_words_extra.txt в репозитории — чтобы они не пропали при переезде на другую базу"
+              style={ghostButtonStyle}
+            >
+              Скопировать список
+            </button>
+            <button onClick={handleDownloadExport} style={ghostButtonStyle}>Скачать .txt</button>
+            {exportStatus && <span style={{ fontSize: 12, opacity: 0.7 }}>{exportStatus}</span>}
+          </div>
+        )}
 
         {addedWords.length === 0 ? (
           <div style={{ opacity: 0.5, fontSize: 13 }}>Список пуст.</div>

@@ -13,7 +13,7 @@ from api.models import (
     Tournament, TournamentStatus, TournamentType, TournamentEntry, User, DailyWord, DailyWordStatus, Attempt,
     TiebreakRound, TiebreakParticipant, PlayoffMatch, PlayoffGame, AppSettings, ExcludedWord, AddedWord,
 )
-from api.dictionary import pick_word_for_day, pick_alternative_word, pick_word_for_match
+from api.dictionary import pick_word_for_day, pick_alternative_word, pick_word_for_match, load_file_excluded_words
 from api.tournament_time import today, day_number_for_date, date_for_day_number
 
 
@@ -1171,8 +1171,10 @@ async def set_theme(session: AsyncSession, theme: str) -> AppSettings:
 # ---------- Словарь: слова, исключённые админом вручную ----------
 
 async def get_excluded_words(session: AsyncSession) -> set[str]:
+    """Исключённые слова: из БД (через админку) и из файла репозитория
+    api/data/excluded_words.txt — второй источник не зависит от базы данных."""
     result = await session.execute(select(ExcludedWord.word))
-    return {row[0] for row in result.all()}
+    return {row[0] for row in result.all()} | set(load_file_excluded_words())
 
 
 async def list_excluded_words(session: AsyncSession) -> list[ExcludedWord]:
