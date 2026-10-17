@@ -205,7 +205,7 @@ export default function PlayerGame() {
       const oppResult = data.opponent_attempts_used == null
         ? ""
         : ` Соперник ${data.opponent_solved ? "угадал" : "не угадал"} за ${data.opponent_attempts_used}/6.`;
-      const stageText = data.is_third_place ? "матче за 3 место" : `раунде ${data.round_number}`;
+      const stageText = data.is_third_place ? "игре за 3 место" : `раунде ${data.round_number}`;
       setMessage((data.won ? `Победа в ${stageText}!` : `Поражение в ${stageText}.`) + opponentNote);
       if (!announceTie) {
         setModal({
@@ -244,7 +244,7 @@ export default function PlayerGame() {
       }
     } else {
       setMessage(
-        `${data.is_third_place ? "Матч за 3 место" : `Матч сетки, раунд ${data.round_number}`}${data.is_sudden_death ? " (доп. раунд после ничьей)" : ""}.${opponentNote}`
+        `${data.is_third_place ? "Игра за 3 место" : `Матч сетки, раунд ${data.round_number}`}${data.is_sudden_death ? " (доп. раунд после ничьей)" : ""}.${opponentNote}`
       );
       if (!announceTie) setModal(null);
     }

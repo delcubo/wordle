@@ -123,7 +123,7 @@ class Tournament(Base):
     tie_resolutions: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # Заметка админа с описанием розыгрыша — не показывается игрокам.
     note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
-    # Опция "матч за 3 место" (championship/knockout, сетка от 4 участников):
+    # Опция "игра за 3 место" (championship/knockout, сетка от 4 участников):
     # проигравшие полуфиналов играют отдельную пару в день финала — см.
     # api/bracket_game.py::ensure_third_place_match. Включается/отключается в
     # любой день, пока розыгрыш не завершён.
@@ -264,7 +264,7 @@ class PlayoffMatch(Base):
     # спорная пара), а не обычной игрой — см. api/bracket_game.py::override_winner
     admin_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
-    # Матч за 3 место: пара проигравших полуфиналов. Хранится в раунде финала
+    # Игра за 3 место: пара проигравших полуфиналов. Хранится в раунде финала
     # (round_number = номер раунда финала) с position = 1 (у финала position = 0)
     # и в продвижении по сетке не участвует — победителя дальше никуда не ведёт.
     is_third_place: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -51,7 +51,7 @@ def _loser_entry_id(match: PlayoffMatch) -> int | None:
 
 async def _finish_tournament_if_done(session: AsyncSession, tournament: Tournament) -> None:
     """Розыгрыш завершён, когда решён финал и — если он включён и создан —
-    матч за 3 место."""
+    игра за 3 место."""
     final_round = final_round_number(tournament)
     matches = await crud.list_playoff_matches(session, tournament.id)
     final = next((m for m in matches if m.round_number == final_round and not m.is_third_place and m.position == 0), None)
@@ -67,7 +67,7 @@ async def _finish_tournament_if_done(session: AsyncSession, tournament: Tourname
 
 async def ensure_third_place_match(session: AsyncSession, tournament: Tournament) -> PlayoffMatch | None:
     """
-    Создаёт матч за 3 место, если опция включена, оба полуфинала решены и у
+    Создаёт игру за 3 место, если опция включена, оба полуфинала решены и у
     каждого есть проигравший. Играется в день финала (в тот же день, что и
     финал; если финал уже идёт — сегодня). Повторный вызов ничего не делает.
     """
@@ -104,17 +104,17 @@ async def ensure_third_place_match(session: AsyncSession, tournament: Tournament
 
 
 async def set_third_place_match(session: AsyncSession, tournament: Tournament, enabled: bool) -> None:
-    """Включение/отключение опции "матч за 3 место" (см. ensure_third_place_match).
+    """Включение/отключение опции "игра за 3 место" (см. ensure_third_place_match).
     Отключить можно, пока в уже созданном матче нет ни одной догадки — тогда он
     удаляется; после первой догадки результаты остаются и отключать нельзя."""
     if tournament.type not in (TournamentType.championship, TournamentType.knockout):
-        raise ValueError("Матч за 3 место доступен только в розыгрышах с сеткой плей-офф")
+        raise ValueError("Игра за 3 место доступна только в розыгрышах с сеткой плей-офф")
     if not tournament.bracket_size or tournament.bracket_size < 4:
-        raise ValueError("Для матча за 3 место нужна сетка минимум на 4 участника")
+        raise ValueError("Для игры за 3 место нужна сетка минимум на 4 участника")
 
     if enabled:
         if tournament.status == TournamentStatus.finished:
-            raise ValueError("Розыгрыш уже завершён — включить матч за 3 место поздно")
+            raise ValueError("Розыгрыш уже завершён — включить игру за 3 место поздно")
         tournament.third_place_match = True
         session.add(tournament)
         await session.commit()
@@ -125,7 +125,7 @@ async def set_third_place_match(session: AsyncSession, tournament: Tournament, e
     if third is not None:
         games = await crud.list_playoff_games(session, third.id)
         if any(g.entry_a_guesses or g.entry_b_guesses for g in games):
-            raise ValueError("Матч за 3 место уже начался — отключить его нельзя")
+            raise ValueError("Игра за 3 место уже началась — отключить её нельзя")
         for game in games:
             await session.delete(game)
         await session.delete(third)
@@ -321,7 +321,7 @@ def _forfeited_both_sides(m: PlayoffMatch) -> bool:
 
 async def advance_winner(session: AsyncSession, tournament: Tournament, match: PlayoffMatch) -> None:
     if match.is_third_place:
-        # матч за 3 место никого дальше не ведёт — только может завершить розыгрыш
+        # игра за 3 место никого дальше не ведёт — только может завершить розыгрыш
         await _finish_tournament_if_done(session, tournament)
         return
 

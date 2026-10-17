@@ -114,7 +114,7 @@ class TournamentOut(BaseModel):
     notify_admin: bool = False  # присылать админу в Telegram уведомления о завершённых партиях
     first_place: int = 1  # только tiebreak: с какого места разыгрывается диапазон (показ мест)
     note: str | None = None
-    third_place_match: bool = False  # опция "матч за 3 место" (сетка плей-офф)
+    third_place_match: bool = False  # опция "игра за 3 место" (сетка плей-офф)
 
     class Config:
         from_attributes = True
@@ -308,7 +308,7 @@ class BracketTodayStatus(BaseModel):
     round_number: int | None = None
     game_number: int | None = None
     is_sudden_death: bool = False
-    is_third_place: bool = False  # это матч за 3 место
+    is_third_place: bool = False  # это игра за 3 место
     already_played: bool = False
     attempts_used: int | None = None
     solved: bool | None = None

@@ -904,11 +904,11 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                     type="checkbox" checked={settingsForm.third_place_match}
                     onChange={(e) => setSettingsForm((f) => ({ ...f, third_place_match: e.target.checked }))}
                   />
-                  Матч за 3 место
+                  Игра за 3 место
                 </label>
                 <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
-                  Проигравшие полуфиналов играют отдельный матч в день финала. Включить можно в любой день до конца
-                  розыгрыша, отключить — пока в матче нет ни одной догадки.
+                  Проигравшие полуфиналов играют отдельную игру в день финала. Включить можно в любой день до конца
+                  розыгрыша, отключить — пока в игре нет ни одной догадки.
                 </div>
               </div>
             )}
@@ -2798,7 +2798,7 @@ function TiebreakPanel({ tournament }) {
 
 const MATCH_STATUS_LABEL = { pending: "ожидает", in_progress: "идёт", finished: "завершён" };
 
-// Опция "матч за 3 место" — только в розыгрышах с сеткой плей-офф от 4 участников.
+// Опция "игра за 3 место" — только в розыгрышах с сеткой плей-офф от 4 участников.
 function supportsThirdPlace(t) {
   return (t.type === "championship" || t.type === "knockout") && (t.bracket_size || 0) >= 4;
 }
@@ -3060,7 +3060,7 @@ function BracketPanel({ tournament }) {
                 <Fragment key={m.id}>
                 <tr style={{ borderTop: "1px solid #2a2a2c" }}>
                   <td style={tdStyle}>
-                    {m.is_third_place ? "Матч за 3 место" : `Р${m.round_number} · пара ${m.position + 1}`}
+                    {m.is_third_place ? "Игра за 3 место" : `Р${m.round_number} · пара ${m.position + 1}`}
                     {m.is_sudden_death && <span style={{ opacity: 0.6 }}> (доп. раунд)</span>}
                     {m.word && (
                       <div style={{ opacity: 0.6, fontSize: 11, textTransform: "uppercase" }}>слово: {m.word}</div>
@@ -3234,7 +3234,7 @@ function BracketImage({ tournament, matches }) {
     centers.push(rounds[r].map((_, i) => (centers[r - 1][2 * i] + centers[r - 1][2 * i + 1]) / 2));
   }
 
-  // Матч за 3 место — отдельный блок под финалом (светло-серый, как чётные пары).
+  // Игра за 3 место — отдельный блок под финалом (светло-серый, как чётные пары).
   const showThird = !!tournament.third_place_match && totalRounds >= 2;
   const thirdMatch = matches.find((m) => m.is_third_place);
   const finalCenter = centers[centers.length - 1][0];
@@ -3326,7 +3326,7 @@ function BracketImage({ tournament, matches }) {
                 x={PAD + (totalRounds - 1) * (BOX_W + COL_GAP) + BOX_W / 2} y={thirdY - 10}
                 textAnchor="middle" fontSize="12" fontWeight="bold" fill="#666"
               >
-                Матч за 3 место
+                Игра за 3 место
               </text>
               {renderBox("box-third", thirdMatch, PAD + (totalRounds - 1) * (BOX_W + COL_GAP), thirdY, true)}
             </g>
