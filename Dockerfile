@@ -7,7 +7,7 @@ RUN npm install
 COPY webapp/ ./
 RUN npm run build
 
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 WORKDIR /app
 
 COPY requirements.txt ./
