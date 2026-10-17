@@ -726,6 +726,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   const [editingSettings, setEditingSettings] = useState(null); // id розыгрыша | null
   const [settingsForm, setSettingsForm] = useState({
     title: "", duration_days: "", hashtag: "", note: "", start_date: "", notify_admin: false, first_place: 1,
+    third_place_match: false,
   });
   const [telegramTest, setTelegramTest] = useState(null); // { ok, detail } | null
   const [showArchive, setShowArchive] = useState(false);
@@ -738,7 +739,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
     setSettingsForm({
       title: t.title, duration_days: t.duration_days ?? "", hashtag: t.hashtag || "",
       note: t.note || "", start_date: t.start_date, notify_admin: !!t.notify_admin,
-      first_place: t.first_place ?? 1,
+      first_place: t.first_place ?? 1, third_place_match: !!t.third_place_match,
     });
     setTelegramTest(null);
   }
@@ -760,6 +761,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
         notify_admin: settingsForm.notify_admin,
       };
       if (t.type === "tiebreak") body.first_place = Number(settingsForm.first_place) || 1;
+      if (supportsThirdPlace(t)) body.third_place_match = settingsForm.third_place_match;
       if (t.duration_days != null) body.duration_days = Number(settingsForm.duration_days);
       if (t.start_date >= todayIso && settingsForm.start_date !== t.start_date) {
         body.start_date = settingsForm.start_date;
@@ -894,6 +896,21 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                   style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", marginTop: 2, width: 90, display: "block" }}
                 />
               </label>
+            )}
+            {supportsThirdPlace(t) && (
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                  <input
+                    type="checkbox" checked={settingsForm.third_place_match}
+                    onChange={(e) => setSettingsForm((f) => ({ ...f, third_place_match: e.target.checked }))}
+                  />
+                  Матч за 3 место
+                </label>
+                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
+                  Проигравшие полуфиналов играют отдельный матч в день финала. Включить можно в любой день до конца
+                  розыгрыша, отключить — пока в матче нет ни одной догадки.
+                </div>
+              </div>
             )}
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
               <input
@@ -2781,6 +2798,11 @@ function TiebreakPanel({ tournament }) {
 
 const MATCH_STATUS_LABEL = { pending: "ожидает", in_progress: "идёт", finished: "завершён" };
 
+// Опция "матч за 3 место" — только в розыгрышах с сеткой плей-офф от 4 участников.
+function supportsThirdPlace(t) {
+  return (t.type === "championship" || t.type === "knockout") && (t.bracket_size || 0) >= 4;
+}
+
 function formatAttempts(attemptsUsed, solved) {
   if (attemptsUsed == null) return "";
   return `(${solved ? attemptsUsed : "X"}/6)`;
@@ -2934,7 +2956,7 @@ function BracketPanel({ tournament }) {
     }).catch(() => {});
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tournament.id]);
+  }, [tournament.id, tournament.third_place_match]);
 
   const pairsNeeded = tournament.bracket_size ? tournament.bracket_size / 2 : 0;
 
@@ -3038,7 +3060,7 @@ function BracketPanel({ tournament }) {
                 <Fragment key={m.id}>
                 <tr style={{ borderTop: "1px solid #2a2a2c" }}>
                   <td style={tdStyle}>
-                    Р{m.round_number} · пара {m.position + 1}
+                    {m.is_third_place ? "Матч за 3 место" : `Р${m.round_number} · пара ${m.position + 1}`}
                     {m.is_sudden_death && <span style={{ opacity: 0.6 }}> (доп. раунд)</span>}
                     {m.word && (
                       <div style={{ opacity: 0.6, fontSize: 11, textTransform: "uppercase" }}>слово: {m.word}</div>
@@ -3212,8 +3234,43 @@ function BracketImage({ tournament, matches }) {
     centers.push(rounds[r].map((_, i) => (centers[r - 1][2 * i] + centers[r - 1][2 * i + 1]) / 2));
   }
 
-  const svgHeight = Math.max(...centers[0]) + BOX_H / 2 + PAD;
+  // Матч за 3 место — отдельный блок под финалом (светло-серый, как чётные пары).
+  const showThird = !!tournament.third_place_match && totalRounds >= 2;
+  const thirdMatch = matches.find((m) => m.is_third_place);
+  const finalCenter = centers[centers.length - 1][0];
+  const thirdY = finalCenter + BOX_H / 2 + 56;
+  const svgHeight = Math.max(
+    Math.max(...centers[0]) + BOX_H / 2 + PAD,
+    showThird ? thirdY + BOX_H + PAD : 0
+  );
   const svgWidth = totalRounds * (BOX_W + COL_GAP) + PAD;
+
+  function renderBox(key, m, x, y, gray) {
+    const nameA = m?.entry_a_callsign || "?";
+    const nameB = m?.entry_b_callsign || "?";
+    const winnerA = m?.winner_entry_id != null && m.winner_entry_id === m.entry_a_id;
+    const winnerB = m?.winner_entry_id != null && m.winner_entry_id === m.entry_b_id;
+    const attemptsA = formatMatchResults(m, "a");
+    const attemptsB = formatMatchResults(m, "b");
+    return (
+      <g key={key}>
+        <rect x={x} y={y} width={BOX_W} height={BOX_H} rx={6} fill={gray ? "#fafafa" : "#ffffff"} stroke="#ddd" />
+        <line x1={x} y1={y + BOX_H / 2} x2={x + BOX_W} y2={y + BOX_H / 2} stroke="#ddd" />
+        <text x={x + 8} y={y + BOX_H / 2 - 6} fontSize="13" fill={winnerA ? "#6aaa64" : "#1a1a1b"} fontWeight={winnerA ? "700" : "400"}>
+          {shortCallsign(nameA)}
+        </text>
+        <text x={x + BOX_W - 8} y={y + BOX_H / 2 - 6} fontSize="11" textAnchor="end" fill={winnerA ? "#6aaa64" : "#999"}>
+          {attemptsA}
+        </text>
+        <text x={x + 8} y={y + BOX_H - 6} fontSize="13" fill={winnerB ? "#6aaa64" : "#1a1a1b"} fontWeight={winnerB ? "700" : "400"}>
+          {shortCallsign(nameB)}
+        </text>
+        <text x={x + BOX_W - 8} y={y + BOX_H - 6} fontSize="11" textAnchor="end" fill={winnerB ? "#6aaa64" : "#999"}>
+          {attemptsB}
+        </text>
+      </g>
+    );
+  }
 
   async function handleDownload() {
     setStatus("");
@@ -3259,36 +3316,21 @@ function BracketImage({ tournament, matches }) {
                 <text x={x + BOX_W / 2} y={PAD - 8} textAnchor="middle" fontSize="12" fontWeight="bold" fill="#666">
                   {roundLabel(slots.length)}
                 </text>
-                {slots.map((m, i) => {
-                  const y = centers[rIdx][i] - BOX_H / 2;
-                  const nameA = m?.entry_a_callsign || "?";
-                  const nameB = m?.entry_b_callsign || "?";
-                  const winnerA = m?.winner_entry_id != null && m.winner_entry_id === m.entry_a_id;
-                  const winnerB = m?.winner_entry_id != null && m.winner_entry_id === m.entry_b_id;
-                  const attemptsA = formatMatchResults(m, "a");
-                  const attemptsB = formatMatchResults(m, "b");
-                  return (
-                    <g key={`box-${rIdx}-${i}`}>
-                      <rect x={x} y={y} width={BOX_W} height={BOX_H} rx={6} fill={i % 2 === 1 ? "#fafafa" : "#ffffff"} stroke="#ddd" />
-                      <line x1={x} y1={y + BOX_H / 2} x2={x + BOX_W} y2={y + BOX_H / 2} stroke="#ddd" />
-                      <text x={x + 8} y={y + BOX_H / 2 - 6} fontSize="13" fill={winnerA ? "#6aaa64" : "#1a1a1b"} fontWeight={winnerA ? "700" : "400"}>
-                        {shortCallsign(nameA)}
-                      </text>
-                      <text x={x + BOX_W - 8} y={y + BOX_H / 2 - 6} fontSize="11" textAnchor="end" fill={winnerA ? "#6aaa64" : "#999"}>
-                        {attemptsA}
-                      </text>
-                      <text x={x + 8} y={y + BOX_H - 6} fontSize="13" fill={winnerB ? "#6aaa64" : "#1a1a1b"} fontWeight={winnerB ? "700" : "400"}>
-                        {shortCallsign(nameB)}
-                      </text>
-                      <text x={x + BOX_W - 8} y={y + BOX_H - 6} fontSize="11" textAnchor="end" fill={winnerB ? "#6aaa64" : "#999"}>
-                        {attemptsB}
-                      </text>
-                    </g>
-                  );
-                })}
+                {slots.map((m, i) => renderBox(`box-${rIdx}-${i}`, m, x, centers[rIdx][i] - BOX_H / 2, i % 2 === 1))}
               </g>
             );
           })}
+          {showThird && (
+            <g key="third-place">
+              <text
+                x={PAD + (totalRounds - 1) * (BOX_W + COL_GAP) + BOX_W / 2} y={thirdY - 10}
+                textAnchor="middle" fontSize="12" fontWeight="bold" fill="#666"
+              >
+                Матч за 3 место
+              </text>
+              {renderBox("box-third", thirdMatch, PAD + (totalRounds - 1) * (BOX_W + COL_GAP), thirdY, true)}
+            </g>
+          )}
           {rounds.slice(0, -1).map((_, r) => {
             const x1 = PAD + r * (BOX_W + COL_GAP) + BOX_W;
             const xMid = x1 + COL_GAP / 2;

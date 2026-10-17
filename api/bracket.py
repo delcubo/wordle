@@ -159,6 +159,7 @@ async def get_bracket_view(session: AsyncSession, tournament_id: int) -> list[di
             "status": m.status,
             "scheduled_date": m.scheduled_date,
             "admin_note": m.admin_note,
+            "is_third_place": m.is_third_place,
             "games": [
                 {
                     "game_number": g.game_number,

@@ -14,11 +14,14 @@ sudden death при ничье и продвижение победителя в
 победителя (дальше по сетке из неё никто не проходит, ровно как из пустой
 пары — см. resolve_bye_if_needed), без ручной доигровки через админку.
 """
+import math
 from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.models import Tournament, TournamentStatus, TournamentEntry, PlayoffMatch, PlayoffMatchStatus, PlayoffGame
+from api.models import (
+    Tournament, TournamentType, TournamentStatus, TournamentEntry, PlayoffMatch, PlayoffMatchStatus, PlayoffGame,
+)
 from api.tournament_time import today
 from api.wordle_logic import check_guess, is_solved
 from api.dictionary import pick_word_for_match, pick_alternative_word
@@ -28,6 +31,108 @@ MAX_ATTEMPTS = 6
 # Сколько первых игр пары админ может задать заранее (текущая + превью на случай
 # ничьей). С игры WORD_QUEUE_SIZE + 1 слова снова генерируются автоматически.
 WORD_QUEUE_SIZE = 5
+
+
+def final_round_number(tournament: Tournament) -> int | None:
+    """Номер раунда финала (у сетки на N участников их log2(N))."""
+    n = tournament.bracket_size
+    if not n or n < 2:
+        return None
+    return int(math.log2(n))
+
+
+def _loser_entry_id(match: PlayoffMatch) -> int | None:
+    """Проигравший сыгранной пары. None, если пара решилась без игры или без
+    победителя (пустая/неполная, двойная неявка) — проигравшего в ней нет."""
+    if match.winner_entry_id is None or match.entry_a_id is None or match.entry_b_id is None:
+        return None
+    return match.entry_b_id if match.winner_entry_id == match.entry_a_id else match.entry_a_id
+
+
+async def _finish_tournament_if_done(session: AsyncSession, tournament: Tournament) -> None:
+    """Розыгрыш завершён, когда решён финал и — если он включён и создан —
+    матч за 3 место."""
+    final_round = final_round_number(tournament)
+    matches = await crud.list_playoff_matches(session, tournament.id)
+    final = next((m for m in matches if m.round_number == final_round and not m.is_third_place and m.position == 0), None)
+    if final is None or final.status != PlayoffMatchStatus.finished:
+        return
+    third = next((m for m in matches if m.is_third_place), None)
+    if third is not None and third.status != PlayoffMatchStatus.finished:
+        return
+    tournament.status = TournamentStatus.finished
+    session.add(tournament)
+    await session.commit()
+
+
+async def ensure_third_place_match(session: AsyncSession, tournament: Tournament) -> PlayoffMatch | None:
+    """
+    Создаёт матч за 3 место, если опция включена, оба полуфинала решены и у
+    каждого есть проигравший. Играется в день финала (в тот же день, что и
+    финал; если финал уже идёт — сегодня). Повторный вызов ничего не делает.
+    """
+    if not tournament.third_place_match or not tournament.bracket_size or tournament.bracket_size < 4:
+        return None
+    final_round = final_round_number(tournament)
+    matches = await crud.list_playoff_matches(session, tournament.id)
+    if any(m.is_third_place for m in matches):
+        return None
+    semis = sorted(
+        (m for m in matches if m.round_number == final_round - 1 and not m.is_third_place), key=lambda m: m.position
+    )
+    if len(semis) != 2 or any(m.status != PlayoffMatchStatus.finished for m in semis):
+        return None
+    losers = [_loser_entry_id(m) for m in semis]
+    if any(entry_id is None for entry_id in losers):
+        return None  # в одном из полуфиналов нет проигравшего — пары для матча нет
+
+    final = next((m for m in matches if m.round_number == final_round and not m.is_third_place and m.position == 0), None)
+    if final is not None and final.status == PlayoffMatchStatus.finished:
+        return None
+    if final is not None and final.scheduled_date is not None:
+        match_date = final.scheduled_date
+    else:
+        round_date = semis[0].scheduled_date or semis[1].scheduled_date or today()
+        match_date = round_date + timedelta(days=1)
+    match_date = max(match_date, today())
+
+    match = await crud.create_playoff_match(
+        session, tournament.id, final_round, 1, losers[0], losers[1], match_date, is_third_place=True
+    )
+    await resolve_bye_if_needed(session, match, match_date)  # обе стороны есть — заводит игру 1
+    return match
+
+
+async def set_third_place_match(session: AsyncSession, tournament: Tournament, enabled: bool) -> None:
+    """Включение/отключение опции "матч за 3 место" (см. ensure_third_place_match).
+    Отключить можно, пока в уже созданном матче нет ни одной догадки — тогда он
+    удаляется; после первой догадки результаты остаются и отключать нельзя."""
+    if tournament.type not in (TournamentType.championship, TournamentType.knockout):
+        raise ValueError("Матч за 3 место доступен только в розыгрышах с сеткой плей-офф")
+    if not tournament.bracket_size or tournament.bracket_size < 4:
+        raise ValueError("Для матча за 3 место нужна сетка минимум на 4 участника")
+
+    if enabled:
+        if tournament.status == TournamentStatus.finished:
+            raise ValueError("Розыгрыш уже завершён — включить матч за 3 место поздно")
+        tournament.third_place_match = True
+        session.add(tournament)
+        await session.commit()
+        await ensure_third_place_match(session, tournament)
+        return
+
+    third = next((m for m in await crud.list_playoff_matches(session, tournament.id) if m.is_third_place), None)
+    if third is not None:
+        games = await crud.list_playoff_games(session, third.id)
+        if any(g.entry_a_guesses or g.entry_b_guesses for g in games):
+            raise ValueError("Матч за 3 место уже начался — отключить его нельзя")
+        for game in games:
+            await session.delete(game)
+        await session.delete(third)
+    tournament.third_place_match = False
+    session.add(tournament)
+    await session.commit()
+    await _finish_tournament_if_done(session, tournament)  # финал мог ждать только этот матч
 
 
 def _side_for_entry(match: PlayoffMatch, entry_id: int) -> str:
@@ -215,11 +320,18 @@ def _forfeited_both_sides(m: PlayoffMatch) -> bool:
 
 
 async def advance_winner(session: AsyncSession, tournament: Tournament, match: PlayoffMatch) -> None:
+    if match.is_third_place:
+        # матч за 3 место никого дальше не ведёт — только может завершить розыгрыш
+        await _finish_tournament_if_done(session, tournament)
+        return
+
+    final_round = final_round_number(tournament)
+    if final_round is not None and match.round_number == final_round - 1:
+        await ensure_third_place_match(session, tournament)  # создастся, когда решатся оба полуфинала
+
     matches_in_round = tournament.bracket_size // (2 ** match.round_number)
     if matches_in_round <= 1:
-        tournament.status = TournamentStatus.finished
-        session.add(tournament)
-        await session.commit()
+        await _finish_tournament_if_done(session, tournament)
         return
 
     sibling_position = match.position + 1 if match.position % 2 == 0 else match.position - 1
@@ -343,6 +455,7 @@ async def get_player_view(session: AsyncSession, tournament: Tournament, entry) 
             "opponent_attempts_used": getattr(game, f"entry_{opponent_side}_attempts_used"),
             "opponent_solved": getattr(game, f"entry_{opponent_side}_solved"),
             "round_number": match.round_number,
+            "is_third_place": match.is_third_place,
             "game_number": game.game_number,
             "is_sudden_death": game.is_sudden_death,
             "already_played": True,
@@ -358,6 +471,7 @@ async def get_player_view(session: AsyncSession, tournament: Tournament, entry) 
         "match_finished": False,
         "opponent_callsign": opponent.callsign if opponent else None,
         "round_number": match.round_number,
+        "is_third_place": match.is_third_place,
         "game_number": game.game_number,
         "is_sudden_death": game.is_sudden_death,
         "already_played": my_attempts_used is not None,

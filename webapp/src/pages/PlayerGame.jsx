@@ -205,7 +205,8 @@ export default function PlayerGame() {
       const oppResult = data.opponent_attempts_used == null
         ? ""
         : ` Соперник ${data.opponent_solved ? "угадал" : "не угадал"} за ${data.opponent_attempts_used}/6.`;
-      setMessage((data.won ? `Победа в раунде ${data.round_number}!` : `Поражение в раунде ${data.round_number}.`) + opponentNote);
+      const stageText = data.is_third_place ? "матче за 3 место" : `раунде ${data.round_number}`;
+      setMessage((data.won ? `Победа в ${stageText}!` : `Поражение в ${stageText}.`) + opponentNote);
       if (!announceTie) {
         setModal({
           title: data.tournament_title,
@@ -217,7 +218,7 @@ export default function PlayerGame() {
           answerWord: data.answer_word,
           message: (data.won ? "Победа!" : "Поражение.") + oppResult,
           countdownTarget: data.won ? data.next_word_at : null,
-          gameEnded: !data.won,
+          gameEnded: !data.won || !!data.is_third_place,
           reportText: data.report_text,
         });
       }
@@ -243,7 +244,7 @@ export default function PlayerGame() {
       }
     } else {
       setMessage(
-        `Матч сетки, раунд ${data.round_number}${data.is_sudden_death ? " (доп. раунд после ничьей)" : ""}.${opponentNote}`
+        `${data.is_third_place ? "Матч за 3 место" : `Матч сетки, раунд ${data.round_number}`}${data.is_sudden_death ? " (доп. раунд после ничьей)" : ""}.${opponentNote}`
       );
       if (!announceTie) setModal(null);
     }

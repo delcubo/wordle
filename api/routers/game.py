@@ -17,7 +17,7 @@ from api.scoring import calculate_points
 from api.dictionary import is_valid_word
 from api.tournament_time import today, day_number_for_date, next_publish_at, effective_status, TOURNAMENT_TZ
 from api.models import TournamentType, TournamentStatus, PlayoffMatchStatus
-from api.tournament_title import render_tournament_title
+from api.tournament_title import render_tournament_title, THIRD_PLACE_STAGE
 from api import crud, tiebreak, bracket_game, notify
 from api.report import build_report_text
 
@@ -56,7 +56,8 @@ async def _entry_bracket_round(session: AsyncSession, tournament_id: int, entry_
     started = [m for m in matches if (m.scheduled_date or today()) <= today()]
     if not started:
         return None
-    return max(m.round_number for m in started)
+    current = max(started, key=lambda m: m.round_number)
+    return THIRD_PLACE_STAGE if current.is_third_place else current.round_number
 
 
 async def _entry_round_number(session: AsyncSession, tournament, entry_id: int) -> int | None:
@@ -228,7 +229,9 @@ async def _notify_bracket_finished(session: AsyncSession, tournament, entry) -> 
             return
         stage_label = await _bracket_stage_label(session, tournament, entry)
         text = _bracket_report_text(tournament, entry, view, stage_label)
-        played, total = await crud.count_bracket_stage_progress(session, tournament.id, view["round_number"])
+        played, total = await crud.count_bracket_stage_progress(
+            session, tournament.id, view["round_number"], third_place=bool(view.get("is_third_place"))
+        )
         notify.notify_admin_in_background(f"{text}\n\n{_notification_footer(datetime.utcnow(), played, total)}")
     except Exception:
         logger.exception("Не удалось подготовить уведомление админу (сетка)")
@@ -483,7 +486,7 @@ async def get_bracket_today(token: str, tournament_id: int, session: AsyncSessio
     # игроку, доигравшему обычный день/тай-брейк. Проигравшему пару — нет,
     # для него розыгрыш на этом закончен (см. ResultModal: "игра окончена").
     next_word_at = None
-    if view.get("match_finished") and view.get("won"):
+    if view.get("match_finished") and view.get("won") and not view.get("is_third_place"):
         next_word_at = next_publish_at().isoformat()
     unavailable = {} if view.get("has_match") else _unavailable_info(tournament)
     # tournament_title = "<название> <стадия>" (см. render_tournament_title) —

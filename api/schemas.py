@@ -114,6 +114,7 @@ class TournamentOut(BaseModel):
     notify_admin: bool = False  # присылать админу в Telegram уведомления о завершённых партиях
     first_place: int = 1  # только tiebreak: с какого места разыгрывается диапазон (показ мест)
     note: str | None = None
+    third_place_match: bool = False  # опция "матч за 3 место" (сетка плей-офф)
 
     class Config:
         from_attributes = True
@@ -127,6 +128,7 @@ class TournamentSettingsUpdateRequest(BaseModel):
     start_date: date | None = None  # только пока розыгрыш ещё не стартовал
     notify_admin: bool | None = None
     first_place: int | None = None  # только tiebreak
+    third_place_match: bool | None = None  # только championship/knockout, сетка от 4 участников
 
 
 class TournamentPauseRequest(BaseModel):
@@ -306,6 +308,7 @@ class BracketTodayStatus(BaseModel):
     round_number: int | None = None
     game_number: int | None = None
     is_sudden_death: bool = False
+    is_third_place: bool = False  # это матч за 3 место
     already_played: bool = False
     attempts_used: int | None = None
     solved: bool | None = None
@@ -467,6 +470,7 @@ class PlayoffMatchOut(BaseModel):
     status: str
     scheduled_date: date | None
     admin_note: str | None = None
+    is_third_place: bool = False
     # все игры пары по порядку — чтобы в таблице были видны и результаты раундов,
     # закончившихся ничьей, а не только текущей игры
     games: list[PlayoffGameResultOut] = []

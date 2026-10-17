@@ -24,6 +24,10 @@ from api.models import Tournament, TournamentType, TournamentStatus
 from api.tournament_time import today, day_number_for_date
 from api import crud
 
+# Особое значение round_number для render_tournament_title: игрок сейчас играет
+# матч за 3 место (его раунд совпадает с раундом финала, а стадия называется иначе).
+THIRD_PLACE_STAGE = -1
+
 
 async def render_tournament_title(
     session: AsyncSession, tournament: Tournament, round_number: int | None = None
@@ -58,6 +62,9 @@ async def render_tournament_title(
 async def _current_stage_label(
     session: AsyncSession, tournament: Tournament, round_number: int | None = None
 ) -> str:
+    if round_number == THIRD_PLACE_STAGE:
+        return "матч за 3 место"
+
     if round_number is None:
         matches = await crud.list_playoff_matches(session, tournament.id)
         if not matches:

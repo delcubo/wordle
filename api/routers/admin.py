@@ -338,6 +338,12 @@ async def update_tournament_settings(
     if payload.notify_admin is not None:
         tournament.notify_admin = payload.notify_admin
 
+    if payload.third_place_match is not None and payload.third_place_match != tournament.third_place_match:
+        try:
+            await bracket_game.set_third_place_match(session, tournament, payload.third_place_match)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
     if payload.first_place is not None:
         if tournament.type != TournamentType.tiebreak:
             raise HTTPException(status_code=400, detail="Первое место настраивается только у тай-брейка")

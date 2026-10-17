@@ -942,7 +942,9 @@ async def count_finished_attempts_until(
     return int(result.scalar_one())
 
 
-async def count_bracket_stage_progress(session: AsyncSession, tournament_id: int, round_number: int) -> tuple[int, int]:
+async def count_bracket_stage_progress(
+    session: AsyncSession, tournament_id: int, round_number: int, third_place: bool = False
+) -> tuple[int, int]:
     """
     (сыграло, всего) для стадии сетки: всего — участники пар этой стадии, у
     которых есть соперник (проходящие без игры в счёт не идут — они не играют);
@@ -952,7 +954,10 @@ async def count_bracket_stage_progress(session: AsyncSession, tournament_id: int
     total = 0
     played = 0
     for match in await list_playoff_matches(session, tournament_id):
-        if match.round_number != round_number or match.entry_a_id is None or match.entry_b_id is None:
+        if (
+            match.round_number != round_number or match.is_third_place != third_place
+            or match.entry_a_id is None or match.entry_b_id is None
+        ):
             continue
         games = await list_playoff_games(session, match.id)
         for side in ("a", "b"):
@@ -1001,6 +1006,7 @@ async def create_playoff_match(
     entry_a_id: int,
     entry_b_id: int,
     scheduled_date: date | None,
+    is_third_place: bool = False,
 ) -> PlayoffMatch:
     match = PlayoffMatch(
         tournament_id=tournament_id,
@@ -1009,6 +1015,7 @@ async def create_playoff_match(
         entry_a_id=entry_a_id,
         entry_b_id=entry_b_id,
         scheduled_date=scheduled_date,
+        is_third_place=is_third_place,
     )
     session.add(match)
     await session.commit()
