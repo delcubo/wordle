@@ -3118,7 +3118,7 @@ function BracketPanel({ tournament }) {
 }
 
 const BOX_W = 240;
-const MAX_CALLSIGN_CHARS = 14;
+const MAX_CALLSIGN_CHARS = 15;
 
 // Длинный позывной не должен налезать на результаты и вылезать из ячейки.
 function shortCallsign(name) {
