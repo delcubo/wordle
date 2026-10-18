@@ -3062,9 +3062,17 @@ function BracketPanel({ tournament }) {
                   <td style={tdStyle}>
                     {m.is_third_place ? "Игра за 3 место" : `Р${m.round_number} · пара ${m.position + 1}`}
                     {m.is_sudden_death && <span style={{ opacity: 0.6 }}> (доп. раунд)</span>}
-                    {m.word && (
-                      <div style={{ opacity: 0.6, fontSize: 11, textTransform: "uppercase" }}>слово: {m.word}</div>
-                    )}
+                    {(() => {
+                      // слова ВСЕХ игр пары по порядку (после ничьей игр несколько)
+                      const words = (m.games || []).map((g) => g.word).filter(Boolean);
+                      const list = words.length ? words : m.word ? [m.word] : [];
+                      if (!list.length) return null;
+                      return (
+                        <div style={{ opacity: 0.6, fontSize: 11, textTransform: "uppercase" }}>
+                          {list.length > 1 ? "слова" : "слово"}: {list.join(" · ")}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td style={tdStyle}>{m.entry_a_callsign || "— пусто —"} {formatMatchResults(m, "a")}</td>
                   <td style={tdStyle}>—</td>

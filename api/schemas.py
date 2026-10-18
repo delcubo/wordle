@@ -444,6 +444,7 @@ class TiebreakOverrideRequest(BaseModel):
 class PlayoffGameResultOut(BaseModel):
     """Результат одной игры пары (обычной или доп. раунда после ничьей)."""
     game_number: int
+    word: str | None = None  # слово игры — только для админки (этот ответ отдаётся админским ручкам)
     is_sudden_death: bool = False
     entry_a_attempts_used: int | None = None
     entry_a_solved: bool | None = None
