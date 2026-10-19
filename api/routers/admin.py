@@ -633,15 +633,16 @@ async def get_today_word(tournament_id: int, session: AsyncSession = Depends(get
 
 
 async def _daily_word_editable(session: AsyncSession, daily_word) -> bool:
-    """Слово можно менять до наступления его дня. В бессрочной игре — ещё и в
-    сам день, пока никто не начал партию (слово игроку не показывается до конца
-    партии, поэтому без единой догадки замена ничего не ломает)."""
+    """Слово можно менять до наступления его дня. В бессрочной и стандартной
+    играх — ещё и в сам день, пока никто не начал партию (слово игроку не
+    показывается до конца партии, поэтому без единой догадки замена ничего не
+    ломает)."""
     if daily_word.calendar_date > today():
         return True
     if daily_word.calendar_date < today():
         return False
     tournament = await crud.get_tournament(session, daily_word.tournament_id)
-    if tournament is None or tournament.type != TournamentType.endless:
+    if tournament is None or tournament.type not in (TournamentType.endless, TournamentType.standard):
         return False
     return not await crud.daily_word_has_attempts(session, daily_word.id)
 
