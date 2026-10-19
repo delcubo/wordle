@@ -95,6 +95,8 @@ class TournamentConfigRequest(BaseModel):
     rounds_per_match: int = 1
     hashtag: str | None = None  # для копируемого результата (ResultModal)
     note: str | None = None  # заметка админа, игрокам не показывается
+    words_count: int | None = None  # только marathon: сколько слов подряд
+    end_date: date | None = None  # только marathon: последний день игры (необязательно)
 
 
 class TournamentOut(BaseModel):
@@ -115,6 +117,8 @@ class TournamentOut(BaseModel):
     first_place: int = 1  # только tiebreak: с какого места разыгрывается диапазон (показ мест)
     note: str | None = None
     third_place_match: bool = False  # опция "игра за 3 место" (сетка плей-офф)
+    words_count: int | None = None  # только marathon
+    end_date: date | None = None  # только marathon
 
     class Config:
         from_attributes = True
@@ -129,6 +133,9 @@ class TournamentSettingsUpdateRequest(BaseModel):
     notify_admin: bool | None = None
     first_place: int | None = None  # только tiebreak
     third_place_match: bool | None = None  # только championship/knockout, сетка от 4 участников
+    words_count: int | None = None  # только marathon: число слов (вверх — можно всегда, вниз — пока слова не начаты)
+    end_date: date | None = None  # только marathon
+    clear_end_date: bool | None = None  # только marathon: убрать дату окончания
 
 
 class TournamentPauseRequest(BaseModel):
@@ -296,6 +303,12 @@ class TodayWordStatus(BaseModel):
     report_text: str | None = None  # готовый текст отчёта для копирования из попапа (api/report.py) — когда партия закончена
     unavailable_reason: str | None = None  # "not_started" / "finished" — почему слова нет (только когда has_word_today=False), для разных текстов на фронте
     start_date: str | None = None  # ISO-дата старта розыгрыша — для текста "Розыгрыш начнётся 21 сентября" при unavailable_reason="not_started"
+    # Марафон (несколько слов подряд): номер текущего слова, всего слов, все пройдены
+    is_marathon: bool = False
+    word_index: int | None = None
+    words_total: int | None = None
+    marathon_done: bool = False
+    marathon_total_attempts: int | None = None  # сумма попыток по всем словам (неугаданное = 7)
 
 
 class BracketTodayStatus(BaseModel):
@@ -347,6 +360,14 @@ class GuessResponse(BaseModel):
     attempts_remaining: int
     game_over: bool
     points: int | None = None
+    # Только марафон, когда слово закончено: ответ (если не угадано), отчёт для
+    # копирования, есть ли следующее слово
+    answer_word: str | None = None
+    report_text: str | None = None
+    has_next_word: bool | None = None
+    word_index: int | None = None
+    words_total: int | None = None
+    marathon_total_attempts: int | None = None
 
 
 # ---------- Standings ----------
@@ -513,3 +534,39 @@ class DayResultOverrideResponse(BaseModel):
     solved: bool
     points: int
     admin_note: str
+
+
+# ---------- Марафон (несколько слов подряд) ----------
+
+class MarathonWordOut(BaseModel):
+    id: int
+    day_number: int  # номер слова по порядку
+    word: str
+    status: str
+    started: int  # сколько участников уже начали это слово
+    finished: int  # сколько участников его закончили
+    editable: bool  # слово можно заменить: его ещё никто не начал
+
+
+class MarathonCellOut(BaseModel):
+    attempts_used: int
+    solved: bool
+    finished: bool  # False — слово начато, но ещё не закончено
+
+
+class MarathonRowOut(BaseModel):
+    entry_id: int
+    callsign: str
+    cells: list[MarathonCellOut | None]  # по слову на ячейку; None — ещё не дошёл
+    words_done: int
+    total_attempts: int  # сумма попыток по пройденным словам (неугаданное = unsolved_attempts)
+    finished_all: bool
+    place: str
+
+
+class MarathonStandingsOut(BaseModel):
+    words_count: int
+    words: list[dict]
+    unsolved_attempts: int
+    hashtag: str | None = None
+    rows: list[MarathonRowOut]

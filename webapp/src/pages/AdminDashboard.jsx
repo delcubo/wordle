@@ -26,7 +26,7 @@ function useLatest(value) {
 }
 
 const DEFAULT_SCORING = { "1": 10, "2": 5, "3": 4, "4": 3, "5": 2, "6": 1 };
-const TYPE_LABEL = { standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат", endless: "Бессрочная игра", tiebreak: "Тай-брейк" };
+const TYPE_LABEL = { standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат", endless: "Бессрочная игра", tiebreak: "Тай-брейк", marathon: "Марафон" };
 const STATUS_LABEL = { draft: "черновик", active: "идёт", tiebreak: "тай-брейк", playoff: "плей-офф", finished: "завершён" };
 
 async function api(path, options = {}) {
@@ -137,9 +137,11 @@ export default function AdminDashboard() {
               <>
                 <EntriesPanel tournament={selected} users={users} allTournaments={tournaments} />
                 {selected.type === "tiebreak" && <TiebreakWordsPanel tournament={selected} />}
-                {selected.type !== "knockout" && selected.type !== "tiebreak" && <TodayWordPanel tournament={selected} />}
-                {selected.type !== "knockout" && selected.type !== "tiebreak" && <WordConfirmPanel tournament={selected} />}
-                {selected.type !== "knockout" && selected.type !== "tiebreak" && <WordHistoryPanel tournament={selected} />}
+                {selected.type === "marathon" && <MarathonWordsPanel tournament={selected} />}
+                {selected.type === "marathon" && <MarathonStandingsPanel tournament={selected} />}
+                {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <TodayWordPanel tournament={selected} />}
+                {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordConfirmPanel tournament={selected} />}
+                {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordHistoryPanel tournament={selected} />}
                 {selected.type === "tiebreak" && <TiebreakResultsPanel tournament={selected} />}
                 {selected.duration_days != null && <StandingsPanel tournament={selected} />}
                 {selected.type === "championship" && <TiebreakPanel tournament={selected} />}
@@ -720,13 +722,15 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   const [startDate, setStartDate] = useState("");
   const [duration, setDuration] = useState(20);
   const [bracketSize, setBracketSize] = useState(16);
+  const [wordsCount, setWordsCount] = useState(5);
+  const [endDate, setEndDate] = useState("");
   const [hashtag, setHashtag] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [editingSettings, setEditingSettings] = useState(null); // id розыгрыша | null
   const [settingsForm, setSettingsForm] = useState({
     title: "", duration_days: "", hashtag: "", note: "", start_date: "", notify_admin: false, first_place: 1,
-    third_place_match: false,
+    third_place_match: false, words_count: "", end_date: "",
   });
   const [telegramTest, setTelegramTest] = useState(null); // { ok, detail } | null
   const [showArchive, setShowArchive] = useState(false);
@@ -740,6 +744,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
       title: t.title, duration_days: t.duration_days ?? "", hashtag: t.hashtag || "",
       note: t.note || "", start_date: t.start_date, notify_admin: !!t.notify_admin,
       first_place: t.first_place ?? 1, third_place_match: !!t.third_place_match,
+      words_count: t.words_count ?? "", end_date: t.end_date || "",
     });
     setTelegramTest(null);
   }
@@ -762,6 +767,11 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
       };
       if (t.type === "tiebreak") body.first_place = Number(settingsForm.first_place) || 1;
       if (supportsThirdPlace(t)) body.third_place_match = settingsForm.third_place_match;
+      if (t.type === "marathon") {
+        body.words_count = Number(settingsForm.words_count);
+        if (settingsForm.end_date) body.end_date = settingsForm.end_date;
+        else if (t.end_date) body.clear_end_date = true;
+      }
       if (t.duration_days != null) body.duration_days = Number(settingsForm.duration_days);
       if (t.start_date >= todayIso && settingsForm.start_date !== t.start_date) {
         body.start_date = settingsForm.start_date;
@@ -801,6 +811,8 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           scoring_rules: DEFAULT_SCORING,
           skip_flag_symbol: "🚩",
           bracket_size: needsBracket ? Number(bracketSize) : null,
+          words_count: type === "marathon" ? Number(wordsCount) : null,
+          end_date: type === "marathon" && endDate ? endDate : null,
           rounds_per_match: 1,
           hashtag: hashtag.trim() || null,
           note: note.trim() || null,
@@ -841,7 +853,8 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
         </div>
         <div style={{ fontSize: 13, opacity: 0.7 }}>
           {TYPE_LABEL[t.type] || t.type} · {t.start_date}
-          {t.duration_days != null ? ` · ${t.duration_days} дн.` : ""} · {STATUS_LABEL[t.status] || t.status}
+          {t.duration_days != null ? ` · ${t.duration_days} дн.` : ""}
+          {t.type === "marathon" && t.words_count != null ? ` · ${t.words_count} сл.` : ""} · {STATUS_LABEL[t.status] || t.status}
         </div>
         {t.note && editingSettings !== t.id && (
           <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4, whiteSpace: "pre-wrap" }}>{t.note}</div>
@@ -864,6 +877,26 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                   style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", marginTop: 2 }}
                 />
               </label>
+            )}
+            {t.type === "marathon" && (
+              <>
+                <label style={{ fontSize: 11, opacity: 0.8 }}>
+                  Число слов (увеличить можно всегда, уменьшить — пока убираемые слова не начаты)
+                  <input
+                    type="number" min={2} max={30} value={settingsForm.words_count}
+                    onChange={(e) => setSettingsForm((f) => ({ ...f, words_count: e.target.value }))}
+                    style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", marginTop: 2, width: 90, display: "block" }}
+                  />
+                </label>
+                <label style={{ fontSize: 11, opacity: 0.8 }}>
+                  Дата окончания (пусто — без срока)
+                  <input
+                    type="date" min={t.start_date} value={settingsForm.end_date}
+                    onChange={(e) => setSettingsForm((f) => ({ ...f, end_date: e.target.value }))}
+                    style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", marginTop: 2, display: "block" }}
+                  />
+                </label>
+              </>
             )}
             {t.duration_days != null && (
               <input
@@ -1014,10 +1047,30 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
             <option value="knockout">На вылет</option>
             <option value="endless">Бессрочная игра (без очков и таблицы)</option>
             <option value="tiebreak">Тай-брейк (распределение мест за один день)</option>
+            <option value="marathon">Марафон (несколько слов подряд)</option>
           </select>
           <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={inputStyle} required />
           {needsDuration && (
             <input type="number" placeholder="Длительность (дней)" value={duration} onChange={(e) => setDuration(e.target.value)} style={inputStyle} required min={1} />
+          )}
+          {type === "marathon" && (
+            <>
+              <label style={{ fontSize: 12, opacity: 0.8 }}>
+                Число слов (от 2 до 30)
+                <input
+                  type="number" placeholder="Число слов (2-30)" value={wordsCount}
+                  onChange={(e) => setWordsCount(e.target.value)} style={{ ...inputStyle, display: "block", marginTop: 2 }}
+                  required min={2} max={30}
+                />
+              </label>
+              <label style={{ fontSize: 12, opacity: 0.8 }}>
+                Дата окончания (необязательно: без неё игра идёт, пока вы её не закроете)
+                <input
+                  type="date" value={endDate} min={startDate || undefined}
+                  onChange={(e) => setEndDate(e.target.value)} style={{ ...inputStyle, display: "block", marginTop: 2 }}
+                />
+              </label>
+            </>
           )}
           {needsBracket && (
             <input type="number" placeholder="Размер сетки (степень двойки)" value={bracketSize} onChange={(e) => setBracketSize(e.target.value)} style={inputStyle} required min={2} />
@@ -1659,6 +1712,340 @@ function EntriesPanel({ tournament, users, allTournaments }) {
       {query && filteredEntries.length === 0 && (
         <div style={{ opacity: 0.5, fontSize: 13, marginTop: 8 }}>Никого не найдено.</div>
       )}
+    </div>
+  );
+}
+
+function marathonCellLabel(c) {
+  if (!c) return "·"; // ещё не дошёл
+  if (!c.finished) return "…"; // слово начато, не закончено
+  return c.solved ? String(c.attempts_used) : "X";
+}
+
+function MarathonWordsPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
+  const [words, setWords] = useState(null);
+  const [custom, setCustom] = useState({}); // id слова -> введённое своё слово
+  const [error, setError] = useState("");
+
+  async function refresh() {
+    const id = tournament.id;
+    try {
+      const data = await api(`/api/admin/tournaments/${id}/marathon/words`);
+      if (tournamentIdRef.current === id) {
+        setWords(data);
+        setError("");
+      }
+    } catch (e) {
+      if (tournamentIdRef.current === id) setError(e.message);
+    }
+  }
+
+  useEffect(() => {
+    setWords(null);
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id, tournament.words_count]);
+
+  async function handleReroll(w) {
+    setError("");
+    try {
+      await api(`/api/admin/words/${w.id}/reroll`, { method: "POST" });
+      await refresh();
+    } catch (e) {
+      setError(e.message);
+      await refresh();
+    }
+  }
+
+  async function handleReplace(w) {
+    setError("");
+    try {
+      await api(`/api/admin/words/${w.id}/confirm`, {
+        method: "POST",
+        body: JSON.stringify({ override_word: (custom[w.id] || "").trim().toLowerCase() }),
+      });
+      setCustom((prev) => ({ ...prev, [w.id]: "" }));
+      await refresh();
+    } catch (e) {
+      setError(e.message);
+      await refresh();
+    }
+  }
+
+  async function handleExcludeAndReroll(w) {
+    setError("");
+    try {
+      await api("/api/admin/dictionary/excluded", { method: "POST", body: JSON.stringify({ word: w.word }) });
+      await api(`/api/admin/words/${w.id}/reroll`, { method: "POST" });
+      await refresh();
+    } catch (e) {
+      setError(e.message);
+      await refresh();
+    }
+  }
+
+  if (!words) return error ? <div style={{ ...panelStyle, marginTop: 20, color: "#e5484d" }}>{error}</div> : null;
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20, border: "1px solid #b59f3b" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ margin: 0 }}>Слова марафона</h3>
+        <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+      </div>
+      <p style={{ fontSize: 13, opacity: 0.7 }}>
+        Это ответы — не показывайте этот экран участникам. Слово можно заменить или предложить другое, пока его
+        никто не начал отгадывать (слово 5 можно менять, пока никто не дошёл до него).
+      </p>
+      <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
+        <thead>
+          <tr style={{ textAlign: "left", opacity: 0.7 }}>
+            <th style={thStyle}>№</th>
+            <th style={thStyle}>Слово</th>
+            <th style={thStyle}>Игроки</th>
+            <th style={thStyle}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {words.map((w) => (
+            <tr key={w.id} style={{ borderTop: "1px solid #2a2a2c" }}>
+              <td style={tdStyle}>{w.day_number}</td>
+              <td style={{ ...tdStyle, textTransform: "uppercase", letterSpacing: 1, fontWeight: 700 }}>
+                {w.word}
+                <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, letterSpacing: 0, textTransform: "none", opacity: 0.6 }}>
+                  {w.status === "confirmed" ? "подтверждено" : "предложено системой"}
+                </span>
+              </td>
+              <td style={{ ...tdStyle, opacity: 0.8 }}>начали {w.started} · прошли {w.finished}</td>
+              <td style={tdStyle}>
+                {w.editable ? (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                    <button onClick={() => handleReroll(w)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>
+                      Предложить другое
+                    </button>
+                    <button
+                      onClick={() => handleExcludeAndReroll(w)}
+                      title="Исключить это слово из будущих предложений и сразу показать другое"
+                      style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}
+                    >
+                      🚫 Исключить и другое
+                    </button>
+                    <input
+                      placeholder="Своё слово" maxLength={5} value={custom[w.id] || ""}
+                      onChange={(e) => setCustom((prev) => ({ ...prev, [w.id]: e.target.value }))}
+                      style={{ ...inputStyle, padding: "2px 6px", fontSize: 12, width: 90 }}
+                    />
+                    <button
+                      onClick={() => handleReplace(w)} disabled={(custom[w.id] || "").trim().length !== 5}
+                      style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}
+                    >
+                      Заменить
+                    </button>
+                  </div>
+                ) : (
+                  <span style={{ fontSize: 12, opacity: 0.6 }}>уже начато — менять поздно</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {error && <div style={{ color: "#e5484d", marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
+function MarathonStandingsPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  async function refresh() {
+    const id = tournament.id;
+    try {
+      const res = await api(`/api/admin/tournaments/${id}/marathon/standings`);
+      if (tournamentIdRef.current === id) {
+        setData(res);
+        setError("");
+      }
+    } catch (e) {
+      if (tournamentIdRef.current === id) setError(e.message);
+    }
+  }
+
+  useEffect(() => {
+    setData(null);
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id, tournament.words_count]);
+
+  const RULE_NOTE = (d) => `Неугаданное слово = ${d.unsolved_attempts} попыток`;
+
+  function handleCopy() {
+    const tags = [data.hashtag, "#таблица"].filter(Boolean).join(" ");
+    // "·", а не "N. " — иначе Telegram склеивает строки в нумерованный список
+    const lines = data.rows.map((r) => `${r.place} · ${r.callsign} — ${r.total_attempts} (${r.words_done}/${data.words_count})`);
+    const text = `${tags}\n\n${lines.join("\n")}\n\nпопыток всего (слов пройдено/всего). ${RULE_NOTE(data)}`;
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      },
+      () => setCopied(false)
+    );
+  }
+
+  function handleDownload() {
+    const dpr = window.devicePixelRatio || 1;
+    const placeCol = 40;
+    const wordCol = 32;
+    const doneCol = 56;
+    const totalCol = 66;
+    const font = "14px system-ui, sans-serif";
+    const mctx = document.createElement("canvas").getContext("2d");
+    mctx.font = "bold 14px system-ui, sans-serif";
+    const callsignCol = Math.max(90, ...data.rows.map((r) => mctx.measureText(r.callsign).width + 20));
+    const padding = 16;
+    const rowHeight = 28;
+    const headerHeight = 28;
+    const noteHeight = 26;
+    const tableWidth = placeCol + callsignCol + wordCol * data.words_count + doneCol + totalCol;
+    mctx.font = "12px system-ui, sans-serif";
+    const noteWidth = mctx.measureText(RULE_NOTE(data)).width;
+    const width = Math.max(tableWidth, noteWidth) + padding * 2;
+    const height = headerHeight + rowHeight * data.rows.length + padding * 2 + noteHeight;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.textBaseline = "middle";
+
+    const top = padding;
+    ctx.fillStyle = "#f2f2f2";
+    ctx.fillRect(padding, top, tableWidth, headerHeight);
+    ctx.fillStyle = "#666";
+    ctx.font = "bold 12px system-ui, sans-serif";
+    const xPlace = padding;
+    const xCallsign = xPlace + placeCol;
+    const xWords = xCallsign + callsignCol;
+    const xDone = xWords + wordCol * data.words_count;
+    const xTotal = xDone + doneCol;
+    ctx.textAlign = "center";
+    ctx.fillText("#", xPlace + placeCol / 2, top + headerHeight / 2);
+    ctx.textAlign = "left";
+    ctx.fillText("Позывной", xCallsign + 6, top + headerHeight / 2);
+    ctx.textAlign = "center";
+    for (let i = 0; i < data.words_count; i++) ctx.fillText(String(i + 1), xWords + wordCol * i + wordCol / 2, top + headerHeight / 2);
+    ctx.fillText("Слов", xDone + doneCol / 2, top + headerHeight / 2);
+    ctx.fillText("Попыток", xTotal + totalCol / 2, top + headerHeight / 2);
+
+    data.rows.forEach((r, ri) => {
+      const y = top + headerHeight + ri * rowHeight;
+      if (ri % 2 === 1) {
+        ctx.fillStyle = "#fafafa";
+        ctx.fillRect(padding, y, tableWidth, rowHeight);
+      }
+      ctx.fillStyle = "#1a1a1b";
+      ctx.font = font;
+      ctx.textAlign = "center";
+      ctx.fillText(r.place, xPlace + placeCol / 2, y + rowHeight / 2);
+      ctx.textAlign = "left";
+      ctx.fillText(r.callsign, xCallsign + 6, y + rowHeight / 2);
+      ctx.textAlign = "center";
+      r.cells.forEach((c, ci) => {
+        ctx.fillStyle = c && c.finished ? "#1a1a1b" : "#999";
+        ctx.fillText(marathonCellLabel(c), xWords + wordCol * ci + wordCol / 2, y + rowHeight / 2);
+      });
+      ctx.fillStyle = "#1a1a1b";
+      ctx.fillText(`${r.words_done}/${data.words_count}`, xDone + doneCol / 2, y + rowHeight / 2);
+      ctx.font = "bold " + font;
+      ctx.fillText(String(r.total_attempts), xTotal + totalCol / 2, y + rowHeight / 2);
+    });
+
+    ctx.strokeStyle = "#ddd";
+    ctx.lineWidth = 1;
+    for (let ri = 0; ri <= data.rows.length; ri++) {
+      const y = top + headerHeight + ri * rowHeight;
+      ctx.beginPath();
+      ctx.moveTo(padding, y);
+      ctx.lineTo(padding + tableWidth, y);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#666";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(RULE_NOTE(data), padding, top + headerHeight + rowHeight * data.rows.length + 16);
+
+    canvas.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${tournament.title.replace(/[^\p{L}\p{N}]+/gu, "_")}.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  if (!data) return error ? <div style={{ ...panelStyle, marginTop: 20, color: "#e5484d" }}>{error}</div> : null;
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <h3 style={{ margin: 0 }}>Таблица марафона</h3>
+        <div style={{ display: "flex", gap: 8 }}>
+          {data.rows.length > 0 && (
+            <>
+              <button onClick={handleCopy} style={ghostButtonStyle}>{copied ? "Скопировано!" : "Скопировать таблицу"}</button>
+              <button onClick={handleDownload} style={ghostButtonStyle}>Скачать таблицу</button>
+            </>
+          )}
+          <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+        </div>
+      </div>
+      <p style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>
+        Выше тот, кто прошёл больше слов; при равенстве — у кого меньше попыток в сумме ({RULE_NOTE(data).toLowerCase()}).
+        В ячейках: число попыток, X — не угадано, … — слово начато, · — ещё не дошёл.
+      </p>
+      {data.rows.length === 0 ? (
+        <div style={{ opacity: 0.7, fontSize: 13 }}>Пока никто не начал играть.</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
+            <thead>
+              <tr style={{ textAlign: "left", opacity: 0.7 }}>
+                <th style={thStyle}>Место</th>
+                <th style={thStyle}>Позывной</th>
+                {data.words.map((w) => (
+                  <th key={w.day_number} style={{ ...thStyle, textAlign: "center" }} title={w.word}>{w.day_number}</th>
+                ))}
+                <th style={{ ...thStyle, textAlign: "center" }}>Слов</th>
+                <th style={{ ...thStyle, textAlign: "center" }}>Попыток</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((r) => (
+                <tr key={r.entry_id} style={{ borderTop: "1px solid #2a2a2c" }}>
+                  <td style={{ ...tdStyle, fontWeight: r.place && !r.place.includes("-") ? 700 : 400 }}>{r.place}</td>
+                  <td style={tdStyle}>{r.callsign}</td>
+                  {r.cells.map((c, i) => (
+                    <td key={i} style={{ ...tdStyle, textAlign: "center", opacity: c && c.finished ? 1 : 0.5 }}>
+                      {marathonCellLabel(c)}
+                    </td>
+                  ))}
+                  <td style={{ ...tdStyle, textAlign: "center" }}>{r.words_done}/{data.words_count}</td>
+                  <td style={{ ...tdStyle, textAlign: "center", fontWeight: 700 }}>{r.total_attempts}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {error && <div style={{ color: "#e5484d", marginTop: 8 }}>{error}</div>}
     </div>
   );
 }

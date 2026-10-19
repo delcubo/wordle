@@ -46,11 +46,13 @@ function Countdown({ target }) {
  *    копируется по кнопке; тот же текст получает админ в Telegram. Если не
  *    задан (например, попап "Ничья" в сетке, где отчёта ещё нет) — копируется
  *    простой общий вид (заголовок, игрок, попытки, сетка)
+ *  - attemptsText: заменяет строку "Попытки: N/6" (марафон: "Всего попыток: N")
+ *  - nextButton: { label, onClick } — кнопка "Следующее слово" (марафон)
  *  - onClose
  */
 export default function ResultModal({
   title, callsign, hashtag, attemptsUsed, solved, grid, answerWord, message, countdownTarget, gameEnded,
-  reportText, onClose,
+  reportText, attemptsText, nextButton, onClose,
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -103,7 +105,7 @@ export default function ResultModal({
         </div>
 
         {callsign && <div style={{ marginTop: 4, fontSize: 13, opacity: 0.7 }}>Игрок: {callsign}</div>}
-        <div style={{ marginTop: 4, fontSize: 13, opacity: 0.7 }}>Попытки: {attemptsLabel}</div>
+        <div style={{ marginTop: 4, fontSize: 13, opacity: 0.7 }}>{attemptsText || `Попытки: ${attemptsLabel}`}</div>
         {message && <div style={{ marginTop: 10, fontSize: 14, opacity: 0.9 }}>{message}</div>}
 
         {gameEnded ? (
@@ -130,11 +132,24 @@ export default function ResultModal({
 
         {hashtag && <div style={{ marginBottom: 10, fontSize: 13, opacity: 0.6 }}>{hashtag}</div>}
 
+        {nextButton && (
+          <button
+            onClick={nextButton.onClick}
+            style={{
+              width: "100%", padding: "10px 0", borderRadius: 6, border: "none", marginBottom: 8,
+              background: "var(--correct)", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
+            }}
+          >
+            {nextButton.label}
+          </button>
+        )}
         <button
           onClick={handleCopy}
           style={{
-            width: "100%", padding: "10px 0", borderRadius: 6, border: "none",
-            background: "var(--correct)", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
+            width: "100%", padding: "10px 0", borderRadius: 6,
+            border: nextButton ? "1px solid var(--muted)" : "none",
+            background: nextButton ? "transparent" : "var(--correct)",
+            color: nextButton ? "var(--fg)" : "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
           }}
         >
           {copied ? "Скопировано!" : "Скопировать результат"}

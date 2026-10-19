@@ -18,8 +18,8 @@ from api.dictionary import is_valid_word
 from api.tournament_time import today, day_number_for_date, next_publish_at, effective_status, TOURNAMENT_TZ
 from api.models import TournamentType, TournamentStatus, PlayoffMatchStatus
 from api.tournament_title import render_tournament_title, THIRD_PLACE_STAGE
-from api import crud, tiebreak, bracket_game, notify
-from api.report import build_report_text
+from api import crud, tiebreak, bracket_game, notify, marathon
+from api.report import build_report_text, build_marathon_summary_text
 
 logger = logging.getLogger("wordle.game")
 
@@ -116,6 +116,8 @@ def _unavailable_info(tournament, day_number: int | None = None) -> dict:
         return {"unavailable_reason": "not_started", "start_date": tournament.start_date.isoformat()}
     if tournament.status == TournamentStatus.finished:
         return {"unavailable_reason": "finished"}
+    if tournament.type == TournamentType.marathon and marathon.has_ended(tournament):
+        return {"unavailable_reason": "finished"}
     if (
         tournament.type == TournamentType.standard and tournament.duration_days is not None
         and day_number is not None and day_number > tournament.duration_days
@@ -200,6 +202,8 @@ def _notification_footer(finished_at, played: int | None, total: int | None) -> 
 async def _notify_daily_finished(session: AsyncSession, tournament, entry, daily_word, attempt) -> None:
     """Уведомление админу о законченной партии со словом дня. Что бы ни
     случилось, игре это не мешает (см. api/notify.py)."""
+    if tournament.type == TournamentType.marathon:
+        return  # у марафона своё уведомление — когда пройдены все слова
     if not tournament.notify_admin or not notify.is_configured():
         return
     try:
@@ -237,6 +241,82 @@ async def _notify_bracket_finished(session: AsyncSession, tournament, entry) -> 
         logger.exception("Не удалось подготовить уведомление админу (сетка)")
 
 
+def _marathon_final_text(tournament, entry, progress) -> str:
+    """Итоговый отчёт марафона — когда пройдены все слова."""
+    return build_marathon_summary_text(
+        base_title=tournament.title, callsign=entry.callsign, hashtag=tournament.hashtag,
+        results=[(a.attempts_used, bool(a.solved)) for _, a in progress.finished],
+        total_attempts=progress.total_attempts, unsolved_attempts=marathon.UNSOLVED_ATTEMPTS,
+    )
+
+
+async def _notify_marathon_finished(session: AsyncSession, tournament, entry, text: str) -> None:
+    """Админу — одно сообщение, когда игрок прошёл ВСЕ слова марафона."""
+    if not tournament.notify_admin or not notify.is_configured():
+        return
+    try:
+        standings = await marathon.compute_standings(session, tournament)
+        played = sum(1 for r in standings["rows"] if r["finished_all"])
+        total = len([e for e in await crud.list_entries(session, tournament.id) if e.active and not e.hidden_from_standings])
+        notify.notify_admin_in_background(f"{text}\n\n{_notification_footer(datetime.utcnow(), played, total)}")
+    except Exception:
+        logger.exception("Не удалось подготовить уведомление админу (марафон)")
+
+
+async def _marathon_after_word(session: AsyncSession, tournament, entry, daily_word, attempt) -> dict:
+    """Поля ответа на последнюю догадку слова марафона: ответ, отчёт, есть ли дальше."""
+    progress = await marathon.get_progress(session, tournament, entry.id)
+    if progress.done:
+        text = _marathon_final_text(tournament, entry, progress)
+        await _notify_marathon_finished(session, tournament, entry, text)
+    else:
+        text = build_report_text(
+            kind="marathon", attempts_used=attempt.attempts_used, solved=attempt.solved,
+            grid=[check_guess(g, daily_word.word) for g in attempt.guesses], callsign=entry.callsign,
+            hashtag=tournament.hashtag, base_title=tournament.title,
+            stage_label=f"слово {daily_word.day_number}/{progress.total}",
+        )
+    return dict(
+        answer_word=None if attempt.solved else daily_word.word, report_text=text,
+        has_next_word=not progress.done, word_index=daily_word.day_number, words_total=progress.total,
+        marathon_total_attempts=progress.total_attempts if progress.done else None,
+    )
+
+
+async def _marathon_status(session: AsyncSession, tournament, entry) -> TodayWordStatus:
+    """Статус игрока в марафоне: текущее слово (с уже введёнными попытками), либо
+    «все слова пройдены», либо игра недоступна (не началась / закрыта / пауза)."""
+    base = dict(
+        callsign=entry.callsign, tournament_title=tournament.title, base_title=tournament.title,
+        hashtag=tournament.hashtag, paused=tournament.paused, is_marathon=True, max_attempts=MAX_ATTEMPTS,
+    )
+    if tournament.paused:
+        return TodayWordStatus(has_word_today=False, already_played=False, **base)
+    if not marathon.is_open(tournament):
+        return TodayWordStatus(has_word_today=False, already_played=False, **base, **_unavailable_info(tournament))
+
+    progress = await marathon.get_progress(session, tournament, entry.id)
+    if progress.done:
+        return TodayWordStatus(
+            has_word_today=False, already_played=False, marathon_done=True, word_index=progress.total,
+            words_total=progress.total, marathon_total_attempts=progress.total_attempts,
+            report_text=_marathon_final_text(tournament, entry, progress), **base,
+        )
+
+    daily_word = progress.current
+    attempt = progress.attempts.get(daily_word.day_number)
+    common = dict(
+        has_word_today=True, already_played=False, day_number=daily_word.day_number,
+        word_index=daily_word.day_number, words_total=progress.total, **base,
+    )
+    if attempt is None:
+        return TodayWordStatus(**common)
+    return TodayWordStatus(
+        attempts_used=attempt.attempts_used, solved=attempt.solved, previous_guesses=attempt.guesses,
+        previous_results=[check_guess(g, daily_word.word) for g in attempt.guesses], **common,
+    )
+
+
 async def _resolve_context(session: AsyncSession, token: str, tournament_id: int):
     """
     Находит пользователя, его участие (entry) в указанном розыгрыше и слово на
@@ -269,6 +349,15 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
         # /game/bracket/today и /game/bracket/guess, с первого дня
         return entry, tournament, None
 
+    if tournament.type == TournamentType.marathon:
+        # слова идут по порядку для каждого игрока отдельно: текущее — первое,
+        # которое он ещё не закончил (см. api/marathon.py); None — игра закрыта
+        # по датам либо все слова уже пройдены
+        if not marathon.is_open(tournament):
+            return entry, tournament, None
+        progress = await marathon.get_progress(session, tournament, entry.id)
+        return entry, tournament, progress.current
+
     if tournament.type == TournamentType.tiebreak:
         # весь розыгрыш — раунды тай-брейка с самого начала (см. api/tiebreak.py),
         # обычного слова дня по duration_days тут вообще не бывает
@@ -299,6 +388,8 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
 @router.get("/today", response_model=TodayWordStatus)
 async def get_today_status(token: str, tournament_id: int, session: AsyncSession = Depends(get_session)):
     entry, tournament, daily_word = await _resolve_context(session, token, tournament_id)
+    if tournament.type == TournamentType.marathon:
+        return await _marathon_status(session, tournament, entry)
     round_number = await _entry_round_number(session, tournament, entry.id)
     tournament_title = await render_tournament_title(session, tournament, round_number)
     is_endless = tournament.type == TournamentType.endless
@@ -443,7 +534,10 @@ async def submit_guess(payload: GuessRequest, session: AsyncSession = Depends(ge
         # дедлайна, чтобы продолжение (при остаточной ничьей) стало доступно тут же
         await tiebreak.resolve_ready_rounds(session, tournament)
 
-    if game_over:
+    marathon_fields = {}
+    if game_over and tournament.type == TournamentType.marathon:
+        marathon_fields = await _marathon_after_word(session, tournament, entry, daily_word, saved_attempt)
+    elif game_over:
         await _notify_daily_finished(session, tournament, entry, daily_word, saved_attempt)
 
     return GuessResponse(
@@ -453,6 +547,7 @@ async def submit_guess(payload: GuessRequest, session: AsyncSession = Depends(ge
         attempts_remaining=MAX_ATTEMPTS - attempts_used,
         game_over=game_over,
         points=points,
+        **marathon_fields,
     )
 
 

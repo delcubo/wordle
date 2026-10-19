@@ -385,6 +385,8 @@ async def get_entries_played_today(session: AsyncSession, tournament: Tournament
     пределах duration_days); для knockout — см. get_knockout_today_status."""
     if tournament.type == TournamentType.knockout:
         return (await get_knockout_today_status(session, tournament))[0]
+    if tournament.type == TournamentType.marathon:
+        return {}  # у марафона нет «сегодняшнего слова» — игроки идут каждый в своём темпе
     day_number = day_number_for_date(tournament.start_date, today())
     if day_number < 1:
         return {}

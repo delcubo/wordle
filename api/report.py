@@ -23,6 +23,7 @@ BORDER = {
     "standard": "★",  # ★
     "bracket": "⚔️",  # ⚔️
     "tiebreak": "\U0001f3b2",  # 🎲
+    "marathon": "\U0001f3c1",  # 🏁
 }
 STREAK_EMOJI = "\U0001f525"  # 🔥
 
@@ -56,7 +57,7 @@ def build_report_text(
         border = BORDER[kind]
         lines = [f"{border} {base_title.upper()} {border}"]
         result_emoji = RESULT_EMOJI.get(attempts_used, FAILED_EMOJI) if solved else FAILED_EMOJI
-        if kind == "bracket":
+        if kind in ("bracket", "marathon"):
             day_label = stage_label or None
         elif kind == "tiebreak":
             day_label = f"раунд {day_number}" if day_number is not None else None
@@ -80,4 +81,27 @@ def build_report_text(
     if hashtag:
         # хештег идёт сразу под строкой серии, без пустой строки между ними
         lines += ([] if has_streak_line else [""]) + [hashtag]
+    return "\n".join(lines)
+
+
+def build_marathon_summary_text(
+    *,
+    base_title: str,
+    callsign: str | None,
+    hashtag: str | None,
+    results: list[tuple[int, bool]],
+    total_attempts: int,
+    unsolved_attempts: int,
+) -> str:
+    """Итоговый отчёт марафона после последнего слова: попытки по каждому слову
+    ("X" — не угадано) и сумма (неугаданное слово засчитывается как unsolved_attempts)."""
+    border = BORDER["marathon"]
+    per_word = " · ".join(str(used) if solved else "X" for used, solved in results)
+    lines = [f"{border} {base_title.upper()} {border}"]
+    lines.append(f"\U0001f3c6 {callsign} · все слова пройдены" if callsign else "\U0001f3c6 Все слова пройдены")
+    lines += ["", f"Слова: {per_word}", f"Всего попыток: {total_attempts}"]
+    if any(not solved for _, solved in results):
+        lines.append(f"(X = {unsolved_attempts})")
+    if hashtag:
+        lines += ["", hashtag]
     return "\n".join(lines)

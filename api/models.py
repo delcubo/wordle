@@ -25,6 +25,7 @@ class TournamentType(str, enum.Enum):
     championship = "championship"  # standard N дней + тай-брейк + плей-офф топ-2^n
     endless = "endless"            # бессрочная игра без очков и таблицы — только слово дня
     tiebreak = "tiebreak"          # распределение мест за один день раундами по числу попыток (см. api/tiebreak.py)
+    marathon = "marathon"          # несколько слов подряд, место — по числу попыток (см. api/marathon.py)
 
 
 class TournamentStatus(str, enum.Enum):
@@ -128,6 +129,10 @@ class Tournament(Base):
     # api/bracket_game.py::ensure_third_place_match. Включается/отключается в
     # любой день, пока розыгрыш не завершён.
     third_place_match: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Только для marathon: сколько слов подряд разгадывает игрок и (необязательно)
+    # последний день игры — после него слова закрываются, непройденные не считаются.
+    words_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

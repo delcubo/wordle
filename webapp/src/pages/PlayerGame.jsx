@@ -54,6 +54,10 @@ export default function PlayerGame() {
   // красными буквами вместо надписи об ошибке (надпись меняла размер поля)
   const [invalidShake, setInvalidShake] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  // Марафон (несколько слов подряд): { index, total } | null; pendingNext — слово
+  // закончено, следующее открывается по кнопке (попап можно закрыть, кнопка остаётся)
+  const [marathon, setMarathon] = useState(null);
+  const [pendingNext, setPendingNext] = useState(false);
   const errorTimeoutRef = useRef(null);
   const shakeTimeoutRef = useRef(null);
   const keyboardWrapRef = useRef(null);
@@ -106,10 +110,26 @@ export default function PlayerGame() {
     setCallsign(data.callsign || "");
     setTournamentTitle(data.tournament_title || "");
     setHashtag(data.hashtag || null);
+    setMarathon(data.is_marathon && data.words_total ? { index: data.word_index, total: data.words_total } : null);
+    setPendingNext(false);
 
     if (!data.has_word_today) {
       setGameOver(true);
       let red = false;
+      if (data.is_marathon && data.marathon_done) {
+        setMessage("Вы прошли все слова!");
+        setModal({
+          title: data.tournament_title,
+          callsign: data.callsign,
+          hashtag: data.hashtag,
+          attemptsText: `Всего попыток: ${data.marathon_total_attempts}`,
+          grid: [],
+          message: `Все слова пройдены (${data.words_total} из ${data.words_total}).`,
+          reportText: data.report_text,
+        });
+        setIsError(false);
+        return;
+      }
       if (data.paused) {
         setMessage("Розыгрыш временно приостановлен админом.");
       } else if (data.is_tiebreak && !data.tiebreak_started) {
@@ -310,6 +330,14 @@ export default function PlayerGame() {
     setCurrentGuess((g) => g.slice(0, -1));
   }
 
+  async function handleNextWord() {
+    setModal(null);
+    setPendingNext(false);
+    setCurrentGuess("");
+    const fresh = await fetchStandardStatus();
+    if (fresh) applyStandardStatus(fresh);
+  }
+
   async function handleEnter() {
     // submitting гасит повторную отправку, пока идёт запрос — без этой защиты
     // повторный тап по "ВВОД" (например, из-за задержки на медленной сети) до
@@ -397,6 +425,29 @@ export default function PlayerGame() {
         return;
       }
 
+      if (data.has_next_word !== undefined && data.has_next_word !== null) {
+        // Марафон: сначала результат этого слова, следующее открывается по кнопке
+        setTimeout(() => {
+          const last = data.has_next_word === false;
+          setModal({
+            title: `${tournamentTitle} · слово ${data.word_index}/${data.words_total}`,
+            callsign,
+            hashtag,
+            attemptsUsed: data.attempts_used,
+            solved: data.solved,
+            grid: roundGrid,
+            answerWord: data.answer_word,
+            attemptsText: last ? `Всего попыток: ${data.marathon_total_attempts}` : undefined,
+            message: last ? "Все слова пройдены!" : `Слово ${data.word_index} из ${data.words_total} пройдено.`,
+            reportText: data.report_text,
+            nextButton: last ? null : { label: "Следующее слово →", onClick: handleNextWord },
+          });
+          setMessage(last ? "Вы прошли все слова!" : "Слово пройдено.");
+          setPendingNext(!last);
+        }, FLIP_TOTAL_MS);
+        return;
+      }
+
       const fresh = await fetchStandardStatus();
       setTimeout(() => {
         if (fresh) applyStandardStatus(fresh);
@@ -428,10 +479,26 @@ export default function PlayerGame() {
       </Link>
       {tournamentTitle && <h2 style={{ margin: "0 0 4px" }}>{tournamentTitle}</h2>}
       {callsign && <div style={{ opacity: 0.6, marginBottom: 8 }}>Игрок: {callsign}</div>}
+      {marathon && (
+        <div style={{ opacity: 0.8, marginBottom: 8, fontWeight: 600 }}>
+          Слово {marathon.index} из {marathon.total}
+        </div>
+      )}
       {message && (
         <div style={{ marginBottom: 8, opacity: isError ? 1 : 0.8, textAlign: "center", color: isError ? "var(--error)" : "var(--fg)" }}>
           {message}
         </div>
+      )}
+      {pendingNext && !modal && (
+        <button
+          onClick={handleNextWord}
+          style={{
+            margin: "0 0 10px", padding: "10px 18px", borderRadius: 6, border: "none",
+            background: "var(--correct)", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
+          }}
+        >
+          Следующее слово →
+        </button>
       )}
       <WordGrid rows={rows} currentGuess={currentGuess} activeRowIndex={activeRowIndex} animateRowIndex={animateRowIndex} invalidShake={invalidShake} keyboardRef={keyboardWrapRef} />
       <div
@@ -467,6 +534,8 @@ export default function PlayerGame() {
           countdownTarget={modal.countdownTarget}
           gameEnded={modal.gameEnded}
           reportText={modal.reportText}
+          attemptsText={modal.attemptsText}
+          nextButton={modal.nextButton}
           onClose={() => setModal(null)}
         />
       )}

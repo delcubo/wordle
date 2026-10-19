@@ -48,6 +48,9 @@ def effective_status(tournament: Tournament) -> TournamentStatus:
     """
     if tournament.status in (TournamentStatus.tiebreak, TournamentStatus.playoff, TournamentStatus.finished):
         return tournament.status
+    # Марафон закрывается по дате окончания (если задана)
+    if tournament.type.value == "marathon" and tournament.end_date is not None and today() > tournament.end_date:
+        return TournamentStatus.finished
     if day_number_for_date(tournament.start_date, today()) >= 1:
         return TournamentStatus.active
     return TournamentStatus.draft

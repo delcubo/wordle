@@ -27,6 +27,7 @@ from api.schemas import (
     ThemeOut, ThemeUpdateRequest,
     ExcludedWordOut, ExcludedWordCreateRequest,
     AddedWordOut, AddedWordCreateRequest,
+    MarathonWordOut, MarathonStandingsOut,
 )
 from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry, PlayoffMatch, TiebreakRound
 from api.admin_auth import (
@@ -36,7 +37,7 @@ from api.admin_auth import (
 from api.dictionary import validate_manual_word, canonical_word, is_valid_word, register_added_word, unregister_added_word
 from api.scoring import calculate_points
 from api.tournament_time import today, day_number_for_date, effective_status
-from api import crud, tiebreak, bracket, bracket_game, notify
+from api import crud, tiebreak, bracket, bracket_game, notify, marathon
 from api.standings_view import compute_standings
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -280,6 +281,14 @@ async def create_tournament(
     if t_type == TournamentType.knockout and not payload.bracket_size:
         raise HTTPException(status_code=400, detail="Для розыгрыша на вылет нужно указать размер сетки")
 
+    if t_type == TournamentType.marathon:
+        if payload.words_count is None or not (marathon.MIN_WORDS <= payload.words_count <= marathon.MAX_WORDS):
+            raise HTTPException(
+                status_code=400, detail=f"Число слов должно быть от {marathon.MIN_WORDS} до {marathon.MAX_WORDS}"
+            )
+        if payload.end_date is not None and payload.end_date < payload.start_date:
+            raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты старта")
+
     if t_type == TournamentType.endless:
         # ручной активации больше нет — проверяем сразу при создании, чтобы не
         # завести вторую бессрочную игру, которая рано или поздно (по дате
@@ -288,13 +297,18 @@ async def create_tournament(
         if other is not None:
             raise HTTPException(status_code=400, detail=f"Уже идёт бессрочная игра «{other.title}» — сначала завершите её")
 
-    no_duration_types = (TournamentType.knockout, TournamentType.endless, TournamentType.tiebreak)
+    no_duration_types = (TournamentType.knockout, TournamentType.endless, TournamentType.tiebreak, TournamentType.marathon)
     tournament = Tournament(
         title=payload.title,
         type=t_type,
         start_date=payload.start_date,
         duration_days=payload.duration_days if t_type not in no_duration_types else None,
-        scoring_rules=payload.scoring_rules if t_type not in (TournamentType.endless, TournamentType.tiebreak) else None,
+        scoring_rules=(
+            payload.scoring_rules
+            if t_type not in (TournamentType.endless, TournamentType.tiebreak, TournamentType.marathon) else None
+        ),
+        words_count=payload.words_count if t_type == TournamentType.marathon else None,
+        end_date=payload.end_date if t_type == TournamentType.marathon else None,
         skip_flag_symbol=payload.skip_flag_symbol,
         bracket_size=payload.bracket_size,
         rounds_per_match=payload.rounds_per_match,
@@ -305,6 +319,8 @@ async def create_tournament(
     session.add(tournament)
     await session.commit()
     await session.refresh(tournament)
+    if t_type == TournamentType.marathon:
+        await marathon.ensure_words(session, tournament)  # слова видны админу сразу
     return _tournament_out(tournament)
 
 
@@ -337,6 +353,40 @@ async def update_tournament_settings(
 
     if payload.notify_admin is not None:
         tournament.notify_admin = payload.notify_admin
+
+    if (payload.words_count is not None or payload.end_date is not None or payload.clear_end_date) \
+            and tournament.type != TournamentType.marathon:
+        raise HTTPException(status_code=400, detail="Число слов и дата окончания настраиваются только у марафона")
+
+    if payload.words_count is not None and payload.words_count != tournament.words_count:
+        new_count = payload.words_count
+        if not (marathon.MIN_WORDS <= new_count <= marathon.MAX_WORDS):
+            raise HTTPException(
+                status_code=400, detail=f"Число слов должно быть от {marathon.MIN_WORDS} до {marathon.MAX_WORDS}"
+            )
+        if new_count > (tournament.words_count or 0):
+            tournament.words_count = new_count
+            session.add(tournament)
+            await session.commit()
+            await marathon.ensure_words(session, tournament)
+        else:
+            # убрать можно только слова, которые никто не начал
+            for dw in await crud.list_daily_words(session, tournament.id):
+                if dw.day_number > new_count and await marathon.word_started(session, dw.id):
+                    raise HTTPException(
+                        status_code=400, detail=f"Слово {dw.day_number} уже начали отгадывать — убрать его нельзя"
+                    )
+            for dw in await crud.list_daily_words(session, tournament.id):
+                if dw.day_number > new_count:
+                    await session.delete(dw)
+            tournament.words_count = new_count
+
+    if payload.end_date is not None:
+        if payload.end_date < tournament.start_date:
+            raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты старта")
+        tournament.end_date = payload.end_date
+    elif payload.clear_end_date:
+        tournament.end_date = None
 
     if payload.third_place_match is not None and payload.third_place_match != tournament.third_place_match:
         try:
@@ -575,6 +625,32 @@ async def set_entry_hidden(
     return entry
 
 
+# ---------- Марафон ----------
+
+async def _get_marathon(session: AsyncSession, tournament_id: int) -> Tournament:
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    if tournament.type != TournamentType.marathon:
+        raise HTTPException(status_code=400, detail="Это не марафон")
+    return tournament
+
+
+@router.get("/tournaments/{tournament_id}/marathon/words", response_model=list[MarathonWordOut])
+async def get_marathon_words(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    """Все слова марафона по порядку; менять (confirm/reroll у /words/{id}) можно те,
+    которые никто ещё не начал отгадывать."""
+    tournament = await _get_marathon(session, tournament_id)
+    return await marathon.words_overview(session, tournament)
+
+
+@router.get("/tournaments/{tournament_id}/marathon/standings", response_model=MarathonStandingsOut)
+async def get_marathon_standings(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    """Сводная таблица марафона: попытки по каждому слову, пройдено слов, сумма попыток, место."""
+    tournament = await _get_marathon(session, tournament_id)
+    return await marathon.compute_standings(session, tournament)
+
+
 # ---------- Подтверждение слова дня ----------
 
 @router.get("/tournaments/{tournament_id}/words", response_model=list[DailyWordOut])
@@ -594,7 +670,7 @@ async def get_upcoming_word(tournament_id: int, session: AsyncSession = Depends(
     tournament = await crud.get_tournament(session, tournament_id)
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
-    if tournament.type in (TournamentType.knockout, TournamentType.tiebreak):
+    if tournament.type in (TournamentType.knockout, TournamentType.tiebreak, TournamentType.marathon):
         raise HTTPException(status_code=400, detail="У этого типа розыгрыша нет ежедневного слова")
 
     current_day = day_number_for_date(tournament.start_date, today())
@@ -617,7 +693,7 @@ async def get_today_word(tournament_id: int, session: AsyncSession = Depends(get
     tournament = await crud.get_tournament(session, tournament_id)
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
-    if tournament.type in (TournamentType.knockout, TournamentType.tiebreak):
+    if tournament.type in (TournamentType.knockout, TournamentType.tiebreak, TournamentType.marathon):
         raise HTTPException(status_code=400, detail="У этого типа розыгрыша нет слова дня")
 
     current_day = day_number_for_date(tournament.start_date, today())
@@ -637,14 +713,24 @@ async def _daily_word_editable(session: AsyncSession, daily_word) -> bool:
     играх — ещё и в сам день, пока никто не начал партию (слово игроку не
     показывается до конца партии, поэтому без единой догадки замена ничего не
     ломает)."""
+    tournament = await crud.get_tournament(session, daily_word.tournament_id)
+    if tournament is not None and tournament.type == TournamentType.marathon:
+        # слова марафона нет смысла привязывать к дате: меняется, пока его никто не начал
+        return not await crud.daily_word_has_attempts(session, daily_word.id)
     if daily_word.calendar_date > today():
         return True
     if daily_word.calendar_date < today():
         return False
-    tournament = await crud.get_tournament(session, daily_word.tournament_id)
     if tournament is None or tournament.type not in (TournamentType.endless, TournamentType.standard):
         return False
     return not await crud.daily_word_has_attempts(session, daily_word.id)
+
+
+async def _word_locked_detail(session: AsyncSession, daily_word) -> str:
+    tournament = await crud.get_tournament(session, daily_word.tournament_id)
+    if tournament is not None and tournament.type == TournamentType.marathon:
+        return "Это слово уже начали отгадывать — менять поздно"
+    return "Этот день уже наступил — слово менять поздно"
 
 
 @router.post("/words/{daily_word_id}/confirm", response_model=DailyWordOut)
@@ -657,7 +743,7 @@ async def confirm_word(
         raise HTTPException(status_code=404, detail="Слово не найдено")
 
     if not await _daily_word_editable(session, daily_word):
-        raise HTTPException(status_code=400, detail="Этот день уже наступил — слово менять поздно")
+        raise HTTPException(status_code=400, detail=await _word_locked_detail(session, daily_word))
 
     if payload.override_word:
         already_used = {w.word for w in await crud.list_daily_words(session, daily_word.tournament_id) if w.id != daily_word.id}
@@ -683,7 +769,7 @@ async def reroll_word(
         raise HTTPException(status_code=404, detail="Слово не найдено")
 
     if not await _daily_word_editable(session, daily_word):
-        raise HTTPException(status_code=400, detail="Этот день уже наступил — слово менять поздно")
+        raise HTTPException(status_code=400, detail=await _word_locked_detail(session, daily_word))
 
     return await crud.reroll_daily_word(session, daily_word)
 
