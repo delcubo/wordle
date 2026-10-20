@@ -196,9 +196,15 @@ async def compute_standings(session: AsyncSession, tournament: Tournament) -> di
             if attempt_finished(attempt):
                 words_done += 1
                 total += counted_attempts(attempt)
-                cells.append({"attempts_used": attempt.attempts_used, "solved": bool(attempt.solved), "finished": True, "word": word})
+                cells.append({
+                    "attempts_used": attempt.attempts_used, "solved": bool(attempt.solved), "finished": True,
+                    "word": word, "guesses": list(attempt.guesses),
+                })
             elif attempt is not None:
-                cells.append({"attempts_used": attempt.attempts_used, "solved": False, "finished": False, "word": word})
+                cells.append({
+                    "attempts_used": attempt.attempts_used, "solved": False, "finished": False,
+                    "word": word, "guesses": list(attempt.guesses),
+                })
             else:
                 cells.append(None)
         rows.append({
@@ -266,6 +272,7 @@ async def individual_overview(session: AsyncSession, tournament: Tournament) -> 
             items.append({
                 "id": dw.id, "day_number": dw.day_number, "word": dw.word, "status": dw.status.value,
                 "state": state, "editable": attempt is None,
+                "guesses": list(attempt.guesses) if attempt is not None else [],
             })
         players.append({"entry_id": entry.id, "callsign": entry.callsign, "words": items})
     return players

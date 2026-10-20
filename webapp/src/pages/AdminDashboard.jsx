@@ -1742,6 +1742,28 @@ function EntriesPanel({ tournament, users, allTournaments }) {
   );
 }
 
+// Всплывающий список попыток над ячейкой — как у таблицы результатов стандартного
+// режима (наведение на очки за день): попытки игрока по порядку. heading —
+// необязательная строка сверху (слово, по которому сделаны попытки).
+function GuessesPopup({ guesses, heading }) {
+  return (
+    <div
+      style={{
+        position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)",
+        background: "#1c1c1e", border: "1px solid #3a3a3c", borderRadius: 6, padding: "6px 10px",
+        whiteSpace: "nowrap", zIndex: 10, marginBottom: 4, textAlign: "left", pointerEvents: "none",
+      }}
+    >
+      {heading && (
+        <div style={{ fontSize: 11, opacity: 0.6, textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>{heading}</div>
+      )}
+      {guesses.map((g, gi) => (
+        <div key={gi} style={{ fontFamily: "monospace", fontSize: 13, letterSpacing: 1, textTransform: "uppercase" }}>{g}</div>
+      ))}
+    </div>
+  );
+}
+
 function marathonCellLabel(c) {
   if (!c) return "·"; // ещё не дошёл
   if (!c.finished) return "…"; // слово начато, не закончено
@@ -1890,6 +1912,7 @@ function MarathonIndividualWordsPanel({ tournament }) {
   const [selected, setSelected] = useState(null); // { entryId, wordId } | null
   const [custom, setCustom] = useState("");
   const [busy, setBusy] = useState(false);
+  const [hoveredWordId, setHoveredWordId] = useState(null); // слово, над которым курсор (показ попыток)
 
   async function refresh() {
     const id = tournament.id;
@@ -2014,10 +2037,14 @@ function MarathonIndividualWordsPanel({ tournament }) {
                     {p.words.map((w) => {
                       const isSel = selected && selected.wordId === w.id;
                       return (
-                        <td key={w.id} style={tdStyle}>
+                        <td
+                          key={w.id} style={{ ...tdStyle, position: "relative" }}
+                          onMouseEnter={() => { if (w.guesses && w.guesses.length > 0) setHoveredWordId(w.id); }}
+                          onMouseLeave={() => setHoveredWordId(null)}
+                        >
                           <button
                             onClick={() => { setSelected({ entryId: p.entry_id, wordId: w.id }); setCustom(""); }}
-                            title={STATE_TITLE[w.state]}
+                            title={w.guesses && w.guesses.length > 0 ? undefined : STATE_TITLE[w.state]}
                             style={{
                               ...STATE_STYLE[w.state], borderRadius: 4, padding: "3px 8px", color: "inherit", cursor: "pointer",
                               textTransform: "uppercase", letterSpacing: 1, fontSize: 12, minWidth: 64,
@@ -2026,6 +2053,7 @@ function MarathonIndividualWordsPanel({ tournament }) {
                           >
                             {cellText(w)}
                           </button>
+                          {hoveredWordId === w.id && <GuessesPopup guesses={w.guesses} />}
                         </td>
                       );
                     })}
@@ -2092,6 +2120,7 @@ function MarathonStandingsPanel({ tournament }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [hoveredCell, setHoveredCell] = useState(null); // {entryId, index} | null — показ попыток
 
   async function refresh() {
     const id = tournament.id;
@@ -2265,8 +2294,17 @@ function MarathonStandingsPanel({ tournament }) {
                   <td style={{ ...tdStyle, fontWeight: r.place && !r.place.includes("-") ? 700 : 400 }}>{r.place}</td>
                   <td style={tdStyle}>{r.callsign}</td>
                   {r.cells.map((c, i) => (
-                    <td key={i} title={c && c.word ? c.word.toUpperCase() : undefined} style={{ ...tdStyle, textAlign: "center", opacity: c && c.finished ? 1 : 0.5 }}>
+                    <td
+                      key={i}
+                      title={c && c.word && !(c.guesses && c.guesses.length > 0) ? c.word.toUpperCase() : undefined}
+                      onMouseEnter={() => { if (c && c.guesses && c.guesses.length > 0) setHoveredCell({ entryId: r.entry_id, index: i }); }}
+                      onMouseLeave={() => setHoveredCell(null)}
+                      style={{ ...tdStyle, textAlign: "center", opacity: c && c.finished ? 1 : 0.5, position: "relative" }}
+                    >
                       {marathonCellLabel(c)}
+                      {hoveredCell && hoveredCell.entryId === r.entry_id && hoveredCell.index === i && (
+                        <GuessesPopup guesses={c.guesses} heading={c.word || undefined} />
+                      )}
                     </td>
                   ))}
                   <td style={{ ...tdStyle, textAlign: "center" }}>{r.words_done}/{data.words_count}</td>

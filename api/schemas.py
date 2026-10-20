@@ -556,6 +556,7 @@ class MarathonCellOut(BaseModel):
     solved: bool
     finished: bool  # False — слово начато, но ещё не закончено
     word: str | None = None  # слово этой ячейки — только для админа (подсказка в таблице)
+    guesses: list[str] = []  # попытки игрока по этому слову (для подсказки при наведении)
 
 
 class MarathonRowOut(BaseModel):
@@ -583,6 +584,7 @@ class MarathonIndividualWordOut(BaseModel):
     status: str
     state: str  # "new" — не начато, "started" — идёт, "finished" — пройдено
     editable: bool  # можно заменить: слово ещё не начато
+    guesses: list[str] = []  # попытки игрока по этому слову (для подсказки при наведении)
 
 
 class MarathonPlayerWordsOut(BaseModel):
