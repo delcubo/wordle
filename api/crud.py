@@ -511,10 +511,13 @@ async def get_daily_word_by_id(session: AsyncSession, daily_word_id: int) -> Dai
 
 
 async def get_daily_word_by_day(session: AsyncSession, tournament_id: int, day_number: int) -> DailyWord | None:
+    # только общие слова: индивидуальные (entry_id задан — личные наборы марафона)
+    # с тем же номером не должны путаться с «словом дня»
     result = await session.execute(
         select(DailyWord).where(
             DailyWord.tournament_id == tournament_id,
             DailyWord.day_number == day_number,
+            DailyWord.entry_id.is_(None),
         )
     )
     return result.scalar_one_or_none()
@@ -593,6 +596,15 @@ async def daily_word_has_attempts(session: AsyncSession, daily_word_id: int) -> 
     с первой догадки игрока)."""
     result = await session.execute(select(Attempt.id).where(Attempt.daily_word_id == daily_word_id).limit(1))
     return result.first() is not None
+
+
+async def list_marathon_words(session: AsyncSession, tournament_id: int, entry_id: int | None) -> list[DailyWord]:
+    """Слова марафона по порядку: общие (entry_id=None) или личный набор участника."""
+    entry_filter = DailyWord.entry_id.is_(None) if entry_id is None else DailyWord.entry_id == entry_id
+    result = await session.execute(
+        select(DailyWord).where(DailyWord.tournament_id == tournament_id, entry_filter).order_by(DailyWord.day_number)
+    )
+    return list(result.scalars().all())
 
 
 async def list_daily_words(session: AsyncSession, tournament_id: int) -> list[DailyWord]:

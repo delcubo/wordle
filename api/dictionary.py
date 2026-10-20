@@ -146,6 +146,20 @@ def pick_word_for_day(tournament_id: int, day_number: int, already_used: set[str
     return rng.choice(candidates)
 
 
+def pick_word_for_label(label: str, already_used: set[str]) -> str:
+    """
+    Детерминированный выбор слова по произвольной метке сида (например,
+    "marathon:<розыгрыш>:<участник>:<номер>" для личных наборов слов марафона) —
+    так же, как pick_word_for_day: слово не повторяет already_used.
+    """
+    words = load_words()
+    rng = _seeded_rng(label)
+    candidates = [w for w in words if w not in already_used]
+    if not candidates:
+        raise RuntimeError("Словарь исчерпан — слов для нового набора не осталось")
+    return rng.choice(candidates)
+
+
 def pick_word_for_match(match_id: int, game_number: int, already_used: set[str]) -> str:
     """
     Детерминированный выбор слова для конкретной игры внутри пары сетки —

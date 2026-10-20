@@ -11,7 +11,7 @@ import enum
 from datetime import datetime, date
 
 from sqlalchemy import (
-    Integer, String, Boolean, Date, DateTime, ForeignKey, UniqueConstraint,
+    Integer, String, Boolean, Date, DateTime, ForeignKey, UniqueConstraint, Index, text,
     Enum as SAEnum, JSON, LargeBinary,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -133,6 +133,9 @@ class Tournament(Base):
     # последний день игры — после него слова закрываются, непройденные не считаются.
     words_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Только для marathon: у каждого участника свой набор слов (DailyWord.entry_id)
+    # вместо одного общего. Меняется, пока никто не сделал ни одной догадки.
+    individual_words: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -189,12 +192,23 @@ class DailyWord(Base):
     "уже зафиксировано").
     """
     __tablename__ = "daily_words"
+    # Общее слово уникально по (розыгрыш, номер); индивидуальное (entry_id задан —
+    # марафон с личными наборами слов) — по (розыгрыш, участник, номер).
     __table_args__ = (
-        UniqueConstraint("tournament_id", "day_number", name="uq_word_per_day"),
+        Index(
+            "uq_word_per_day_shared", "tournament_id", "day_number", unique=True,
+            postgresql_where=text("entry_id IS NULL"), sqlite_where=text("entry_id IS NULL"),
+        ),
+        Index(
+            "uq_word_per_day_entry", "tournament_id", "entry_id", "day_number", unique=True,
+            postgresql_where=text("entry_id IS NOT NULL"), sqlite_where=text("entry_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     tournament_id: Mapped[int] = mapped_column(ForeignKey("tournaments.id"))
+    # Только марафон с индивидуальными словами: чьё это слово. NULL — общее слово.
+    entry_id: Mapped[int | None] = mapped_column(ForeignKey("tournament_entries.id"), nullable=True, index=True)
     day_number: Mapped[int] = mapped_column(Integer)
     word: Mapped[str] = mapped_column(String(16))
     calendar_date: Mapped[date] = mapped_column(Date)

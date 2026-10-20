@@ -1,13 +1,13 @@
 import os
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.database import async_session_factory
 from api.dictionary import register_added_word
 from api.routers import game, admin, hall
-from api import crud
+from api import crud, marathon
 
 # Автодокументация (/docs, /redoc, /openapi.json) раскрывает список всех
 # эндпоинтов, включая админские, — включается только явно (ENABLE_DOCS=1).
@@ -27,6 +27,12 @@ async def _security_headers(request: Request, call_next):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "same-origin")
     return response
+
+
+@app.exception_handler(marathon.NotEnoughWords)
+async def _not_enough_words_handler(request, exc):
+    """Для личных наборов слов марафона в словаре не хватило слов — понятная ошибка вместо 500."""
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
 app.include_router(game.router, prefix="/api")

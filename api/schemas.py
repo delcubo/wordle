@@ -97,6 +97,7 @@ class TournamentConfigRequest(BaseModel):
     note: str | None = None  # заметка админа, игрокам не показывается
     words_count: int | None = None  # только marathon: сколько слов подряд
     end_date: date | None = None  # только marathon: последний день игры (необязательно)
+    individual_words: bool = False  # только marathon: у каждого участника свой набор слов
 
 
 class TournamentOut(BaseModel):
@@ -119,6 +120,7 @@ class TournamentOut(BaseModel):
     third_place_match: bool = False  # опция "игра за 3 место" (сетка плей-офф)
     words_count: int | None = None  # только marathon
     end_date: date | None = None  # только marathon
+    individual_words: bool = False  # только marathon
 
     class Config:
         from_attributes = True
@@ -136,6 +138,7 @@ class TournamentSettingsUpdateRequest(BaseModel):
     words_count: int | None = None  # только marathon: число слов (вверх — можно всегда, вниз — пока слова не начаты)
     end_date: date | None = None  # только marathon
     clear_end_date: bool | None = None  # только marathon: убрать дату окончания
+    individual_words: bool | None = None  # только marathon: личные наборы слов (менять можно, пока никто не начал)
 
 
 class TournamentPauseRequest(BaseModel):
@@ -552,6 +555,7 @@ class MarathonCellOut(BaseModel):
     attempts_used: int
     solved: bool
     finished: bool  # False — слово начато, но ещё не закончено
+    word: str | None = None  # слово этой ячейки — только для админа (подсказка в таблице)
 
 
 class MarathonRowOut(BaseModel):
@@ -570,3 +574,18 @@ class MarathonStandingsOut(BaseModel):
     unsolved_attempts: int
     hashtag: str | None = None
     rows: list[MarathonRowOut]
+
+
+class MarathonIndividualWordOut(BaseModel):
+    id: int
+    day_number: int
+    word: str
+    status: str
+    state: str  # "new" — не начато, "started" — идёт, "finished" — пройдено
+    editable: bool  # можно заменить: слово ещё не начато
+
+
+class MarathonPlayerWordsOut(BaseModel):
+    entry_id: int
+    callsign: str
+    words: list[MarathonIndividualWordOut]

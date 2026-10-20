@@ -4,6 +4,12 @@
 номер слова по порядку), партии — как Attempt, так что замена слов, подсчёт
 попыток и защита от дублей работают на готовых механизмах.
 
+Слова бывают общими (одни и те же у всех, DailyWord.entry_id = NULL) или
+личными (Tournament.individual_words: у каждого участника свой набор,
+DailyWord.entry_id = участник). Автоматически подобранные слова не повторяются
+между участниками; админ при ручной замене может повторить слово другого
+участника (внутри одного набора повторы по-прежнему запрещены).
+
 Каждый игрок идёт в своём темпе: следующее слово открывается, когда он
 отгадал текущее или исчерпал 6 попыток. Место определяется числом попыток:
 больше пройденных слов — выше; при равенстве — меньше суммарных попыток
@@ -12,10 +18,11 @@
 """
 from dataclasses import dataclass, field
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models import Tournament, Attempt, DailyWord, DailyWordStatus
-from api.dictionary import pick_word_for_day
+from api.dictionary import pick_word_for_day, pick_word_for_label, pick_alternative_word
 from api.tournament_time import today
 from api import crud
 
@@ -23,6 +30,10 @@ MAX_ATTEMPTS = 6
 UNSOLVED_ATTEMPTS = 7  # неугаданное слово в зачёте = 7 попыток
 MIN_WORDS = 2
 MAX_WORDS = 30
+
+
+class NotEnoughWords(Exception):
+    """В словаре не хватает слов для нового набора (игроков × слов больше пула)."""
 
 
 def attempt_finished(attempt: Attempt | None) -> bool:
@@ -48,29 +59,59 @@ def has_ended(tournament: Tournament) -> bool:
     return tournament.end_date is not None and today() > tournament.end_date
 
 
-async def ensure_words(session: AsyncSession, tournament: Tournament) -> list[DailyWord]:
+async def ensure_words(session: AsyncSession, tournament: Tournament, entry_id: int | None = None) -> list[DailyWord]:
     """Гарантирует, что слова 1..words_count созданы (предложены системой), и
-    возвращает их по порядку. Лишние слова (после уменьшения числа слов) не
-    возвращаются — их удаляет admin при изменении настроек."""
-    existing = {dw.day_number: dw for dw in await crud.list_daily_words(session, tournament.id)}
+    возвращает их по порядку. В режиме личных наборов нужен entry_id участника —
+    возвращается его собственный набор; иначе — общий. Лишние слова (после
+    уменьшения числа слов) не возвращаются — их удаляет admin при изменении
+    настроек."""
+    individual = bool(tournament.individual_words)
+    if individual and entry_id is None:
+        raise ValueError("В режиме личных наборов слов нужен участник")
+    scope = entry_id if individual else None
+    existing = {dw.day_number: dw for dw in await crud.list_marathon_words(session, tournament.id, scope)}
     created = False
     for number in range(1, (tournament.words_count or 0) + 1):
         if number in existing:
             continue
-        already_used = await crud._get_used_words(session, tournament.id)
-        word = pick_word_for_day(tournament.id, number, already_used)
+        already_used = await crud._get_used_words(session, tournament.id)  # слова всех участников + исключённые
+        try:
+            if individual:
+                word = pick_word_for_label(f"marathon:{tournament.id}:{scope}:{number}", already_used)
+            else:
+                word = pick_word_for_day(tournament.id, number, already_used)
+        except RuntimeError:
+            raise NotEnoughWords(
+                "В словаре не хватает слов для личных наборов: уменьшите число слов или число участников"
+            )
         dw = DailyWord(
-            tournament_id=tournament.id, day_number=number, word=word,
+            tournament_id=tournament.id, entry_id=scope, day_number=number, word=word,
             calendar_date=tournament.start_date, status=DailyWordStatus.suggested,
         )
         session.add(dw)
-        await session.commit()  # слово сразу «занято» для выбора следующих
+        try:
+            await session.commit()  # слово сразу «занято» для выбора следующих
+        except IntegrityError:
+            # параллельный запрос успел создать это же слово — берём то, что в базе
+            await session.rollback()
+            existing = {d.day_number: d for d in await crud.list_marathon_words(session, tournament.id, scope)}
+            continue
         existing[number] = dw
         created = True
     if created:
         for dw in existing.values():
             await session.refresh(dw)
-    return [existing[n] for n in range(1, (tournament.words_count or 0) + 1)]
+    return [existing[n] for n in range(1, (tournament.words_count or 0) + 1) if n in existing]
+
+
+async def ensure_all(session: AsyncSession, tournament: Tournament) -> None:
+    """Создаёт недостающие слова: общий набор либо личные наборы всех подключённых участников."""
+    if not tournament.individual_words:
+        await ensure_words(session, tournament)
+        return
+    for entry in await crud.list_entries(session, tournament.id):
+        if entry.active:
+            await ensure_words(session, tournament, entry.id)
 
 
 @dataclass
@@ -98,7 +139,7 @@ class Progress:
 
 
 async def get_progress(session: AsyncSession, tournament: Tournament, entry_id: int) -> Progress:
-    words = await ensure_words(session, tournament)
+    words = await ensure_words(session, tournament, entry_id)
     by_word = {}
     for dw in words:
         attempt = await crud.get_attempt(session, entry_id, dw.id)
@@ -122,38 +163,48 @@ async def word_started(session: AsyncSession, daily_word_id: int) -> bool:
 
 async def compute_standings(session: AsyncSession, tournament: Tournament) -> dict:
     """Сводная таблица для админки: по строке на игрока, ячейка на каждое слово."""
-    words = await ensure_words(session, tournament)
+    individual = bool(tournament.individual_words)
+    shared_words = [] if individual else await ensure_words(session, tournament)
+    all_words = await crud.list_daily_words(session, tournament.id)
+    words_by_entry: dict[int | None, list[DailyWord]] = {}
+    for dw in all_words:
+        if dw.day_number <= (tournament.words_count or 0):
+            words_by_entry.setdefault(dw.entry_id, []).append(dw)
+    for lst in words_by_entry.values():
+        lst.sort(key=lambda d: d.day_number)
+
     entries = [e for e in await crud.list_entries(session, tournament.id) if not e.hidden_from_standings]
     attempts = await crud.list_attempts_for_tournament(session, tournament.id)
-    word_by_id = {dw.id: dw for dw in words}
     by_entry: dict[int, dict[int, Attempt]] = {}
     for a in attempts:
-        dw = word_by_id.get(a.daily_word_id)
-        if dw is not None:
-            by_entry.setdefault(a.entry_id, {})[dw.day_number] = a
+        by_entry.setdefault(a.entry_id, {})[a.daily_word_id] = a
 
+    count = tournament.words_count or 0
     rows = []
     for entry in entries:
         entry_attempts = by_entry.get(entry.id)
         if not entry_attempts:
             continue  # ещё не начинал — в таблице пока нет (как в стандартном режиме)
+        words = shared_words if not individual else words_by_entry.get(entry.id, [])
         cells = []
         words_done = 0
         total = 0
-        for dw in words:
-            attempt = entry_attempts.get(dw.day_number)
+        for number in range(1, count + 1):
+            dw = next((w for w in words if w.day_number == number), None)
+            attempt = entry_attempts.get(dw.id) if dw is not None else None
+            word = dw.word if dw is not None else None
             if attempt_finished(attempt):
                 words_done += 1
                 total += counted_attempts(attempt)
-                cells.append({"attempts_used": attempt.attempts_used, "solved": bool(attempt.solved), "finished": True})
+                cells.append({"attempts_used": attempt.attempts_used, "solved": bool(attempt.solved), "finished": True, "word": word})
             elif attempt is not None:
-                cells.append({"attempts_used": attempt.attempts_used, "solved": False, "finished": False})
+                cells.append({"attempts_used": attempt.attempts_used, "solved": False, "finished": False, "word": word})
             else:
                 cells.append(None)
         rows.append({
             "entry_id": entry.id, "callsign": entry.callsign, "cells": cells,
             "words_done": words_done, "total_attempts": total,
-            "finished_all": words_done == len(words) and len(words) > 0,
+            "finished_all": words_done == count and count > 0,
         })
 
     rows.sort(key=lambda r: (-r["words_done"], r["total_attempts"], r["callsign"].lower()))
@@ -170,8 +221,10 @@ async def compute_standings(session: AsyncSession, tournament: Tournament) -> di
         i = j + 1
 
     return {
-        "words_count": len(words),
-        "words": [{"day_number": dw.day_number, "word": dw.word} for dw in words],
+        "words_count": count,
+        # общий набор: слова в заголовках таблицы; личные наборы — только номера (слово у каждого своё)
+        "words": [{"day_number": w.day_number, "word": w.word} for w in shared_words]
+        if not individual else [{"day_number": n, "word": None} for n in range(1, count + 1)],
         "unsolved_attempts": UNSOLVED_ATTEMPTS,
         "hashtag": tournament.hashtag,
         "rows": rows,
@@ -179,7 +232,7 @@ async def compute_standings(session: AsyncSession, tournament: Tournament) -> di
 
 
 async def words_overview(session: AsyncSession, tournament: Tournament) -> list[dict]:
-    """Слова марафона для админки: само слово, сколько участников его начали и
+    """Общие слова марафона для админки: само слово, сколько участников его начали и
     закончили; редактируемо, пока его никто не начал."""
     words = await ensure_words(session, tournament)
     started: dict[int, int] = {}
@@ -196,3 +249,67 @@ async def words_overview(session: AsyncSession, tournament: Tournament) -> list[
         }
         for dw in words
     ]
+
+
+async def individual_overview(session: AsyncSession, tournament: Tournament) -> list[dict]:
+    """Личные наборы всех подключённых участников для админки (недостающие слова
+    создаются)."""
+    attempts_by_word = {a.daily_word_id: a for a in await crud.list_attempts_for_tournament(session, tournament.id)}
+    players = []
+    for entry in await crud.list_entries(session, tournament.id):
+        if not entry.active:
+            continue
+        items = []
+        for dw in await ensure_words(session, tournament, entry.id):
+            attempt = attempts_by_word.get(dw.id)
+            state = "finished" if attempt_finished(attempt) else "started" if attempt is not None else "new"
+            items.append({
+                "id": dw.id, "day_number": dw.day_number, "word": dw.word, "status": dw.status.value,
+                "state": state, "editable": attempt is None,
+            })
+        players.append({"entry_id": entry.id, "callsign": entry.callsign, "words": items})
+    return players
+
+
+async def regenerate_entry_words(session: AsyncSession, tournament: Tournament, entry_id: int) -> int:
+    """Заново подбирает все ещё не начатые слова личного набора участника; возвращает,
+    сколько слов заменено."""
+    words = await ensure_words(session, tournament, entry_id)
+    used = await crud._get_used_words(session, tournament.id)
+    replaced = 0
+    for dw in words:
+        if await crud.daily_word_has_attempts(session, dw.id):
+            continue
+        try:
+            new_word = pick_alternative_word(used, exclude=dw.word)
+        except RuntimeError:
+            raise NotEnoughWords("В словаре не хватает слов, чтобы подобрать новые")
+        used.add(new_word)
+        dw.word = new_word
+        dw.status = DailyWordStatus.suggested
+        session.add(dw)
+        replaced += 1
+    await session.commit()
+    return replaced
+
+
+async def regenerate_all(session: AsyncSession, tournament: Tournament) -> int:
+    total = 0
+    for entry in await crud.list_entries(session, tournament.id):
+        if entry.active:
+            total += await regenerate_entry_words(session, tournament, entry.id)
+    return total
+
+
+async def convert_mode(session: AsyncSession, tournament: Tournament, individual: bool) -> None:
+    """Переключение «общие слова ↔ личные наборы». Только пока никто не начал играть:
+    все слова удаляются и создаются заново в новом режиме."""
+    if await crud.list_attempts_for_tournament(session, tournament.id):
+        raise ValueError("Режим слов можно менять, только пока никто не сделал ни одной догадки")
+    for dw in await crud.list_daily_words(session, tournament.id):
+        await session.delete(dw)
+    tournament.individual_words = individual
+    session.add(tournament)
+    await session.commit()
+    if not individual:
+        await ensure_words(session, tournament)

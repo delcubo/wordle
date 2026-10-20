@@ -27,7 +27,7 @@ from api.schemas import (
     ThemeOut, ThemeUpdateRequest,
     ExcludedWordOut, ExcludedWordCreateRequest,
     AddedWordOut, AddedWordCreateRequest,
-    MarathonWordOut, MarathonStandingsOut,
+    MarathonWordOut, MarathonStandingsOut, MarathonPlayerWordsOut,
 )
 from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry, PlayoffMatch, TiebreakRound
 from api.admin_auth import (
@@ -309,6 +309,7 @@ async def create_tournament(
         ),
         words_count=payload.words_count if t_type == TournamentType.marathon else None,
         end_date=payload.end_date if t_type == TournamentType.marathon else None,
+        individual_words=bool(payload.individual_words) and t_type == TournamentType.marathon,
         skip_flag_symbol=payload.skip_flag_symbol,
         bracket_size=payload.bracket_size,
         rounds_per_match=payload.rounds_per_match,
@@ -319,8 +320,8 @@ async def create_tournament(
     session.add(tournament)
     await session.commit()
     await session.refresh(tournament)
-    if t_type == TournamentType.marathon:
-        await marathon.ensure_words(session, tournament)  # слова видны админу сразу
+    if t_type == TournamentType.marathon and not tournament.individual_words:
+        await marathon.ensure_words(session, tournament)  # общие слова видны админу сразу
     return _tournament_out(tournament)
 
 
@@ -354,9 +355,15 @@ async def update_tournament_settings(
     if payload.notify_admin is not None:
         tournament.notify_admin = payload.notify_admin
 
-    if (payload.words_count is not None or payload.end_date is not None or payload.clear_end_date) \
-            and tournament.type != TournamentType.marathon:
-        raise HTTPException(status_code=400, detail="Число слов и дата окончания настраиваются только у марафона")
+    if (payload.words_count is not None or payload.end_date is not None or payload.clear_end_date
+            or payload.individual_words is not None) and tournament.type != TournamentType.marathon:
+        raise HTTPException(status_code=400, detail="Число слов, дата окончания и режим слов настраиваются только у марафона")
+
+    if payload.individual_words is not None and payload.individual_words != bool(tournament.individual_words):
+        try:
+            await marathon.convert_mode(session, tournament, payload.individual_words)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     if payload.words_count is not None and payload.words_count != tournament.words_count:
         new_count = payload.words_count
@@ -368,7 +375,7 @@ async def update_tournament_settings(
             tournament.words_count = new_count
             session.add(tournament)
             await session.commit()
-            await marathon.ensure_words(session, tournament)
+            await marathon.ensure_all(session, tournament)
         else:
             # убрать можно только слова, которые никто не начал
             for dw in await crud.list_daily_words(session, tournament.id):
@@ -641,6 +648,8 @@ async def get_marathon_words(tournament_id: int, session: AsyncSession = Depends
     """Все слова марафона по порядку; менять (confirm/reroll у /words/{id}) можно те,
     которые никто ещё не начал отгадывать."""
     tournament = await _get_marathon(session, tournament_id)
+    if tournament.individual_words:
+        raise HTTPException(status_code=400, detail="У этого марафона личные наборы слов — см. individual-words")
     return await marathon.words_overview(session, tournament)
 
 
@@ -649,6 +658,42 @@ async def get_marathon_standings(tournament_id: int, session: AsyncSession = Dep
     """Сводная таблица марафона: попытки по каждому слову, пройдено слов, сумма попыток, место."""
     tournament = await _get_marathon(session, tournament_id)
     return await marathon.compute_standings(session, tournament)
+
+
+@router.get("/tournaments/{tournament_id}/marathon/individual-words", response_model=list[MarathonPlayerWordsOut])
+async def get_marathon_individual_words(
+    tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
+):
+    """Личные наборы слов всех подключённых участников (если режим личных слов включён)."""
+    tournament = await _get_marathon(session, tournament_id)
+    if not tournament.individual_words:
+        raise HTTPException(status_code=400, detail="У этого марафона общие слова — см. marathon/words")
+    return await marathon.individual_overview(session, tournament)
+
+
+@router.post("/tournaments/{tournament_id}/marathon/individual-words/regenerate")
+async def regenerate_all_individual_words(
+    tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
+):
+    """Заново подобрать все ещё не начатые слова у всех участников."""
+    tournament = await _get_marathon(session, tournament_id)
+    if not tournament.individual_words:
+        raise HTTPException(status_code=400, detail="У этого марафона общие слова")
+    return {"replaced": await marathon.regenerate_all(session, tournament)}
+
+
+@router.post("/tournaments/{tournament_id}/marathon/individual-words/{entry_id}/regenerate")
+async def regenerate_entry_individual_words(
+    tournament_id: int, entry_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
+):
+    """Заново подобрать все ещё не начатые слова одного участника."""
+    tournament = await _get_marathon(session, tournament_id)
+    if not tournament.individual_words:
+        raise HTTPException(status_code=400, detail="У этого марафона общие слова")
+    entry = await session.get(TournamentEntry, entry_id)
+    if entry is None or entry.tournament_id != tournament.id:
+        raise HTTPException(status_code=404, detail="Участник не найден")
+    return {"replaced": await marathon.regenerate_entry_words(session, tournament, entry_id)}
 
 
 # ---------- Подтверждение слова дня ----------
@@ -746,7 +791,11 @@ async def confirm_word(
         raise HTTPException(status_code=400, detail=await _word_locked_detail(session, daily_word))
 
     if payload.override_word:
-        already_used = {w.word for w in await crud.list_daily_words(session, daily_word.tournament_id) if w.id != daily_word.id}
+        # в личных наборах марафона повтор слова ДРУГОГО участника допустим — запрещён только повтор внутри набора
+        already_used = {
+            w.word for w in await crud.list_daily_words(session, daily_word.tournament_id)
+            if w.id != daily_word.id and w.entry_id == daily_word.entry_id
+        }
         error = validate_manual_word(payload.override_word, already_used)
         if error:
             raise HTTPException(status_code=400, detail=error)

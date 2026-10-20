@@ -137,7 +137,11 @@ export default function AdminDashboard() {
               <>
                 <EntriesPanel tournament={selected} users={users} allTournaments={tournaments} />
                 {selected.type === "tiebreak" && <TiebreakWordsPanel tournament={selected} />}
-                {selected.type === "marathon" && <MarathonWordsPanel tournament={selected} />}
+                {selected.type === "marathon" && (
+                  selected.individual_words
+                    ? <MarathonIndividualWordsPanel tournament={selected} />
+                    : <MarathonWordsPanel tournament={selected} />
+                )}
                 {selected.type === "marathon" && <MarathonStandingsPanel tournament={selected} />}
                 {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <TodayWordPanel tournament={selected} />}
                 {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordConfirmPanel tournament={selected} />}
@@ -724,13 +728,14 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   const [bracketSize, setBracketSize] = useState(16);
   const [wordsCount, setWordsCount] = useState(5);
   const [endDate, setEndDate] = useState("");
+  const [individualWords, setIndividualWords] = useState(false);
   const [hashtag, setHashtag] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [editingSettings, setEditingSettings] = useState(null); // id розыгрыша | null
   const [settingsForm, setSettingsForm] = useState({
     title: "", duration_days: "", hashtag: "", note: "", start_date: "", notify_admin: false, first_place: 1,
-    third_place_match: false, words_count: "", end_date: "",
+    third_place_match: false, words_count: "", end_date: "", individual_words: false,
   });
   const [telegramTest, setTelegramTest] = useState(null); // { ok, detail } | null
   const [showArchive, setShowArchive] = useState(false);
@@ -744,7 +749,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
       title: t.title, duration_days: t.duration_days ?? "", hashtag: t.hashtag || "",
       note: t.note || "", start_date: t.start_date, notify_admin: !!t.notify_admin,
       first_place: t.first_place ?? 1, third_place_match: !!t.third_place_match,
-      words_count: t.words_count ?? "", end_date: t.end_date || "",
+      words_count: t.words_count ?? "", end_date: t.end_date || "", individual_words: !!t.individual_words,
     });
     setTelegramTest(null);
   }
@@ -769,6 +774,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
       if (supportsThirdPlace(t)) body.third_place_match = settingsForm.third_place_match;
       if (t.type === "marathon") {
         body.words_count = Number(settingsForm.words_count);
+        body.individual_words = settingsForm.individual_words;
         if (settingsForm.end_date) body.end_date = settingsForm.end_date;
         else if (t.end_date) body.clear_end_date = true;
       }
@@ -812,6 +818,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           skip_flag_symbol: "🚩",
           bracket_size: needsBracket ? Number(bracketSize) : null,
           words_count: type === "marathon" ? Number(wordsCount) : null,
+          individual_words: type === "marathon" ? individualWords : false,
           end_date: type === "marathon" && endDate ? endDate : null,
           rounds_per_match: 1,
           hashtag: hashtag.trim() || null,
@@ -854,7 +861,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
         <div style={{ fontSize: 13, opacity: 0.7 }}>
           {TYPE_LABEL[t.type] || t.type} · {t.start_date}
           {t.duration_days != null ? ` · ${t.duration_days} дн.` : ""}
-          {t.type === "marathon" && t.words_count != null ? ` · ${t.words_count} сл.` : ""} · {STATUS_LABEL[t.status] || t.status}
+          {t.type === "marathon" && t.words_count != null ? ` · ${t.words_count} сл.${t.individual_words ? " (личные)" : ""}` : ""} · {STATUS_LABEL[t.status] || t.status}
         </div>
         {t.note && editingSettings !== t.id && (
           <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4, whiteSpace: "pre-wrap" }}>{t.note}</div>
@@ -897,6 +904,20 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                   />
                 </label>
               </>
+            )}
+            {t.type === "marathon" && (
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                  <input
+                    type="checkbox" checked={settingsForm.individual_words}
+                    onChange={(e) => setSettingsForm((f) => ({ ...f, individual_words: e.target.checked }))}
+                  />
+                  У каждого участника свой набор слов
+                </label>
+                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
+                  Менять режим можно, пока никто не сделал ни одной догадки: слова пересоздаются заново.
+                </div>
+              </div>
             )}
             {t.duration_days != null && (
               <input
@@ -965,6 +986,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                 </span>
               )}
             </div>
+            {error && <div style={{ color: "#e5484d", fontSize: 12 }}>{error}</div>}
             <div style={{ display: "flex", gap: 4 }}>
               <button onClick={() => handleSaveSettings(t)} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
               <button onClick={() => setEditingSettings(null)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>Отмена</button>
@@ -1069,6 +1091,10 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                   type="date" value={endDate} min={startDate || undefined}
                   onChange={(e) => setEndDate(e.target.value)} style={{ ...inputStyle, display: "block", marginTop: 2 }}
                 />
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                <input type="checkbox" checked={individualWords} onChange={(e) => setIndividualWords(e.target.checked)} />
+                У каждого участника свой набор слов
               </label>
             </>
           )}
@@ -1855,6 +1881,212 @@ function MarathonWordsPanel({ tournament }) {
   );
 }
 
+function MarathonIndividualWordsPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
+  const [players, setPlayers] = useState(null);
+  const [error, setError] = useState("");
+  const [showWords, setShowWords] = useState(false); // по умолчанию слова скрыты
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(null); // { entryId, wordId } | null
+  const [custom, setCustom] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function refresh() {
+    const id = tournament.id;
+    try {
+      const data = await api(`/api/admin/tournaments/${id}/marathon/individual-words`);
+      if (tournamentIdRef.current === id) {
+        setPlayers(data);
+        setError("");
+      }
+    } catch (e) {
+      if (tournamentIdRef.current === id) setError(e.message);
+    }
+  }
+
+  useEffect(() => {
+    setPlayers(null);
+    setSelected(null);
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id, tournament.words_count, tournament.individual_words]);
+
+  async function run(action) {
+    setBusy(true);
+    setError("");
+    try {
+      await action();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+      await refresh();
+    }
+  }
+
+  const selectedPlayer = selected && players ? players.find((p) => p.entry_id === selected.entryId) : null;
+  const selectedWord = selectedPlayer ? selectedPlayer.words.find((w) => w.id === selected.wordId) : null;
+
+  function handleReroll(w) {
+    return run(() => api(`/api/admin/words/${w.id}/reroll`, { method: "POST" }));
+  }
+
+  function handleExcludeAndReroll(w) {
+    return run(async () => {
+      await api("/api/admin/dictionary/excluded", { method: "POST", body: JSON.stringify({ word: w.word }) });
+      await api(`/api/admin/words/${w.id}/reroll`, { method: "POST" });
+    });
+  }
+
+  function handleReplace(w) {
+    return run(async () => {
+      await api(`/api/admin/words/${w.id}/confirm`, {
+        method: "POST",
+        body: JSON.stringify({ override_word: custom.trim().toLowerCase() }),
+      });
+      setCustom("");
+    });
+  }
+
+  function handleRegeneratePlayer(p) {
+    if (!window.confirm(`Заново подобрать все ещё не начатые слова игрока ${p.callsign}?`)) return;
+    return run(() => api(`/api/admin/tournaments/${tournament.id}/marathon/individual-words/${p.entry_id}/regenerate`, { method: "POST" }));
+  }
+
+  function handleRegenerateAll() {
+    if (!window.confirm("Заново подобрать все ещё не начатые слова у ВСЕХ игроков?")) return;
+    return run(() => api(`/api/admin/tournaments/${tournament.id}/marathon/individual-words/regenerate`, { method: "POST" }));
+  }
+
+  if (!players) return error ? <div style={{ ...panelStyle, marginTop: 20, color: "#e5484d" }}>{error}</div> : null;
+
+  const q = query.trim().toLowerCase();
+  const shown = q ? players.filter((p) => p.callsign.toLowerCase().includes(q)) : players;
+  const count = tournament.words_count || 0;
+  const STATE_STYLE = {
+    new: { border: "1px solid #3a3a3c", background: "transparent" },
+    started: { border: "1px solid #b59f3b", background: "rgba(181,159,59,0.15)" },
+    finished: { border: "1px solid #538d4e", background: "rgba(83,141,78,0.18)" },
+  };
+  const STATE_TITLE = { new: "не начато — можно менять", started: "идёт — менять поздно", finished: "пройдено — менять поздно" };
+  const cellText = (w) => (showWords ? w.word : "•••••");
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20, border: "1px solid #b59f3b" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <h3 style={{ margin: 0 }}>Слова марафона — у каждого свои</h3>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => setShowWords((v) => !v)} style={ghostButtonStyle}>
+            {showWords ? "Скрыть слова" : "Показать слова"}
+          </button>
+          <button onClick={handleRegenerateAll} disabled={busy} style={ghostButtonStyle}>Перегенерировать у всех</button>
+          <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+        </div>
+      </div>
+      <p style={{ fontSize: 13, opacity: 0.7 }}>
+        Это ответы — не показывайте этот экран участникам. У каждого игрока свой набор из {count} слов; слово можно
+        заменить, пока этот игрок его не начал. Автоматически подобранные слова не повторяются между игроками, при
+        ручной замене повторы допустимы. Нажмите на ячейку, чтобы изменить слово.
+      </p>
+      {players.length === 0 ? (
+        <div style={{ opacity: 0.7, fontSize: 13 }}>Пока нет подключённых игроков.</div>
+      ) : (
+        <>
+          <input
+            placeholder="Найти игрока по позывному" value={query} onChange={(e) => setQuery(e.target.value)}
+            style={{ ...inputStyle, marginBottom: 8, maxWidth: 260 }}
+          />
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "separate", borderSpacing: 0, fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: "left", opacity: 0.7 }}>
+                  <th style={{ ...thStyle, position: "sticky", left: 0, background: "#1c1c1e", zIndex: 1 }}>Игрок</th>
+                  {Array.from({ length: count }, (_, i) => (
+                    <th key={i} style={{ ...thStyle, textAlign: "center" }}>{i + 1}</th>
+                  ))}
+                  <th style={thStyle}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((p) => (
+                  <tr key={p.entry_id}>
+                    <td style={{ ...tdStyle, position: "sticky", left: 0, background: "#1c1c1e", whiteSpace: "nowrap" }}>{p.callsign}</td>
+                    {p.words.map((w) => {
+                      const isSel = selected && selected.wordId === w.id;
+                      return (
+                        <td key={w.id} style={tdStyle}>
+                          <button
+                            onClick={() => { setSelected({ entryId: p.entry_id, wordId: w.id }); setCustom(""); }}
+                            title={STATE_TITLE[w.state]}
+                            style={{
+                              ...STATE_STYLE[w.state], borderRadius: 4, padding: "3px 8px", color: "inherit", cursor: "pointer",
+                              textTransform: "uppercase", letterSpacing: 1, fontSize: 12, minWidth: 64,
+                              outline: isSel ? "2px solid #e5e5e5" : "none",
+                            }}
+                          >
+                            {cellText(w)}
+                          </button>
+                        </td>
+                      );
+                    })}
+                    <td style={tdStyle}>
+                      <button
+                        onClick={() => handleRegeneratePlayer(p)} disabled={busy}
+                        style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11, whiteSpace: "nowrap" }}
+                      >
+                        Перегенерировать набор
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 11, opacity: 0.6, marginTop: 6 }}>
+            Цвет ячейки: серая — не начато, жёлтая — идёт, зелёная — пройдено.
+          </div>
+          {selectedWord && (
+            <div style={{ marginTop: 12, padding: 10, border: "1px solid #3a3a3c", borderRadius: 6 }}>
+              <div style={{ marginBottom: 8 }}>
+                {selectedPlayer.callsign} · слово {selectedWord.day_number}:{" "}
+                <b style={{ textTransform: "uppercase", letterSpacing: 1 }}>{cellText(selectedWord)}</b>{" "}
+                <span style={{ fontSize: 12, opacity: 0.6 }}>({STATE_TITLE[selectedWord.state]})</span>
+              </div>
+              {selectedWord.editable ? (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <button onClick={() => handleReroll(selectedWord)} disabled={busy} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                    Предложить другое
+                  </button>
+                  <button onClick={() => handleExcludeAndReroll(selectedWord)} disabled={busy} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                    🚫 Исключить и другое
+                  </button>
+                  <input
+                    placeholder="Своё слово" maxLength={5} value={custom} onChange={(e) => setCustom(e.target.value)}
+                    style={{ ...inputStyle, padding: "3px 6px", fontSize: 12, width: 100 }}
+                  />
+                  <button
+                    onClick={() => handleReplace(selectedWord)} disabled={busy || custom.trim().length !== 5}
+                    style={{ ...ghostButtonStyle, fontSize: 12 }}
+                  >
+                    Заменить
+                  </button>
+                  <button onClick={() => setSelected(null)} style={{ ...ghostButtonStyle, fontSize: 12 }}>Закрыть</button>
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, opacity: 0.7 }}>
+                  Это слово уже начато этим игроком — менять поздно.{" "}
+                  <button onClick={() => setSelected(null)} style={{ ...ghostButtonStyle, fontSize: 12 }}>Закрыть</button>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+      {error && <div style={{ color: "#e5484d", marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
 function MarathonStandingsPanel({ tournament }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [data, setData] = useState(null);
@@ -2021,7 +2253,7 @@ function MarathonStandingsPanel({ tournament }) {
                 <th style={thStyle}>Место</th>
                 <th style={thStyle}>Позывной</th>
                 {data.words.map((w) => (
-                  <th key={w.day_number} style={{ ...thStyle, textAlign: "center" }} title={w.word}>{w.day_number}</th>
+                  <th key={w.day_number} style={{ ...thStyle, textAlign: "center" }} title={w.word || undefined}>{w.day_number}</th>
                 ))}
                 <th style={{ ...thStyle, textAlign: "center" }}>Слов</th>
                 <th style={{ ...thStyle, textAlign: "center" }}>Попыток</th>
@@ -2033,7 +2265,7 @@ function MarathonStandingsPanel({ tournament }) {
                   <td style={{ ...tdStyle, fontWeight: r.place && !r.place.includes("-") ? 700 : 400 }}>{r.place}</td>
                   <td style={tdStyle}>{r.callsign}</td>
                   {r.cells.map((c, i) => (
-                    <td key={i} style={{ ...tdStyle, textAlign: "center", opacity: c && c.finished ? 1 : 0.5 }}>
+                    <td key={i} title={c && c.word ? c.word.toUpperCase() : undefined} style={{ ...tdStyle, textAlign: "center", opacity: c && c.finished ? 1 : 0.5 }}>
                       {marathonCellLabel(c)}
                     </td>
                   ))}
