@@ -399,7 +399,8 @@ class TieGroupMember(BaseModel):
 
 class TieGroupOut(BaseModel):
     place: str  # исходный общий диапазон, например "2-3"
-    points: int
+    points: int  # очки (стандартный режим) или суммарные попытки (марафон)
+    summary: str | None = None  # готовая подпись группы (марафон: «3/5 слов · 12 попыток»); иначе строится из points
     members: list[TieGroupMember]
     suggested_order: list[int] | None = None  # entry_id, лучший первым — по найденному тай-брейку
     suggested_source: str | None = None  # название тай-брейка, откуда взят порядок
@@ -567,6 +568,7 @@ class MarathonRowOut(BaseModel):
     total_attempts: int  # сумма попыток по пройденным словам (неугаданное = unsolved_attempts)
     finished_all: bool
     place: str
+    tie_resolved: bool = False  # место определено тай-брейком (со звёздочкой), а не числом попыток
 
 
 class MarathonStandingsOut(BaseModel):

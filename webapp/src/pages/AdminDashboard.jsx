@@ -2121,6 +2121,11 @@ function MarathonStandingsPanel({ tournament }) {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [hoveredCell, setHoveredCell] = useState(null); // {entryId, index} | null — показ попыток
+  const tie = useTieResolution(tournament.id, () => refresh());
+  const placeLabel = (r) => `${r.place}${r.tie_resolved ? "*" : ""}`;
+  // Пояснение под таблицей в копии и картинке, если есть места, определённые тай-брейком
+  const TIE_FOOTNOTE = "* - по результатам тай-брейка";
+  const hasTieResolved = () => data.rows.some((r) => r.tie_resolved);
 
   async function refresh() {
     const id = tournament.id;
@@ -2146,8 +2151,8 @@ function MarathonStandingsPanel({ tournament }) {
   function handleCopy() {
     const tags = [data.hashtag, "#таблица"].filter(Boolean).join(" ");
     // "·", а не "N. " — иначе Telegram склеивает строки в нумерованный список
-    const lines = data.rows.map((r) => `${r.place} · ${r.callsign} — ${r.total_attempts} (${r.words_done}/${data.words_count})`);
-    const text = `${tags}\n\n${lines.join("\n")}\n\nпопыток всего (слов пройдено/всего). ${RULE_NOTE(data)}`;
+    const lines = data.rows.map((r) => `${placeLabel(r)} · ${r.callsign} — ${r.total_attempts} (${r.words_done}/${data.words_count})`);
+    const text = `${tags}\n\n${lines.join("\n")}\n\nпопыток всего (слов пройдено/всего). ${RULE_NOTE(data)}${hasTieResolved() ? `\n${TIE_FOOTNOTE}` : ""}`;
     navigator.clipboard.writeText(text).then(
       () => {
         setCopied(true);
@@ -2170,7 +2175,7 @@ function MarathonStandingsPanel({ tournament }) {
     const padding = 16;
     const rowHeight = 28;
     const headerHeight = 28;
-    const noteHeight = 26;
+    const noteHeight = 26 + (hasTieResolved() ? 18 : 0);
     const tableWidth = placeCol + callsignCol + wordCol * data.words_count + doneCol + totalCol;
     mctx.font = "12px system-ui, sans-serif";
     const noteWidth = mctx.measureText(RULE_NOTE(data)).width;
@@ -2214,7 +2219,7 @@ function MarathonStandingsPanel({ tournament }) {
       ctx.fillStyle = "#1a1a1b";
       ctx.font = font;
       ctx.textAlign = "center";
-      ctx.fillText(r.place, xPlace + placeCol / 2, y + rowHeight / 2);
+      ctx.fillText(placeLabel(r), xPlace + placeCol / 2, y + rowHeight / 2);
       ctx.textAlign = "left";
       ctx.fillText(r.callsign, xCallsign + 6, y + rowHeight / 2);
       ctx.textAlign = "center";
@@ -2241,6 +2246,7 @@ function MarathonStandingsPanel({ tournament }) {
     ctx.font = "12px system-ui, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText(RULE_NOTE(data), padding, top + headerHeight + rowHeight * data.rows.length + 16);
+    if (hasTieResolved()) ctx.fillText(TIE_FOOTNOTE, padding, top + headerHeight + rowHeight * data.rows.length + 34);
 
     canvas.toBlob((blob) => {
       const url = URL.createObjectURL(blob);
@@ -2263,6 +2269,9 @@ function MarathonStandingsPanel({ tournament }) {
             <>
               <button onClick={handleCopy} style={ghostButtonStyle}>{copied ? "Скопировано!" : "Скопировать таблицу"}</button>
               <button onClick={handleDownload} style={ghostButtonStyle}>Скачать таблицу</button>
+              {data.rows.some((r) => r.place.includes("-") || r.tie_resolved) && (
+                <button onClick={tie.openTies} style={ghostButtonStyle}>Разобрать ничьи</button>
+              )}
             </>
           )}
           <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
@@ -2272,6 +2281,7 @@ function MarathonStandingsPanel({ tournament }) {
         Выше тот, кто прошёл больше слов; при равенстве — у кого меньше попыток в сумме ({RULE_NOTE(data).toLowerCase()}).
         В ячейках: число попыток, X — не угадано, … — слово начато, · — ещё не дошёл.
       </p>
+      {tie.open && <TieResolutionPanel tie={tie} />}
       {data.rows.length === 0 ? (
         <div style={{ opacity: 0.7, fontSize: 13 }}>Пока никто не начал играть.</div>
       ) : (
@@ -2291,7 +2301,7 @@ function MarathonStandingsPanel({ tournament }) {
             <tbody>
               {data.rows.map((r) => (
                 <tr key={r.entry_id} style={{ borderTop: "1px solid #2a2a2c" }}>
-                  <td style={{ ...tdStyle, fontWeight: r.place && !r.place.includes("-") ? 700 : 400 }}>{r.place}</td>
+                  <td style={{ ...tdStyle, fontWeight: r.place && !r.place.includes("-") ? 700 : 400 }}>{placeLabel(r)}</td>
                   <td style={tdStyle}>{r.callsign}</td>
                   {r.cells.map((c, i) => (
                     <td
@@ -2856,6 +2866,153 @@ function TiebreakResultsPanel({ tournament }) {
   );
 }
 
+// Разбор ничьих по итогам тай-брейка (см. пункт бэклога): окончательный порядок
+// внутри групп с общим местом — место со звёздочкой, как "2*". Общий для
+// стандартного режима и марафона (бэкенд: /tie-groups и /tie-resolutions).
+function useTieResolution(tournamentId, onSaved) {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState(null); // ответ /tie-groups | null
+  const [state, setState] = useState({}); // place группы -> { use, order, source }
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  function initState(data) {
+    const next = {};
+    for (const g of data.groups) {
+      const order = g.applied_order || g.suggested_order || g.members.map((m) => m.entry_id);
+      next[g.place] = {
+        use: Boolean(g.applied_order || g.suggested_order),
+        order,
+        source: g.applied_source || g.suggested_source || "вручную",
+      };
+    }
+    setState(next);
+  }
+
+  async function openTies() {
+    setOpen(true);
+    setError("");
+    try {
+      const data = await api(`/api/admin/tournaments/${tournamentId}/tie-groups`);
+      setData(data);
+      initState(data);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  function moveTie(place, index, delta) {
+    setState((prev) => {
+      const st = prev[place];
+      const order = [...st.order];
+      const target = index + delta;
+      if (target < 0 || target >= order.length) return prev;
+      [order[index], order[target]] = [order[target], order[index]];
+      return { ...prev, [place]: { ...st, order, use: true, source: "вручную" } };
+    });
+  }
+
+  async function saveTies(resolutions) {
+    setBusy(true);
+    setError("");
+    try {
+      const data = await api(`/api/admin/tournaments/${tournamentId}/tie-resolutions`, {
+        method: "PUT",
+        body: JSON.stringify({ resolutions }),
+      });
+      setData(data);
+      initState(data);
+      if (onSaved) await onSaved();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function applySelected() {
+    const resolutions = data.groups
+      .filter((g) => state[g.place]?.use)
+      .map((g) => ({ entry_ids: state[g.place].order, source: state[g.place].source }));
+    saveTies(resolutions);
+  }
+
+  return { open, setOpen, data, state, setState, busy, error, openTies, moveTie, saveTies, applySelected };
+}
+
+function TieResolutionPanel({ tie }) {
+  return (
+        <div style={{ background: "#242426", borderRadius: 6, padding: 10, marginBottom: 12, maxWidth: 560 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <strong style={{ fontSize: 14 }}>Окончательные места по итогам тай-брейка</strong>
+            <button onClick={() => tie.setOpen(false)} style={{ ...ghostButtonStyle, fontSize: 11, padding: "1px 8px" }}>Закрыть</button>
+          </div>
+          {tie.error && <div style={{ color: "#e5484d", fontSize: 12, marginTop: 6 }}>{tie.error}</div>}
+          {!tie.data ? (
+            !tie.error && <p style={{ fontSize: 12, opacity: 0.7 }}>Загрузка...</p>
+          ) : !tie.data.can_resolve ? (
+            <p style={{ fontSize: 12, opacity: 0.8 }}>{tie.data.reason}</p>
+          ) : tie.data.groups.length === 0 ? (
+            <p style={{ fontSize: 12, opacity: 0.8 }}>Разделённых мест нет.</p>
+          ) : (
+            <>
+              <p style={{ fontSize: 12, opacity: 0.7, margin: "6px 0" }}>
+                Порядок предложен по найденному тай-брейку, его можно поправить стрелками. Места, определённые тай-брейком, помечаются звёздочкой (например, 2*).
+              </p>
+              {tie.data.groups.map((g) => {
+                const st = tie.state[g.place];
+                if (!st) return null;
+                const startPlace = parseInt(g.place.split("-")[0], 10);
+                const nameOf = (id) => g.members.find((m) => m.entry_id === id)?.callsign || id;
+                return (
+                  <div key={g.place} style={{ borderTop: "1px solid #3a3a3c", paddingTop: 8, marginTop: 8 }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+                      <input
+                        type="checkbox" checked={st.use}
+                        onChange={(e) => tie.setState((prev) => ({ ...prev, [g.place]: { ...prev[g.place], use: e.target.checked } }))}
+                      />
+                      <span>Места {g.place} · {g.summary || `${g.points} очк.`}</span>
+                      {g.applied_order && <span style={{ color: "#538d4e", fontSize: 12 }}>✓ применено</span>}
+                    </label>
+                    <div style={{ fontSize: 11, opacity: 0.7, margin: "2px 0 4px 22px" }}>
+                      {st.source === "вручную"
+                        ? "Порядок задан вручную"
+                        : `По тай-брейку «${st.source}»`}
+                      {!g.suggested_order && !g.applied_order && g.suggestion_note ? `. ${g.suggestion_note}` : ""}
+                    </div>
+                    <div style={{ marginLeft: 22 }}>
+                      {st.order.map((id, i) => (
+                        <div key={id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "2px 0" }}>
+                          <span style={{ width: 28, fontWeight: 700 }}>{startPlace + i}*</span>
+                          <span style={{ flex: 1, wordBreak: "break-word" }}>{nameOf(id)}</span>
+                          <button
+                            onClick={() => tie.moveTie(g.place, i, -1)} disabled={i === 0}
+                            style={{ ...ghostButtonStyle, padding: "0 6px", fontSize: 12, opacity: i === 0 ? 0.3 : 1 }}
+                          >↑</button>
+                          <button
+                            onClick={() => tie.moveTie(g.place, i, 1)} disabled={i === st.order.length - 1}
+                            style={{ ...ghostButtonStyle, padding: "0 6px", fontSize: 12, opacity: i === st.order.length - 1 ? 0.3 : 1 }}
+                          >↓</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                <button onClick={tie.applySelected} disabled={tie.busy} style={{ ...buttonStyle, fontSize: 12, opacity: tie.busy ? 0.6 : 1 }}>
+                  {tie.busy ? "Сохраняю..." : "Применить отмеченные"}
+                </button>
+                <button onClick={() => tie.saveTies([])} disabled={tie.busy} style={{ ...ghostButtonStyle, fontSize: 12 }}>
+                  Сбросить всё
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+  );
+}
+
 function StandingsPanel({ tournament }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [standings, setStandings] = useState(null);
@@ -2870,80 +3027,13 @@ function StandingsPanel({ tournament }) {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [hoveredCell, setHoveredCell] = useState(null); // {participantId, day} | null
-  // Разбор ничьих по итогам тай-брейка (см. пункт бэклога): окончательный порядок
-  // внутри групп с общим местом — место со звёздочкой, как "2*".
-  const [tieOpen, setTieOpen] = useState(false);
-  const [tieData, setTieData] = useState(null); // ответ /tie-groups | null
-  const [tieState, setTieState] = useState({}); // place группы -> { use, order, source }
-  const [tieBusy, setTieBusy] = useState(false);
-  const [tieError, setTieError] = useState("");
+  const tie = useTieResolution(tournament.id, () => refresh());
 
   const placeLabel = (r) => `${r.place}${r.tie_resolved ? "*" : ""}`;
   // Пояснение под таблицей в копии и картинке, если есть места, определённые
   // тай-брейком (со звёздочкой)
   const TIE_FOOTNOTE = "* - по результатам тай-брейка";
   const hasTieResolved = () => standings.rows.some((r) => r.tie_resolved);
-
-  function initTieState(data) {
-    const next = {};
-    for (const g of data.groups) {
-      const order = g.applied_order || g.suggested_order || g.members.map((m) => m.entry_id);
-      next[g.place] = {
-        use: Boolean(g.applied_order || g.suggested_order),
-        order,
-        source: g.applied_source || g.suggested_source || "вручную",
-      };
-    }
-    setTieState(next);
-  }
-
-  async function openTies() {
-    setTieOpen(true);
-    setTieError("");
-    try {
-      const data = await api(`/api/admin/tournaments/${tournament.id}/tie-groups`);
-      setTieData(data);
-      initTieState(data);
-    } catch (e) {
-      setTieError(e.message);
-    }
-  }
-
-  function moveTie(place, index, delta) {
-    setTieState((prev) => {
-      const st = prev[place];
-      const order = [...st.order];
-      const target = index + delta;
-      if (target < 0 || target >= order.length) return prev;
-      [order[index], order[target]] = [order[target], order[index]];
-      return { ...prev, [place]: { ...st, order, use: true, source: "вручную" } };
-    });
-  }
-
-  async function saveTies(resolutions) {
-    setTieBusy(true);
-    setTieError("");
-    try {
-      const data = await api(`/api/admin/tournaments/${tournament.id}/tie-resolutions`, {
-        method: "PUT",
-        body: JSON.stringify({ resolutions }),
-      });
-      setTieData(data);
-      initTieState(data);
-      await refresh();
-    } catch (e) {
-      setTieError(e.message);
-    } finally {
-      setTieBusy(false);
-    }
-  }
-
-  function handleApplyTies() {
-    const resolutions = tieData.groups
-      .filter((g) => tieState[g.place]?.use)
-      .map((g) => ({ entry_ids: tieState[g.place].order, source: tieState[g.place].source }));
-    saveTies(resolutions);
-  }
 
   function handleCopyStandings() {
     const tags = [standings.hashtag, "#таблица", `#д${standings.current_day}`].filter(Boolean).join(" ");
@@ -3148,7 +3238,7 @@ function StandingsPanel({ tournament }) {
           <button onClick={handleDownloadStandings} style={ghostButtonStyle}>Скачать таблицу</button>
           {tournament.type === "standard" && selectedDay === "current"
             && standings.rows.some((r) => r.place.includes("-") || r.tie_resolved) && (
-            <button onClick={openTies} style={ghostButtonStyle}>Разобрать ничьи</button>
+            <button onClick={tie.openTies} style={ghostButtonStyle}>Разобрать ничьи</button>
           )}
           <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
         </div>
@@ -3158,76 +3248,7 @@ function StandingsPanel({ tournament }) {
         Клик по ячейке дня — ручная корректировка результата (исключительные случаи). Наведите на цифру — покажутся попытки этого дня.
       </p>
       {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
-      {tieOpen && (
-        <div style={{ background: "#242426", borderRadius: 6, padding: 10, marginBottom: 12, maxWidth: 560 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <strong style={{ fontSize: 14 }}>Окончательные места по итогам тай-брейка</strong>
-            <button onClick={() => setTieOpen(false)} style={{ ...ghostButtonStyle, fontSize: 11, padding: "1px 8px" }}>Закрыть</button>
-          </div>
-          {tieError && <div style={{ color: "#e5484d", fontSize: 12, marginTop: 6 }}>{tieError}</div>}
-          {!tieData ? (
-            !tieError && <p style={{ fontSize: 12, opacity: 0.7 }}>Загрузка...</p>
-          ) : !tieData.can_resolve ? (
-            <p style={{ fontSize: 12, opacity: 0.8 }}>{tieData.reason}</p>
-          ) : tieData.groups.length === 0 ? (
-            <p style={{ fontSize: 12, opacity: 0.8 }}>Разделённых мест нет.</p>
-          ) : (
-            <>
-              <p style={{ fontSize: 12, opacity: 0.7, margin: "6px 0" }}>
-                Порядок предложен по найденному тай-брейку, его можно поправить стрелками. Места, определённые тай-брейком, помечаются звёздочкой (например, 2*).
-              </p>
-              {tieData.groups.map((g) => {
-                const st = tieState[g.place];
-                if (!st) return null;
-                const startPlace = parseInt(g.place.split("-")[0], 10);
-                const nameOf = (id) => g.members.find((m) => m.entry_id === id)?.callsign || id;
-                return (
-                  <div key={g.place} style={{ borderTop: "1px solid #3a3a3c", paddingTop: 8, marginTop: 8 }}>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
-                      <input
-                        type="checkbox" checked={st.use}
-                        onChange={(e) => setTieState((prev) => ({ ...prev, [g.place]: { ...prev[g.place], use: e.target.checked } }))}
-                      />
-                      <span>Места {g.place} · {g.points} очк.</span>
-                      {g.applied_order && <span style={{ color: "#538d4e", fontSize: 12 }}>✓ применено</span>}
-                    </label>
-                    <div style={{ fontSize: 11, opacity: 0.7, margin: "2px 0 4px 22px" }}>
-                      {st.source === "вручную"
-                        ? "Порядок задан вручную"
-                        : `По тай-брейку «${st.source}»`}
-                      {!g.suggested_order && !g.applied_order && g.suggestion_note ? `. ${g.suggestion_note}` : ""}
-                    </div>
-                    <div style={{ marginLeft: 22 }}>
-                      {st.order.map((id, i) => (
-                        <div key={id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "2px 0" }}>
-                          <span style={{ width: 28, fontWeight: 700 }}>{startPlace + i}*</span>
-                          <span style={{ flex: 1, wordBreak: "break-word" }}>{nameOf(id)}</span>
-                          <button
-                            onClick={() => moveTie(g.place, i, -1)} disabled={i === 0}
-                            style={{ ...ghostButtonStyle, padding: "0 6px", fontSize: 12, opacity: i === 0 ? 0.3 : 1 }}
-                          >↑</button>
-                          <button
-                            onClick={() => moveTie(g.place, i, 1)} disabled={i === st.order.length - 1}
-                            style={{ ...ghostButtonStyle, padding: "0 6px", fontSize: 12, opacity: i === st.order.length - 1 ? 0.3 : 1 }}
-                          >↓</button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                <button onClick={handleApplyTies} disabled={tieBusy} style={{ ...buttonStyle, fontSize: 12, opacity: tieBusy ? 0.6 : 1 }}>
-                  {tieBusy ? "Сохраняю..." : "Применить отмеченные"}
-                </button>
-                <button onClick={() => saveTies([])} disabled={tieBusy} style={{ ...ghostButtonStyle, fontSize: 12 }}>
-                  Сбросить всё
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      )}
+      {tie.open && <TieResolutionPanel tie={tie} />}
       <table style={{ borderCollapse: "collapse", fontSize: 13, minWidth: 400 }}>
         <thead>
           <tr>

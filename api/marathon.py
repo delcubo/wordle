@@ -161,8 +161,15 @@ async def word_started(session: AsyncSession, daily_word_id: int) -> bool:
     return await crud.daily_word_has_attempts(session, daily_word_id)
 
 
-async def compute_standings(session: AsyncSession, tournament: Tournament) -> dict:
-    """Сводная таблица для админки: по строке на игрока, ячейка на каждое слово."""
+async def compute_standings(
+    session: AsyncSession, tournament: Tournament, apply_tie_resolutions: bool = True
+) -> dict:
+    """Сводная таблица для админки: по строке на игрока, ячейка на каждое слово.
+
+    Порядок мест, заданный админом по итогам тай-брейка (tournament.tie_resolutions,
+    «Разобрать ничьи»), применяется к группам с общим местом — только если состав
+    группы в точности совпадает с сохранённым (устаревший порядок игнорируется).
+    apply_tie_resolutions=False нужен, чтобы увидеть сами ничьи при их разборе."""
     individual = bool(tournament.individual_words)
     shared_words = [] if individual else await ensure_words(session, tournament)
     all_words = await crud.list_daily_words(session, tournament.id)
@@ -214,7 +221,12 @@ async def compute_standings(session: AsyncSession, tournament: Tournament) -> di
         })
 
     rows.sort(key=lambda r: (-r["words_done"], r["total_attempts"], r["callsign"].lower()))
-    # места: по (пройдено слов, сумма попыток); полное совпадение — общее место "2-3"
+    resolution_by_set = (
+        {frozenset(item["entry_ids"]): list(item["entry_ids"]) for item in (tournament.tie_resolutions or [])}
+        if apply_tie_resolutions else {}
+    )
+    # места: по (пройдено слов, сумма попыток); полное совпадение — общее место "2-3",
+    # если для группы не сохранён порядок по итогам тай-брейка (тогда места 2 и 3, со звёздочкой)
     i = 0
     while i < len(rows):
         j = i
@@ -222,8 +234,15 @@ async def compute_standings(session: AsyncSession, tournament: Tournament) -> di
         while j + 1 < len(rows) and (rows[j + 1]["words_done"], rows[j + 1]["total_attempts"]) == key:
             j += 1
         place = str(i + 1) if i == j else f"{i + 1}-{j + 1}"
-        for k in range(i, j + 1):
-            rows[k]["place"] = place
+        group = rows[i:j + 1]
+        order = resolution_by_set.get(frozenset(r["entry_id"] for r in group)) if j > i else None
+        if order is not None:
+            by_id = {r["entry_id"]: r for r in group}
+            group = [by_id[entry_id] for entry_id in order]
+            rows[i:j + 1] = group
+        for offset, row in enumerate(group):
+            row["place"] = str(i + 1 + offset) if order is not None else place
+            row["tie_resolved"] = order is not None
         i = j + 1
 
     return {

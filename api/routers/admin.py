@@ -4,6 +4,7 @@
 Все эндпоинты, кроме /login, защищены require_admin (см. api/admin_auth.py).
 """
 import asyncio
+from collections import namedtuple
 from datetime import timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -929,20 +930,39 @@ async def override_day_result(
     )
 
 
+_TieRow = namedtuple("_TieRow", "entry_id callsign place points summary")
+
+
 async def _tie_groups_view(session: AsyncSession, tournament: Tournament) -> TieGroupsResponse:
     """
-    Группы с общим местом в итоговой таблице стандартного розыгрыша (без учёта
-    уже применённых порядков) + для каждой — предложение по результатам
+    Группы с общим местом в итоговой таблице стандартного розыгрыша или марафона
+    (без учёта уже применённых порядков) + для каждой — предложение по результатам
     тай-брейка: розыгрыш типа "Тай-брейк" с в точности теми же игроками
     (сопоставление по человеку, а не по позывному), если он уже расставил все
     места. Нужно для окончательной таблицы без разделённых мест.
+    Стандартный разбирается по завершении розыгрыша; марафон — в любой момент
+    (устаревший порядок при изменении состава группы просто игнорируется).
     """
-    if tournament.type != TournamentType.standard or tournament.duration_days is None:
-        return TieGroupsResponse(can_resolve=False, reason="Разбор ничьих доступен только для стандартного розыгрыша")
-    if day_number_for_date(tournament.start_date, today()) <= tournament.duration_days:
-        return TieGroupsResponse(can_resolve=False, reason="Розыгрыш ещё не завершён — ничьи разбираются по его итогам")
-
-    rows = await compute_standings(session, tournament, apply_tie_resolutions=False)
+    if tournament.type == TournamentType.marathon:
+        data = await marathon.compute_standings(session, tournament, apply_tie_resolutions=False)
+        rows = [
+            _TieRow(
+                r["entry_id"], r["callsign"], r["place"], r["total_attempts"],
+                f"{r['words_done']}/{data['words_count']} слов · {r['total_attempts']} попыток",
+            )
+            for r in data["rows"]
+        ]
+    elif tournament.type == TournamentType.standard and tournament.duration_days is not None:
+        if day_number_for_date(tournament.start_date, today()) <= tournament.duration_days:
+            return TieGroupsResponse(can_resolve=False, reason="Розыгрыш ещё не завершён — ничьи разбираются по его итогам")
+        rows = [
+            _TieRow(r.participant_id, r.callsign, r.place, r.total_points, None)
+            for r in await compute_standings(session, tournament, apply_tie_resolutions=False)
+        ]
+    else:
+        return TieGroupsResponse(
+            can_resolve=False, reason="Разбор ничьих доступен только для стандартного розыгрыша и марафона"
+        )
     entries = {e.id: e for e in await crud.list_entries(session, tournament.id)}
     applied = {frozenset(r["entry_ids"]): r for r in (tournament.tie_resolutions or [])}
     # неархивные тай-брейки первыми (list_tournaments уже идёт от новых к старым)
@@ -959,13 +979,13 @@ async def _tie_groups_view(session: AsyncSession, tournament: Tournament) -> Tie
             continue
         seen_places.add(row.place)
         member_rows = [r for r in rows if r.place == row.place]
-        member_ids = [r.participant_id for r in member_rows]
+        member_ids = [r.entry_id for r in member_rows]
         user_by_entry = {eid: entries[eid].user_id for eid in member_ids}
         user_set = set(user_by_entry.values())
 
         group = TieGroupOut(
-            place=row.place, points=row.total_points,
-            members=[TieGroupMember(entry_id=r.participant_id, callsign=r.callsign) for r in member_rows],
+            place=row.place, points=row.points, summary=row.summary,
+            members=[TieGroupMember(entry_id=r.entry_id, callsign=r.callsign) for r in member_rows],
         )
 
         found = None
