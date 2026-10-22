@@ -14,15 +14,19 @@ export const INVALID_SHAKE_MS = 600;
 
 const FLIP_DURATION_MS = 450;
 const FLIP_STAGGER_MS = 300;
-// Сколько всего идёт переворот всей строки из 5 букв — чтобы модалка с итогом
-// (см. PlayerGame.jsx) не перекрывала грид раньше, чем доиграет анимация.
-export const FLIP_TOTAL_MS = FLIP_DURATION_MS + FLIP_STAGGER_MS * 4;
+// Сколько всего идёт переворот всей строки из wordLength букв — чтобы модалка с
+// итогом (см. PlayerGame.jsx) не перекрывала грид раньше, чем доиграет анимация.
+export function flipTotalMs(wordLength = 5) {
+  return FLIP_DURATION_MS + FLIP_STAGGER_MS * (wordLength - 1);
+}
 
-const GAP = 8;
+// Зазор между клетками; в строках из 6-7 букв он меньше, чтобы клетки не
+// становились слишком мелкими на узких телефонах (320-375 px).
+const gapFor = (wordLength) => (wordLength > 5 ? 6 : 8);
 const PAD_V = 16;
 const MIN_TILE = 32;
 const MAX_TILE = 72;
-const MAX_GRID_WIDTH = 400; // 5 клеток по MAX_TILE + зазоры — не растягивать шире и на просторном десктопе
+const MAX_GRID_WIDTH = 400; // 5 клеток по MAX_TILE + зазоры — не растягивать шире и на просторном десктопе (и при 6-7 буквах)
 // Запас поверх расчёта из getBoundingClientRect — на реальных телефонах
 // (в отличие от тестирования в десктопном браузере) расчёт "впритык" пару раз
 // давал на глаз нулевой зазор до клавиатуры (см. пункт бэклога) — не удалось
@@ -31,7 +35,8 @@ const MAX_GRID_WIDTH = 400; // 5 клеток по MAX_TILE + зазоры — �
 const SAFETY_MARGIN = 24;
 
 /**
- * rows: массив по 6 строк, каждая — { letters: string[5], statuses: string[5] | null }
+ * wordLength: сколько букв в слове (5, 6 или 7) — столько клеток в строке.
+ * rows: массив по 6 строк, каждая — { letters: string[wordLength], statuses: string[wordLength] | null }
  * currentGuess: то, что игрок вводит прямо сейчас (для незавершённой строки)
  * animateRowIndex: индекс строки, которую только что отправили в этом сеансе —
  * для неё буквы переворачиваются по очереди, раскрывая цвет в середине переворота
@@ -53,7 +58,10 @@ const SAFETY_MARGIN = 24;
  * столбцов поместились в промежуток между низом шапки (где начинается это
  * поле — обычный поток документа) и верхом клавиатуры.
  */
-export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRowIndex, invalidShake, keyboardRef }) {
+export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRowIndex, invalidShake, keyboardRef, wordLength = 5 }) {
+  const GAP = gapFor(wordLength);
+  const wordLengthRef = useRef(wordLength);
+  wordLengthRef.current = wordLength;
   const containerRef = useRef(null);
   const [tileSize, setTileSize] = useState(56);
   // Довесок к нижнему отступу — выталкивает поле, чтобы его низ ровно упирался
@@ -73,11 +81,13 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
 
       const width = Math.min(rect.width, MAX_GRID_WIDTH);
       const usableHeight = Math.max(0, availableHeight - PAD_V * 2);
-      const fromWidth = (width - GAP * 4) / 5;
-      const fromHeight = (usableHeight - GAP * 5) / 6;
+      const n = wordLengthRef.current;
+      const gap = gapFor(n);
+      const fromWidth = (width - gap * (n - 1)) / n;
+      const fromHeight = (usableHeight - gap * 5) / 6;
       const size = Math.max(MIN_TILE, Math.min(fromWidth, fromHeight, MAX_TILE));
 
-      const contentHeight = size * 6 + GAP * 5 + PAD_V * 2;
+      const contentHeight = size * 6 + gap * 5 + PAD_V * 2;
       setTileSize(size);
       setBottomGap(Math.max(0, availableHeight - contentHeight));
     }
@@ -102,7 +112,7 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
       if (vv) vv.removeEventListener("resize", recompute);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [wordLength]);
 
   const fontSize = Math.round(tileSize * 0.47);
 
@@ -145,8 +155,8 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
           const isShaking = invalidShake && invalidShake.row === i;
 
           const letters = isActive
-            ? (currentGuess + "     ").slice(0, 5).split("")
-            : row.letters ?? Array(5).fill("");
+            ? currentGuess.padEnd(wordLength, " ").slice(0, wordLength).split("")
+            : row.letters ?? Array(wordLength).fill("");
 
           return (
             <div key={i} style={{ display: "flex", gap: GAP }}>
@@ -182,6 +192,9 @@ export default function WordGrid({ rows, currentGuess, activeRowIndex, animateRo
                       fontWeight: 700,
                       textTransform: "uppercase",
                       borderRadius: 4,
+                      // для 6-7 букв размер клетки включает рамку, иначе строка на 320-375 px вылезает за поля
+                      // (у 5 букв оставлено как было — внешний вид обычных игр не меняем)
+                      boxSizing: wordLength > 5 ? "border-box" : "content-box",
                       ...style,
                     }}
                   >

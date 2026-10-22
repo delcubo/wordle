@@ -1,12 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import WordGrid, { FLIP_TOTAL_MS, INVALID_SHAKE_MS } from "../components/WordGrid.jsx";
+import WordGrid, { flipTotalMs, INVALID_SHAKE_MS } from "../components/WordGrid.jsx";
 import Keyboard from "../components/Keyboard.jsx";
 import ResultModal from "../components/ResultModal.jsx";
 import { fetchTheme, themeVars } from "../theme.js";
 
 const MAX_ATTEMPTS = 6;
-const WORD_LENGTH = 5;
+const DEFAULT_WORD_LENGTH = 5;
 const LETTER_PRIORITY = { correct: 3, present: 2, absent: 1 };
 
 function buildRows(guesses, results) {
@@ -15,6 +15,13 @@ function buildRows(guesses, results) {
     rows[i] = { letters: g.split(""), statuses: (results && results[i]) || null };
   });
   return rows;
+}
+
+// Длина слова текущей игры: по уже сделанным попыткам (они точно соответствуют
+// слову), иначе — из статуса (word_length), иначе обычные 5 букв.
+function lengthFromStatus(data) {
+  const first = (data.previous_guesses || [])[0];
+  return (first && first.length) || data.word_length || DEFAULT_WORD_LENGTH;
 }
 
 function buildLetterStates(guesses, results) {
@@ -34,6 +41,7 @@ export default function PlayerGame() {
   const { token, tournamentId } = useParams();
 
   const [rows, setRows] = useState(buildRows([], []));
+  const [wordLength, setWordLength] = useState(DEFAULT_WORD_LENGTH);
   const [currentGuess, setCurrentGuess] = useState("");
   const [activeRowIndex, setActiveRowIndex] = useState(0);
   const [letterStates, setLetterStates] = useState({});
@@ -142,6 +150,7 @@ export default function PlayerGame() {
         // бэклога). Бэкенд отдаёт её, только когда место уже окончательное
         // (не диапазон), так что это не перекрывает "ждём остальных".
         if (data.previous_guesses && data.previous_guesses.length > 0) {
+          setWordLength(lengthFromStatus(data));
           setRows(buildRows(data.previous_guesses, data.previous_results));
           setLetterStates(buildLetterStates(data.previous_guesses, data.previous_results));
           setActiveRowIndex(-1);
@@ -169,6 +178,7 @@ export default function PlayerGame() {
     }
 
     const finished = data.already_played;
+    setWordLength(lengthFromStatus(data));
     setRows(buildRows(data.previous_guesses, data.previous_results));
     setLetterStates(buildLetterStates(data.previous_guesses, data.previous_results));
     setActiveRowIndex(finished ? -1 : (data.previous_guesses || []).length);
@@ -213,6 +223,7 @@ export default function PlayerGame() {
     }
 
     const finished = data.already_played || data.match_finished;
+    setWordLength(lengthFromStatus(data));
     setRows(buildRows(data.previous_guesses, data.previous_results));
     setLetterStates(buildLetterStates(data.previous_guesses, data.previous_results));
     setActiveRowIndex(finished ? -1 : (data.previous_guesses || []).length);
@@ -322,7 +333,7 @@ export default function PlayerGame() {
   }, [token, tournamentId]);
 
   function handleLetter(letter) {
-    if (gameOver || currentGuess.length >= WORD_LENGTH) return;
+    if (gameOver || currentGuess.length >= wordLength) return;
     setCurrentGuess((g) => g + letter);
   }
 
@@ -344,7 +355,7 @@ export default function PlayerGame() {
     // того, как currentGuess очистится, уходит отдельным, полностью валидным
     // запросом с тем же словом и списывает игроку ещё одну попытку (см.
     // пункт бэклога — так игрок терял по три попытки на одно и то же слово).
-    if (submitting || currentGuess.length !== WORD_LENGTH || gameOver) return;
+    if (submitting || currentGuess.length !== wordLength || gameOver) return;
 
     setSubmitting(true);
     try {
@@ -372,6 +383,7 @@ export default function PlayerGame() {
 
       const data = await res.json();
       const statuses = data.result.map((r) => r.state);
+      const flipMs = flipTotalMs(statuses.length);
 
       // грид "этого раунда" на момент прямо сейчас — до любых дальнейших фетчей,
       // пригодится, если матч сетки уйдёт в sudden death (там прошлый раунд уже
@@ -421,7 +433,7 @@ export default function PlayerGame() {
             });
           }
           applyBracketStatus(fresh, { announceTie: isTie });
-        }, FLIP_TOTAL_MS);
+        }, flipMs);
         return;
       }
 
@@ -444,14 +456,14 @@ export default function PlayerGame() {
           });
           setMessage(last ? "Вы прошли все слова!" : "Слово пройдено.");
           setPendingNext(!last);
-        }, FLIP_TOTAL_MS);
+        }, flipMs);
         return;
       }
 
       const fresh = await fetchStandardStatus();
       setTimeout(() => {
         if (fresh) applyStandardStatus(fresh);
-      }, FLIP_TOTAL_MS);
+      }, flipMs);
     } finally {
       setSubmitting(false);
     }
@@ -500,7 +512,7 @@ export default function PlayerGame() {
           Следующее слово →
         </button>
       )}
-      <WordGrid rows={rows} currentGuess={currentGuess} activeRowIndex={activeRowIndex} animateRowIndex={animateRowIndex} invalidShake={invalidShake} keyboardRef={keyboardWrapRef} />
+      <WordGrid rows={rows} currentGuess={currentGuess} activeRowIndex={activeRowIndex} animateRowIndex={animateRowIndex} invalidShake={invalidShake} keyboardRef={keyboardWrapRef} wordLength={wordLength} />
       <div
         ref={keyboardWrapRef}
         style={{
