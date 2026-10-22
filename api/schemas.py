@@ -124,6 +124,7 @@ class TournamentOut(BaseModel):
     individual_words: bool = False  # только marathon
     word_length: int = 5
     word_plan: dict | None = None  # длины слов по позициям (см. api/word_plan.py)
+    teams_enabled: bool = False  # только marathon: командный зачёт
 
     class Config:
         from_attributes = True
@@ -142,6 +143,7 @@ class TournamentSettingsUpdateRequest(BaseModel):
     end_date: date | None = None  # только marathon
     clear_end_date: bool | None = None  # только marathon: убрать дату окончания
     individual_words: bool | None = None  # только marathon: личные наборы слов (менять можно, пока никто не начал)
+    teams_enabled: bool | None = None  # только marathon: командный зачёт
 
 
 class TournamentPauseRequest(BaseModel):
@@ -167,6 +169,7 @@ class EntryOut(BaseModel):
     joined_on_day: int
     active: bool = True
     hidden_from_standings: bool = False
+    team_id: int | None = None  # команда участника (марафон с командным зачётом)
     # Заполняется для бессрочного, standard и knockout режимов (см. пункт бэклога) — сыграл
     # ли участник уже сегодняшнее слово. Для остальных типов розыгрыша не
     # считается (там видно из таблицы/сетки) и остаётся None.
@@ -610,3 +613,83 @@ class MarathonPlayerWordsOut(BaseModel):
     entry_id: int
     callsign: str
     words: list[MarathonIndividualWordOut]
+
+
+# ---------- Команды марафона (api/teams.py) ----------
+
+class TeamCreateRequest(BaseModel):
+    name: str
+
+
+class TeamOut(BaseModel):
+    id: int
+    tournament_id: int
+    name: str
+    members_count: int = 0
+
+
+class EntryTeamRequest(BaseModel):
+    team_id: int | None = None  # None — убрать участника из команды
+
+
+class TeamMemberOut(BaseModel):
+    entry_id: int
+    callsign: str
+    words_done: int
+    total_attempts: int  # сумма попыток по пройденным словам (неугаданное = unsolved_attempts)
+    finished_all: bool
+    active: bool = True
+
+
+class TeamExcludedOut(BaseModel):
+    team_id: int
+    name: str
+    members_count: int
+    members: list[TeamMemberOut]
+    words_done: int
+    words_total: int
+
+
+class TeamRowOut(TeamExcludedOut):
+    attempts_sum: int  # попытки по пройденным словам всех участников
+    unplayed_words: int  # слова, которые команда ещё не прошла (в среднем считаются как unsolved_attempts)
+    average: str  # среднее число попыток на слово, готовая подпись
+    average_value: float
+    place: str
+    tie_resolved: bool = False
+
+
+class TeamStandingsOut(BaseModel):
+    words_count: int
+    unsolved_attempts: int
+    hashtag: str | None = None
+    rows: list[TeamRowOut]
+    excluded: list[TeamExcludedOut] = []  # команды меньше двух участников — в зачёт не идут
+
+
+class TeamTieMember(BaseModel):
+    team_id: int
+    name: str
+
+
+class TeamTieGroupOut(BaseModel):
+    place: str
+    summary: str
+    members: list[TeamTieMember]
+    applied_order: list[int] | None = None  # team_id, лучшая первой
+    applied_source: str | None = None
+
+
+class TeamTieGroupsResponse(BaseModel):
+    can_resolve: bool
+    reason: str | None = None
+    groups: list[TeamTieGroupOut] = []
+
+
+class TeamTieResolutionItem(BaseModel):
+    team_ids: list[int]  # лучшая первой
+    source: str = ""
+
+
+class TeamTieResolutionsRequest(BaseModel):
+    resolutions: list[TeamTieResolutionItem]

@@ -29,8 +29,10 @@ from api.schemas import (
     ExcludedWordOut, ExcludedWordCreateRequest,
     AddedWordOut, AddedWordCreateRequest,
     MarathonWordOut, MarathonStandingsOut, MarathonPlayerWordsOut, SlotLengthRequest, WordPlanRequest,
+    TeamCreateRequest, TeamOut, EntryTeamRequest, TeamStandingsOut,
+    TeamTieGroupsResponse, TeamTieGroupOut, TeamTieMember, TeamTieResolutionsRequest,
 )
-from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry, PlayoffMatch, TiebreakRound
+from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry, PlayoffMatch, TiebreakRound, Team
 from api.admin_auth import (
     check_password, create_session_token, require_admin, COOKIE_NAME, SESSION_MAX_AGE_SECONDS,
     client_ip, login_retry_after, record_login_failure, clear_login_failures,
@@ -40,7 +42,7 @@ from api.dictionary import (
 )
 from api.scoring import calculate_points
 from api.tournament_time import today, day_number_for_date, effective_status
-from api import crud, tiebreak, bracket, bracket_game, notify, marathon
+from api import crud, tiebreak, bracket, bracket_game, notify, marathon, teams
 from api import word_plan as wp
 from api.standings_view import compute_standings
 
@@ -400,8 +402,12 @@ async def update_tournament_settings(
         tournament.notify_admin = payload.notify_admin
 
     if (payload.words_count is not None or payload.end_date is not None or payload.clear_end_date
-            or payload.individual_words is not None) and tournament.type != TournamentType.marathon:
-        raise HTTPException(status_code=400, detail="Число слов, дата окончания и режим слов настраиваются только у марафона")
+            or payload.individual_words is not None or payload.teams_enabled is not None) \
+            and tournament.type != TournamentType.marathon:
+        raise HTTPException(status_code=400, detail="Число слов, дата окончания, режим слов и командный зачёт настраиваются только у марафона")
+
+    if payload.teams_enabled is not None:
+        tournament.teams_enabled = payload.teams_enabled
 
     if payload.individual_words is not None and payload.individual_words != bool(tournament.individual_words):
         try:
@@ -695,6 +701,131 @@ async def get_marathon_words(tournament_id: int, session: AsyncSession = Depends
     if tournament.individual_words:
         raise HTTPException(status_code=400, detail="У этого марафона личные наборы слов — см. individual-words")
     return await marathon.words_overview(session, tournament)
+
+
+# ---------- Марафон: команды и командный зачёт (api/teams.py) ----------
+
+async def _team_out(session: AsyncSession, team: Team) -> TeamOut:
+    members = [e for e in await crud.list_entries(session, team.tournament_id) if e.team_id == team.id]
+    return TeamOut(id=team.id, tournament_id=team.tournament_id, name=team.name, members_count=len(members))
+
+
+@router.get("/tournaments/{tournament_id}/teams", response_model=list[TeamOut])
+async def get_teams(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    await _get_marathon(session, tournament_id)
+    return [await _team_out(session, t) for t in await teams.list_teams(session, tournament_id)]
+
+
+@router.post("/tournaments/{tournament_id}/teams", response_model=TeamOut)
+async def create_team(
+    tournament_id: int, payload: TeamCreateRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    tournament = await _get_marathon(session, tournament_id)
+    try:
+        team = await teams.create_team(session, tournament, payload.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await _team_out(session, team)
+
+
+@router.patch("/teams/{team_id}", response_model=TeamOut)
+async def rename_team(
+    team_id: int, payload: TeamCreateRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    team = await session.get(Team, team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="Команда не найдена")
+    try:
+        team = await teams.rename_team(session, team, payload.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await _team_out(session, team)
+
+
+@router.delete("/teams/{team_id}")
+async def delete_team(team_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    """Удалить команду: её участники остаются в розыгрыше без команды."""
+    team = await session.get(Team, team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="Команда не найдена")
+    await teams.delete_team(session, team)
+    return {"ok": True}
+
+
+@router.put("/entries/{entry_id}/team", response_model=EntryOut)
+async def set_entry_team(
+    entry_id: int, payload: EntryTeamRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """Поместить участника в команду (team_id=null — убрать из команды). Состав можно менять в
+    любой момент: таблица считается на лету."""
+    entry = await session.get(TournamentEntry, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Участие не найдено")
+    tournament = await crud.get_tournament(session, entry.tournament_id)
+    if tournament is None or tournament.type != TournamentType.marathon:
+        raise HTTPException(status_code=400, detail="Команды есть только в марафоне")
+    try:
+        return await teams.assign_entry(session, entry, payload.team_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/tournaments/{tournament_id}/marathon/team-standings", response_model=TeamStandingsOut)
+async def get_team_standings(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    """Командная таблица марафона: среднее число попыток на слово (api/teams.py)."""
+    tournament = await _get_marathon(session, tournament_id)
+    if not tournament.teams_enabled:
+        raise HTTPException(status_code=400, detail="В этом марафоне не включён командный зачёт")
+    return await teams.compute_team_standings(session, tournament)
+
+
+async def _team_tie_view(session: AsyncSession, tournament: Tournament) -> TeamTieGroupsResponse:
+    if not tournament.teams_enabled:
+        return TeamTieGroupsResponse(can_resolve=False, reason="В этом марафоне не включён командный зачёт")
+    return TeamTieGroupsResponse(
+        can_resolve=True,
+        groups=[
+            TeamTieGroupOut(
+                place=g["place"], summary=g["summary"], applied_order=g["applied_order"], applied_source=g["applied_source"],
+                members=[TeamTieMember(**m) for m in g["members"]],
+            )
+            for g in await teams.tie_groups(session, tournament)
+        ],
+    )
+
+
+@router.get("/tournaments/{tournament_id}/team-tie-groups", response_model=TeamTieGroupsResponse)
+async def get_team_tie_groups(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    return await _team_tie_view(session, await _get_marathon(session, tournament_id))
+
+
+@router.put("/tournaments/{tournament_id}/team-tie-resolutions", response_model=TeamTieGroupsResponse)
+async def put_team_tie_resolutions(
+    tournament_id: int, payload: TeamTieResolutionsRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """Порядок команд с общим местом (полностью заменяет прежний набор; пустой список — сброс).
+    Каждый порядок должен в точности совпадать по составу с одной из текущих групп."""
+    tournament = await _get_marathon(session, tournament_id)
+    view = await _team_tie_view(session, tournament)
+    if not view.can_resolve:
+        raise HTTPException(status_code=400, detail=view.reason)
+    group_sets = {frozenset(m.team_id for m in g.members) for g in view.groups}
+    cleaned: list[dict] = []
+    seen: set[frozenset] = set()
+    for item in payload.resolutions:
+        key = frozenset(item.team_ids)
+        if len(item.team_ids) != len(key) or key not in group_sets or key in seen:
+            raise HTTPException(status_code=400, detail="Порядок не соответствует ни одной из групп с общим местом")
+        seen.add(key)
+        cleaned.append({"team_ids": list(item.team_ids), "source": item.source.strip()[:200]})
+    tournament.team_tie_resolutions = cleaned or None
+    session.add(tournament)
+    await session.commit()
+    return await _team_tie_view(session, tournament)
 
 
 @router.get("/tournaments/{tournament_id}/marathon/standings", response_model=MarathonStandingsOut)

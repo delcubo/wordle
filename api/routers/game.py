@@ -20,6 +20,7 @@ from api.models import TournamentType, TournamentStatus, PlayoffMatchStatus
 from api.tournament_title import render_tournament_title, THIRD_PLACE_STAGE
 from api import crud, tiebreak, bracket_game, notify, marathon
 from api.report import build_report_text, build_marathon_summary_text
+from api import teams
 from api.word_plan import base_length
 
 logger = logging.getLogger("wordle.game")
@@ -242,10 +243,10 @@ async def _notify_bracket_finished(session: AsyncSession, tournament, entry) -> 
         logger.exception("Не удалось подготовить уведомление админу (сетка)")
 
 
-def _marathon_final_text(tournament, entry, progress) -> str:
+def _marathon_final_text(tournament, entry, progress, team_name: str | None = None) -> str:
     """Итоговый отчёт марафона — когда пройдены все слова."""
     return build_marathon_summary_text(
-        base_title=tournament.title, callsign=entry.callsign, hashtag=tournament.hashtag,
+        base_title=tournament.title, callsign=entry.callsign, hashtag=tournament.hashtag, team_name=team_name,
         results=[(a.attempts_used, bool(a.solved)) for _, a in progress.finished],
         total_attempts=progress.total_attempts, unsolved_attempts=marathon.UNSOLVED_ATTEMPTS,
     )
@@ -267,14 +268,15 @@ async def _notify_marathon_finished(session: AsyncSession, tournament, entry, te
 async def _marathon_after_word(session: AsyncSession, tournament, entry, daily_word, attempt) -> dict:
     """Поля ответа на последнюю догадку слова марафона: ответ, отчёт, есть ли дальше."""
     progress = await marathon.get_progress(session, tournament, entry.id)
+    team_name = await teams.team_name_for_entry(session, tournament, entry)
     if progress.done:
-        text = _marathon_final_text(tournament, entry, progress)
+        text = _marathon_final_text(tournament, entry, progress, team_name)
         await _notify_marathon_finished(session, tournament, entry, text)
     else:
         text = build_report_text(
             kind="marathon", attempts_used=attempt.attempts_used, solved=attempt.solved,
             grid=[check_guess(g, daily_word.word) for g in attempt.guesses], callsign=entry.callsign,
-            hashtag=tournament.hashtag, base_title=tournament.title,
+            hashtag=tournament.hashtag, base_title=tournament.title, team_name=team_name,
             stage_label=f"слово {daily_word.day_number}/{progress.total}",
         )
     return dict(
@@ -305,7 +307,9 @@ async def _marathon_status(session: AsyncSession, tournament, entry) -> TodayWor
             has_word_today=False, already_played=False, marathon_done=True, word_index=progress.total,
             word_length=base_length(tournament),
             words_total=progress.total, marathon_total_attempts=progress.total_attempts,
-            report_text=_marathon_final_text(tournament, entry, progress), **base,
+            report_text=_marathon_final_text(
+                tournament, entry, progress, await teams.team_name_for_entry(session, tournament, entry)
+            ), **base,
         )
 
     daily_word = progress.current

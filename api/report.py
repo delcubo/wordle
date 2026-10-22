@@ -41,8 +41,10 @@ def build_report_text(
     stage_label: str | None = None,
     streak_days: int | None = None,
     title: str | None = None,
+    team_name: str | None = None,
 ) -> str:
     """
+    team_name — название команды игрока (марафон с командным зачётом), попадает в отчёт.
     kind — формат отчёта: "endless" (▪️, #N), "standard" (★, #дN, строка серии),
     "bracket" (⚔️, метка стадии сетки), "tiebreak" (🎲, "раунд N"); None — прежний
     общий вид (заголовок, "Игрок:", "Попытки:") для остальных случаев, например
@@ -65,7 +67,8 @@ def build_report_text(
             day_label = f"#{day_number}" if kind == "endless" else f"#д{day_number}"
         else:
             day_label = None
-        meta = [part for part in (callsign, day_label, attempts_label) if part]
+        team_label = f"команда «{team_name}»" if team_name else None
+        meta = [part for part in (callsign, team_label, day_label, attempts_label) if part]
         lines.append(f"{result_emoji} {' · '.join(meta)}")
         lines += ["", emoji_grid]
         if streak_days is not None and streak_days >= 2:
@@ -75,6 +78,8 @@ def build_report_text(
         lines = [title or ""]
         if callsign:
             lines.append(f"Игрок: {callsign}")
+        if team_name:
+            lines.append(f"Команда: {team_name}")
         lines.append(f"Попытки: {attempts_label}")
         lines += ["", emoji_grid]
 
@@ -92,13 +97,19 @@ def build_marathon_summary_text(
     results: list[tuple[int, bool]],
     total_attempts: int,
     unsolved_attempts: int,
+    team_name: str | None = None,
 ) -> str:
     """Итоговый отчёт марафона после последнего слова: попытки по каждому слову
-    ("X" — не угадано) и сумма (неугаданное слово засчитывается как unsolved_attempts)."""
+    ("X" — не угадано) и сумма (неугаданное слово засчитывается как unsolved_attempts).
+    team_name — команда игрока (если включён командный зачёт)."""
     border = BORDER["marathon"]
     per_word = " · ".join(str(used) if solved else "X" for used, solved in results)
     lines = [f"{border} {base_title.upper()} {border}"]
-    lines.append(f"\U0001f3c6 {callsign} · все слова пройдены" if callsign else "\U0001f3c6 Все слова пройдены")
+    if callsign:
+        who = " · ".join(part for part in (callsign, f"команда «{team_name}»" if team_name else None) if part)
+        lines.append(f"\U0001f3c6 {who} · все слова пройдены")
+    else:
+        lines.append("\U0001f3c6 Все слова пройдены")
     lines += ["", f"Слова: {per_word}", f"Всего попыток: {total_attempts}"]
     if any(not solved for _, solved in results):
         lines.append(f"(X = {unsolved_attempts})")
