@@ -704,6 +704,23 @@ async def get_marathon_standings(tournament_id: int, session: AsyncSession = Dep
     return await marathon.compute_standings(session, tournament)
 
 
+@router.post("/tournaments/{tournament_id}/marathon/word-length", response_model=TournamentOut)
+async def set_marathon_word_length(
+    tournament_id: int, number: int, payload: SlotLengthRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """Сменить длину слова марафона с номером `number` (query-параметр): слова этой
+    позиции, которые никто ещё не начал (у всех участников при личных наборах),
+    заменяются словами нужной длины; план длин обновляется."""
+    tournament = await _get_marathon(session, tournament_id)
+    try:
+        await marathon.set_position_length(session, tournament, number, payload.length)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await session.refresh(tournament)
+    return _tournament_out(tournament)
+
+
 @router.get("/tournaments/{tournament_id}/marathon/individual-words", response_model=list[MarathonPlayerWordsOut])
 async def get_marathon_individual_words(
     tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
@@ -1200,7 +1217,7 @@ async def set_tiebreak_word(
         raise HTTPException(status_code=400, detail=error)
     word = canonical_word(payload.word)
     await crud.set_tiebreak_word_override(session, tournament, day_number, word)
-    return TiebreakWordQueueEntry(day_number=day_number, word=word, editable=True)
+    return TiebreakWordQueueEntry(day_number=day_number, word=word, editable=True, length=len(word))
 
 
 @router.post("/tournaments/{tournament_id}/tiebreak-words/{day_number}/reroll", response_model=TiebreakWordQueueEntry)
@@ -1212,7 +1229,24 @@ async def reroll_tiebreak_word_slot(
         raise HTTPException(status_code=400, detail="Этот раунд уже наступил — слово менять поздно")
 
     word = await tiebreak.reroll_tiebreak_word(session, tournament, day_number)
-    return TiebreakWordQueueEntry(day_number=day_number, word=word, editable=True)
+    return TiebreakWordQueueEntry(day_number=day_number, word=word, editable=True, length=len(word))
+
+
+@router.post("/tournaments/{tournament_id}/tiebreak-words/{day_number}/length", response_model=TiebreakWordQueueEntry)
+async def set_tiebreak_slot_length(
+    tournament_id: int, day_number: int, payload: SlotLengthRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """Сменить длину слова ещё не наступившего слота очереди тай-брейка: система
+    подбирает новое слово нужной длины."""
+    if payload.length not in SUPPORTED_LENGTHS:
+        raise HTTPException(status_code=400, detail="Длина слова должна быть 5, 6 или 7 букв")
+    tournament = await _require_tiebreak_tournament(session, tournament_id)
+    if await crud.get_daily_word_by_day(session, tournament_id, day_number) is not None:
+        raise HTTPException(status_code=400, detail="Этот раунд уже наступил — слово менять поздно")
+
+    word = await tiebreak.reroll_tiebreak_word(session, tournament, day_number, length=payload.length)
+    return TiebreakWordQueueEntry(day_number=day_number, word=word, editable=True, length=len(word))
 
 
 @router.get("/tournaments/{tournament_id}/tiebreak-results", response_model=TiebreakResultsOut)

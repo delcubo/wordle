@@ -250,14 +250,17 @@ async def get_entry_place(session: AsyncSession, tournament: Tournament, entry_i
     return row["place"] if row else None
 
 
-async def reroll_tiebreak_word(session: AsyncSession, tournament: Tournament, day_number: int) -> str:
+async def reroll_tiebreak_word(
+    session: AsyncSession, tournament: Tournament, day_number: int, length: int | None = None
+) -> str:
     """"Предложить другое слово" для ещё не наступившего слота очереди tiebreak
     (см. crud.get_tiebreak_word_queue) — как и у остальных режимов, реролл
     недетерминирован (иначе повторное нажатие всегда возвращало бы то же
     слово)."""
     already_used = await crud.get_all_used_words(session, tournament.id)
     current = (tournament.word_overrides or {}).get(str(day_number))
-    length = len(current) if current else tiebreak_length(tournament, day_number)  # длина слота сохраняется
+    if length is None:  # по умолчанию длина слота сохраняется
+        length = len(current) if current else tiebreak_length(tournament, day_number)
     new_word = pick_alternative_word(already_used, exclude=current, length=length)
     await crud.set_tiebreak_word_override(session, tournament, day_number, new_word)
     return new_word

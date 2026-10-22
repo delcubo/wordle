@@ -27,6 +27,116 @@ function useLatest(value) {
 
 const DEFAULT_SCORING = { "1": 10, "2": 5, "3": 4, "4": 3, "5": 2, "6": 1 };
 const TYPE_LABEL = { standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат", endless: "Бессрочная игра", tiebreak: "Тай-брейк", marathon: "Марафон" };
+const LENGTHS = [5, 6, 7];
+const isWordLength = (w) => LENGTHS.includes((w || "").trim().length);
+
+// Выбор длины слова (5/6/7); пустое значение — «как базовая» (если задан allowEmpty).
+function LengthSelect({ value, onChange, disabled, allowEmpty, emptyLabel = "—", title, style }) {
+  return (
+    <select
+      value={value ?? ""} disabled={disabled} title={title}
+      onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
+      style={{ ...inputStyle, padding: "2px 4px", fontSize: 12, width: "auto", ...style }}
+    >
+      {allowEmpty && <option value="">{emptyLabel}</option>}
+      {LENGTHS.map((n) => <option key={n} value={n}>{n} букв</option>)}
+    </select>
+  );
+}
+
+// Сохраняет один раздел плана длин (marathon / playoff / tiebreak), не трогая остальные.
+function saveWordPlanPart(tournament, key, value) {
+  const plan = { ...(tournament.word_plan || {}) };
+  if (value == null) delete plan[key];
+  else plan[key] = value;
+  return api(`/api/admin/tournaments/${tournament.id}/word-plan`, { method: "PUT", body: JSON.stringify({ plan }) });
+}
+
+// Таблица «строка × номер слота» с выбором длины в каждой клетке. Пустая клетка — базовая длина
+// розыгрыша. plan: { ключ_строки: [длины...] }; onSave получает такой же объект (или null, если
+// везде пусто). Ключи плана, которых нет среди строк, сохраняются как были.
+function LengthPlanGrid({ title, hint, colLabel, rows, slots, plan, base, onSave }) {
+  const toCells = (list) => Array.from({ length: slots }, (_, i) => (list && list.length ? list[Math.min(i, list.length - 1)] : null));
+  const planKey = JSON.stringify(plan || {}) + "|" + rows.map((r) => r.key).join(",");
+  const [open, setOpen] = useState(false);
+  const [cells, setCells] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const next = {};
+    rows.forEach((r) => { next[r.key] = toCells(plan?.[r.key]); });
+    setCells(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planKey]);
+
+  function setCell(key, i, value) {
+    setSaved(false);
+    setCells((prev) => ({ ...prev, [key]: prev[key].map((c, j) => (j === i ? value : c)) }));
+  }
+
+  async function handleSave() {
+    setBusy(true);
+    setError("");
+    try {
+      const shown = new Set(rows.map((r) => r.key));
+      const value = {};
+      Object.entries(plan || {}).forEach(([k, list]) => { if (!shown.has(k)) value[k] = list; });
+      rows.forEach((r) => {
+        const row = cells[r.key] || [];
+        if (row.some((c) => c != null)) value[r.key] = row.map((c) => c ?? base);
+      });
+      await onSave(Object.keys(value).length ? value : null);
+      setSaved(true);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <button onClick={() => setOpen((v) => !v)} style={{ ...ghostButtonStyle, fontSize: 13 }}>
+        {open ? "▾" : "▸"} {title}
+      </button>
+      {open && (
+        <div style={{ marginTop: 8, padding: 10, border: "1px solid #3a3a3c", borderRadius: 6 }}>
+          <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>{hint}</div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: "left", opacity: 0.7 }}>
+                  <th style={thStyle}></th>
+                  {Array.from({ length: slots }, (_, i) => <th key={i} style={thStyle}>{colLabel} {i + 1}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.key} style={{ borderTop: "1px solid #2a2a2c" }}>
+                    <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>{r.label}</td>
+                    {(cells[r.key] || []).map((c, i) => (
+                      <td key={i} style={tdStyle}>
+                        <LengthSelect value={c} allowEmpty emptyLabel={`как базовая (${base})`} onChange={(n) => setCell(r.key, i, n)} />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+            <button onClick={handleSave} disabled={busy} style={{ ...buttonStyle, padding: "4px 12px", fontSize: 12 }}>Сохранить</button>
+            {saved && <span style={{ fontSize: 12, color: "#538d4e" }}>Сохранено</span>}
+            {error && <span style={{ fontSize: 12, color: "#e5484d" }}>{error}</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const STATUS_LABEL = { draft: "черновик", active: "идёт", tiebreak: "тай-брейк", playoff: "плей-офф", finished: "завершён" };
 
 async function api(path, options = {}) {
@@ -139,8 +249,8 @@ export default function AdminDashboard() {
                 {selected.type === "tiebreak" && <TiebreakWordsPanel tournament={selected} />}
                 {selected.type === "marathon" && (
                   selected.individual_words
-                    ? <MarathonIndividualWordsPanel tournament={selected} />
-                    : <MarathonWordsPanel tournament={selected} />
+                    ? <MarathonIndividualWordsPanel tournament={selected} onTournamentChanged={refreshTournaments} />
+                    : <MarathonWordsPanel tournament={selected} onTournamentChanged={refreshTournaments} />
                 )}
                 {selected.type === "marathon" && <MarathonStandingsPanel tournament={selected} />}
                 {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <TodayWordPanel tournament={selected} />}
@@ -148,9 +258,9 @@ export default function AdminDashboard() {
                 {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordHistoryPanel tournament={selected} />}
                 {selected.type === "tiebreak" && <TiebreakResultsPanel tournament={selected} />}
                 {selected.duration_days != null && <StandingsPanel tournament={selected} />}
-                {selected.type === "championship" && <TiebreakPanel tournament={selected} />}
+                {selected.type === "championship" && <TiebreakPanel tournament={selected} onTournamentChanged={refreshTournaments} />}
                 {(selected.type === "championship" || selected.type === "knockout") && (
-                  <BracketPanel tournament={selected} />
+                  <BracketPanel tournament={selected} onTournamentChanged={refreshTournaments} />
                 )}
               </>
             ) : (
@@ -626,13 +736,13 @@ function DictionaryPanel() {
       <div style={{ ...panelStyle, maxWidth: 500, marginBottom: 16 }}>
         <h3 style={{ marginTop: 0 }}>Словарь — добавить отсутствующее слово</h3>
         <p style={{ opacity: 0.7, fontSize: 13, marginTop: -4 }}>
-          Если игрок ввёл существительное в именительном падеже из 5 букв, а
+          Если игрок ввёл существительное в именительном падеже из 5–7 букв, а
           игра его не приняла — добавьте его сюда. Сразу становится и валидной
           попыткой, и кандидатом на будущее слово дня, без деплоя.
         </p>
         <form onSubmit={handleAddMissing} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           <input
-            placeholder="Слово из 5 букв"
+            placeholder="Слово из 5–7 букв"
             value={newAddedWord}
             onChange={(e) => setNewAddedWord(e.target.value)}
             maxLength={20}
@@ -686,7 +796,7 @@ function DictionaryPanel() {
         </p>
         <form onSubmit={handleAdd} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           <input
-            placeholder="Слово из 5 букв"
+            placeholder="Слово из 5–7 букв"
             value={newWord}
             onChange={(e) => setNewWord(e.target.value)}
             maxLength={20}
@@ -729,6 +839,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   const [wordsCount, setWordsCount] = useState(5);
   const [endDate, setEndDate] = useState("");
   const [individualWords, setIndividualWords] = useState(false);
+  const [wordLength, setWordLength] = useState(5);
   const [hashtag, setHashtag] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
@@ -819,6 +930,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           bracket_size: needsBracket ? Number(bracketSize) : null,
           words_count: type === "marathon" ? Number(wordsCount) : null,
           individual_words: type === "marathon" ? individualWords : false,
+          word_length: wordLength,
           end_date: type === "marathon" && endDate ? endDate : null,
           rounds_per_match: 1,
           hashtag: hashtag.trim() || null,
@@ -861,6 +973,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
         <div style={{ fontSize: 13, opacity: 0.7 }}>
           {TYPE_LABEL[t.type] || t.type} · {t.start_date}
           {t.duration_days != null ? ` · ${t.duration_days} дн.` : ""}
+          {t.word_length && t.word_length !== 5 ? ` · ${t.word_length} букв` : ""}
           {t.type === "marathon" && t.words_count != null ? ` · ${t.words_count} сл.${t.individual_words ? " (личные)" : ""}` : ""} · {STATUS_LABEL[t.status] || t.status}
         </div>
         {t.note && editingSettings !== t.id && (
@@ -1072,6 +1185,12 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
             <option value="marathon">Марафон (несколько слов подряд)</option>
           </select>
           <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={inputStyle} required />
+          <label style={{ fontSize: 12, opacity: 0.8 }}>
+            Длина слов{type === "marathon" || needsBracket || type === "tiebreak" ? " (базовая — по позициям можно будет менять)" : ""}
+            <select value={wordLength} onChange={(e) => setWordLength(Number(e.target.value))} style={{ ...inputStyle, display: "block", marginTop: 2 }}>
+              {LENGTHS.map((n) => <option key={n} value={n}>{n} букв{n === 5 ? " (обычная)" : ""}</option>)}
+            </select>
+          </label>
           {needsDuration && (
             <input type="number" placeholder="Длительность (дней)" value={duration} onChange={(e) => setDuration(e.target.value)} style={inputStyle} required min={1} />
           )}
@@ -1770,7 +1889,7 @@ function marathonCellLabel(c) {
   return c.solved ? String(c.attempts_used) : "X";
 }
 
-function MarathonWordsPanel({ tournament }) {
+function MarathonWordsPanel({ tournament, onTournamentChanged }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [words, setWords] = useState(null);
   const [custom, setCustom] = useState({}); // id слова -> введённое своё слово
@@ -1794,6 +1913,21 @@ function MarathonWordsPanel({ tournament }) {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tournament.id, tournament.words_count]);
+
+  async function handleLength(w, length) {
+    if (length == null || length === w.length) return;
+    setError("");
+    try {
+      await api(`/api/admin/tournaments/${tournament.id}/marathon/word-length?number=${w.day_number}`, {
+        method: "POST", body: JSON.stringify({ length }),
+      });
+      if (onTournamentChanged) await onTournamentChanged();
+      await refresh();
+    } catch (e) {
+      setError(e.message);
+      await refresh();
+    }
+  }
 
   async function handleReroll(w) {
     setError("");
@@ -1850,6 +1984,7 @@ function MarathonWordsPanel({ tournament }) {
           <tr style={{ textAlign: "left", opacity: 0.7 }}>
             <th style={thStyle}>№</th>
             <th style={thStyle}>Слово</th>
+            <th style={thStyle}>Длина</th>
             <th style={thStyle}>Игроки</th>
             <th style={thStyle}></th>
           </tr>
@@ -1863,6 +1998,11 @@ function MarathonWordsPanel({ tournament }) {
                 <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, letterSpacing: 0, textTransform: "none", opacity: 0.6 }}>
                   {w.status === "confirmed" ? "подтверждено" : "предложено системой"}
                 </span>
+              </td>
+              <td style={tdStyle}>
+                {w.editable
+                  ? <LengthSelect value={w.length} onChange={(n) => handleLength(w, n)} title="Сменить длину слова: система подберёт новое слово" />
+                  : `${w.length} букв`}
               </td>
               <td style={{ ...tdStyle, opacity: 0.8 }}>начали {w.started} · прошли {w.finished}</td>
               <td style={tdStyle}>
@@ -1879,12 +2019,12 @@ function MarathonWordsPanel({ tournament }) {
                       🚫 Исключить и другое
                     </button>
                     <input
-                      placeholder="Своё слово" maxLength={5} value={custom[w.id] || ""}
+                      placeholder="Своё слово" maxLength={7} value={custom[w.id] || ""}
                       onChange={(e) => setCustom((prev) => ({ ...prev, [w.id]: e.target.value }))}
                       style={{ ...inputStyle, padding: "2px 6px", fontSize: 12, width: 90 }}
                     />
                     <button
-                      onClick={() => handleReplace(w)} disabled={(custom[w.id] || "").trim().length !== 5}
+                      onClick={() => handleReplace(w)} disabled={!isWordLength(custom[w.id] || "")}
                       style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}
                     >
                       Заменить
@@ -1903,7 +2043,7 @@ function MarathonWordsPanel({ tournament }) {
   );
 }
 
-function MarathonIndividualWordsPanel({ tournament }) {
+function MarathonIndividualWordsPanel({ tournament, onTournamentChanged }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [players, setPlayers] = useState(null);
   const [error, setError] = useState("");
@@ -1954,6 +2094,17 @@ function MarathonIndividualWordsPanel({ tournament }) {
     return run(() => api(`/api/admin/words/${w.id}/reroll`, { method: "POST" }));
   }
 
+  // Длина слова с номером `number` — сразу у всех игроков, которые это слово ещё не начали.
+  function handleColumnLength(number, length) {
+    if (length == null) return;
+    return run(async () => {
+      await api(`/api/admin/tournaments/${tournament.id}/marathon/word-length?number=${number}`, {
+        method: "POST", body: JSON.stringify({ length }),
+      });
+      if (onTournamentChanged) await onTournamentChanged();
+    });
+  }
+
   function handleExcludeAndReroll(w) {
     return run(async () => {
       await api("/api/admin/dictionary/excluded", { method: "POST", body: JSON.stringify({ word: w.word }) });
@@ -1992,7 +2143,8 @@ function MarathonIndividualWordsPanel({ tournament }) {
     finished: { border: "1px solid #538d4e", background: "rgba(83,141,78,0.18)" },
   };
   const STATE_TITLE = { new: "не начато — можно менять", started: "идёт — менять поздно", finished: "пройдено — менять поздно" };
-  const cellText = (w) => (showWords ? w.word : "•••••");
+  const cellText = (w) => (showWords ? w.word : "•".repeat(w.length || 5));
+  const columnLength = (i) => (tournament.word_plan?.marathon?.[i]) ?? tournament.word_length ?? 5;
 
   return (
     <div style={{ ...panelStyle, marginTop: 20, border: "1px solid #b59f3b" }}>
@@ -2008,7 +2160,8 @@ function MarathonIndividualWordsPanel({ tournament }) {
       </div>
       <p style={{ fontSize: 13, opacity: 0.7 }}>
         Это ответы — не показывайте этот экран участникам. У каждого игрока свой набор из {count} слов; слово можно
-        заменить, пока этот игрок его не начал. Автоматически подобранные слова не повторяются между игроками, при
+        заменить, пока этот игрок его не начал. Длину слова (5–7 букв) можно задать в шапке столбца — она
+        сменится у всех, кто это слово ещё не начал. Автоматически подобранные слова не повторяются между игроками, при
         ручной замене повторы допустимы. Нажмите на ячейку, чтобы изменить слово.
       </p>
       {players.length === 0 ? (
@@ -2025,7 +2178,17 @@ function MarathonIndividualWordsPanel({ tournament }) {
                 <tr style={{ textAlign: "left", opacity: 0.7 }}>
                   <th style={{ ...thStyle, position: "sticky", left: 0, background: "#1c1c1e", zIndex: 1 }}>Игрок</th>
                   {Array.from({ length: count }, (_, i) => (
-                    <th key={i} style={{ ...thStyle, textAlign: "center" }}>{i + 1}</th>
+                    <th key={i} style={{ ...thStyle, textAlign: "center" }}>
+                      {i + 1}
+                      <div>
+                        <LengthSelect
+                          value={columnLength(i)} disabled={busy}
+                          onChange={(n) => handleColumnLength(i + 1, n)}
+                          title={`Длина слова №${i + 1} у всех игроков, которые его ещё не начали`}
+                          style={{ fontSize: 11, padding: "1px 2px" }}
+                        />
+                      </div>
+                    </th>
                   ))}
                   <th style={thStyle}></th>
                 </tr>
@@ -2089,11 +2252,11 @@ function MarathonIndividualWordsPanel({ tournament }) {
                     🚫 Исключить и другое
                   </button>
                   <input
-                    placeholder="Своё слово" maxLength={5} value={custom} onChange={(e) => setCustom(e.target.value)}
+                    placeholder="Своё слово" maxLength={7} value={custom} onChange={(e) => setCustom(e.target.value)}
                     style={{ ...inputStyle, padding: "3px 6px", fontSize: 12, width: 100 }}
                   />
                   <button
-                    onClick={() => handleReplace(selectedWord)} disabled={busy || custom.trim().length !== 5}
+                    onClick={() => handleReplace(selectedWord)} disabled={busy || !isWordLength(custom)}
                     style={{ ...ghostButtonStyle, fontSize: 12 }}
                   >
                     Заменить
@@ -2418,10 +2581,10 @@ function TodayWordPanel({ tournament }) {
           <button onClick={() => handleChange(`/api/admin/words/${word.id}/reroll`)} style={ghostButtonStyle}>
             Предложить другое слово
           </button>
-          <input placeholder="Или ввести своё слово" value={override} onChange={(e) => setOverride(e.target.value)} style={inputStyle} maxLength={5} />
+          <input placeholder="Или ввести своё слово" value={override} onChange={(e) => setOverride(e.target.value)} style={inputStyle} maxLength={7} />
           <button
             onClick={() => handleChange(`/api/admin/words/${word.id}/confirm`, { override_word: override.trim().toLowerCase() })}
-            disabled={override.trim().length !== 5}
+            disabled={!isWordLength(override)}
             style={ghostButtonStyle}
           >
             Заменить
@@ -2520,8 +2683,8 @@ function WordConfirmPanel({ tournament }) {
         >
           🚫 Исключить и предложить другое
         </button>
-        <input placeholder="Или ввести своё слово" value={override} onChange={(e) => setOverride(e.target.value)} style={inputStyle} maxLength={5} />
-        <button onClick={() => handleConfirm(true)} disabled={override.trim().length !== 5} style={ghostButtonStyle}>Заменить</button>
+        <input placeholder="Или ввести своё слово" value={override} onChange={(e) => setOverride(e.target.value)} style={inputStyle} maxLength={7} />
+        <button onClick={() => handleConfirm(true)} disabled={!isWordLength(override)} style={ghostButtonStyle}>Заменить</button>
       </div>
       {error && <div style={{ color: "#e5484d", marginTop: 8 }}>{error}</div>}
     </div>
@@ -2616,6 +2779,19 @@ function TiebreakWordsPanel({ tournament }) {
     }
   }
 
+  async function handleLength(slot, length) {
+    if (length == null || length === slot.length) return;
+    setError("");
+    try {
+      await api(`/api/admin/tournaments/${tournament.id}/tiebreak-words/${slot.day_number}/length`, {
+        method: "POST", body: JSON.stringify({ length }),
+      });
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   async function handleSetWord(dayNumber) {
     setError("");
     try {
@@ -2650,6 +2826,7 @@ function TiebreakWordsPanel({ tournament }) {
             <span style={{ fontSize: 16, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, width: 110 }}>{slot.word}</span>
             {slot.editable ? (
               <>
+                <LengthSelect value={slot.length} onChange={(n) => handleLength(slot, n)} title="Сменить длину слова: система подберёт новое слово" />
                 <button onClick={() => handleReroll(slot.day_number)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
                   Предложить другое
                 </button>
@@ -2658,11 +2835,11 @@ function TiebreakWordsPanel({ tournament }) {
                   value={overrides[slot.day_number] || ""}
                   onChange={(e) => setOverrides((prev) => ({ ...prev, [slot.day_number]: e.target.value }))}
                   style={{ ...inputStyle, fontSize: 12, width: 100 }}
-                  maxLength={5}
+                  maxLength={7}
                 />
                 <button
                   onClick={() => handleSetWord(slot.day_number)}
-                  disabled={(overrides[slot.day_number] || "").trim().length !== 5}
+                  disabled={!isWordLength(overrides[slot.day_number])}
                   style={{ ...ghostButtonStyle, fontSize: 12 }}
                 >
                   Заменить
@@ -3337,7 +3514,7 @@ function StandingsPanel({ tournament }) {
   );
 }
 
-function TiebreakPanel({ tournament }) {
+function TiebreakPanel({ tournament, onTournamentChanged }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [rounds, setRounds] = useState(null);
   const [error, setError] = useState("");
@@ -3409,6 +3586,16 @@ function TiebreakPanel({ tournament }) {
           <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
         </div>
       </div>
+      <LengthPlanGrid
+        title="Длины слов по раундам тай-брейка" colLabel="Раунд" slots={3} base={tournament.word_length || 5}
+        hint="Длина слова раунда тай-брейка по его номеру в цепочке (после ничьей — следующий раунд). Действует на ещё не созданные раунды; дальше повторяется последнее значение."
+        rows={[{ key: "tiebreak", label: "Длина слова" }]}
+        plan={tournament.word_plan?.tiebreak ? { tiebreak: tournament.word_plan.tiebreak } : null}
+        onSave={async (value) => {
+          await saveWordPlanPart(tournament, "tiebreak", value ? value.tiebreak : null);
+          if (onTournamentChanged) await onTournamentChanged();
+        }}
+      />
       {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
       {rounds && rounds.length === 0 && (
         <div style={{ opacity: 0.7, fontSize: 13 }}>
@@ -3547,6 +3734,19 @@ function MatchWordQueue({ matchId }) {
     }
   }
 
+  async function handleLength(q, length) {
+    if (length == null || length === q.length) return;
+    setError("");
+    try {
+      await api(`/api/admin/bracket/matches/${matchId}/words/${q.game_number}/length`, {
+        method: "POST", body: JSON.stringify({ length }),
+      });
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   async function handleReroll(gameNumber) {
     setError("");
     try {
@@ -3571,7 +3771,7 @@ function MatchWordQueue({ matchId }) {
           {editingNum === q.game_number ? (
             <>
               <input
-                autoFocus value={wordForm} onChange={(e) => setWordForm(e.target.value)} maxLength={5}
+                autoFocus value={wordForm} onChange={(e) => setWordForm(e.target.value)} maxLength={7}
                 style={{ ...inputStyle, padding: "2px 6px", fontSize: 12, width: 80 }}
               />
               <button onClick={() => handleSet(q.game_number)} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
@@ -3582,6 +3782,7 @@ function MatchWordQueue({ matchId }) {
               <span style={{ textTransform: "uppercase", letterSpacing: 1, fontSize: 13 }}>{q.word}</span>
               {q.editable && (
                 <>
+                  <LengthSelect value={q.length} onChange={(n) => handleLength(q, n)} title="Сменить длину слова: система подберёт новое слово" />
                   <button
                     onClick={() => { setEditingNum(q.game_number); setWordForm(q.word); }}
                     style={{ ...ghostButtonStyle, padding: "1px 6px", fontSize: 11 }}
@@ -3604,7 +3805,7 @@ function MatchWordQueue({ matchId }) {
   );
 }
 
-function BracketPanel({ tournament }) {
+function BracketPanel({ tournament, onTournamentChanged }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [entries, setEntries] = useState([]);
   const [matches, setMatches] = useState(null);
@@ -3699,6 +3900,25 @@ function BracketPanel({ tournament }) {
         <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
       </div>
       {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
+
+      {tournament.bracket_size >= 2 && (() => {
+        const stages = Math.round(Math.log2(tournament.bracket_size));
+        const rows = Array.from({ length: stages }, (_, i) => ({
+          key: String(i + 1), label: roundLabel(tournament.bracket_size / 2 ** (i + 1)),
+        }));
+        if (tournament.third_place_match) rows.push({ key: "third", label: "Игра за 3 место" });
+        return (
+          <LengthPlanGrid
+            title="Длины слов по стадиям" colLabel="Игра" slots={5} base={tournament.word_length || 5} rows={rows}
+            hint="Длина слова для каждой игры пары на каждой стадии (игра 2+ нужна только при ничьей). Действует на ещё не созданные слова; уже заданные слова пар меняются в «очереди слов» пары."
+            plan={tournament.word_plan?.playoff || null}
+            onSave={async (value) => {
+              await saveWordPlanPart(tournament, "playoff", value);
+              if (onTournamentChanged) await onTournamentChanged();
+            }}
+          />
+        );
+      })()}
 
       {!bracketExists && tournament.type === "championship" && (
         <button onClick={handleGenerate} style={buttonStyle}>Сгенерировать сетку по итогам</button>

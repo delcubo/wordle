@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models import Tournament, Attempt, DailyWord, DailyWordStatus
 from api.dictionary import pick_word_for_day, pick_word_for_label, pick_alternative_word
 from api.word_plan import marathon_length
+from api.dictionary import SUPPORTED_LENGTHS
 from api.tournament_time import today
 from api import crud
 
@@ -363,6 +364,44 @@ async def apply_lengths(session: AsyncSession, tournament: Tournament) -> int:
             raise NotEnoughWords("В словаре не хватает слов нужной длины")
         used.add(new_word)
         dw.word = new_word
+        session.add(dw)
+        replaced += 1
+    await session.commit()
+    return replaced
+
+
+async def set_position_length(session: AsyncSession, tournament: Tournament, number: int, length: int) -> int:
+    """Явная смена длины слова с данным номером (у всех участников при личных
+    наборах): записывает её в план длин (word_plan["marathon"]) и заменяет слова
+    этой позиции, которые ещё никто не начал, словами нужной длины — в отличие от
+    apply_lengths, и подтверждённые/ручные тоже (админ меняет длину сознательно).
+    Возвращает, сколько слов заменено."""
+    count = tournament.words_count or 0
+    if not 1 <= number <= count:
+        raise ValueError("Нет слова с таким номером")
+    if length not in SUPPORTED_LENGTHS:
+        raise ValueError("Длина слова должна быть 5, 6 или 7 букв")
+    plan = dict(tournament.word_plan or {})
+    lengths = list(plan.get("marathon") or [])
+    while len(lengths) < count:
+        lengths.append(marathon_length(tournament, len(lengths) + 1))
+    lengths[number - 1] = length
+    plan["marathon"] = lengths
+    tournament.word_plan = plan
+    session.add(tournament)
+
+    used = await crud._get_used_words(session, tournament.id)
+    replaced = 0
+    for dw in await crud.list_daily_words(session, tournament.id):
+        if dw.day_number != number or len(dw.word) == length or await crud.daily_word_has_attempts(session, dw.id):
+            continue
+        try:
+            new_word = pick_alternative_word(used, exclude=dw.word, length=length)
+        except RuntimeError:
+            raise NotEnoughWords("В словаре не хватает слов нужной длины")
+        used.add(new_word)
+        dw.word = new_word
+        dw.status = DailyWordStatus.suggested
         session.add(dw)
         replaced += 1
     await session.commit()
