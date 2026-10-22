@@ -1,27 +1,40 @@
 """
-Загрузка словаря ответов и выбор слова дня.
+Загрузка словарей и выбор слова дня — для слов из 5, 6 и 7 букв.
 
-Один и тот же отфильтрованный список (api/data/answer_words.txt) используется
-и для выбора слова дня, и для проверки вводимых попыток — игрок может ввести
-только то, что само могло бы оказаться загаданным словом (существительное в
-именительном падеже, без словоформ, других частей речи, имён собственных).
+Для каждой длины два списка:
+  - ответы (load_words) — слова, которые система может загадать;
+  - допустимые попытки (is_valid_word) — всё, что игрок может ввести; всегда
+    включают ответы.
 
-Список получен из широкого исходного словаря (26 471 слово со всеми
-словоформами, источник — https://github.com/mediahope/Wordle-Russian-Dictionary)
-морфологическим анализом — см. scripts/build_answer_words.py и лежащий рядом
-с ним исходник scripts/data/russian_words.txt, если понадобится пересобрать
-список заново.
+5 букв: ответы — api/data/answer_words.txt (+ ручные дополнения), допустимые
+попытки — api/data/valid_5.txt (все существительные в начальной форме) плюс
+ответы. 6 и 7 букв: api/data/answers_N.txt и api/data/valid_N.txt — см.
+scripts/build_word_lists.py (сборка прямо из морфологического словаря). Ручные
+дополнения (answer_words_extra.txt), слова из админки (таблица AddedWord) и
+исключения (excluded_words.txt, ExcludedWord) общие для всех длин: слово
+относится к своей длине по числу букв.
+
+Исходный список ответов на 5 букв получен из широкого словаря (26 471 слово со
+всеми словоформами, источник — https://github.com/mediahope/Wordle-Russian-Dictionary)
+морфологическим анализом — см. scripts/build_answer_words.py и лежащий рядом с
+ним исходник scripts/data/russian_words.txt.
 """
 import hashlib
 import os
 import random
 
-_WORDS_PATH = os.path.join(os.path.dirname(__file__), "data", "answer_words.txt")
-_EXTRA_WORDS_PATH = os.path.join(os.path.dirname(__file__), "data", "answer_words_extra.txt")
-_EXCLUDED_WORDS_PATH = os.path.join(os.path.dirname(__file__), "data", "excluded_words.txt")
+SUPPORTED_LENGTHS = (5, 6, 7)
+DEFAULT_LENGTH = 5
 
-_words_cache: list[str] | None = None
-_normalized_index_cache: dict[str, str] | None = None
+_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+_WORDS_PATH = os.path.join(_DATA_DIR, "answer_words.txt")  # ответы на 5 букв
+_EXTRA_WORDS_PATH = os.path.join(_DATA_DIR, "answer_words_extra.txt")
+_EXCLUDED_WORDS_PATH = os.path.join(_DATA_DIR, "excluded_words.txt")
+
+# длина -> список ответов
+_words_cache: dict[int, list[str]] = {}
+# длина -> {normalize_yo(слово): каноническое написание} по всем допустимым попыткам
+_normalized_index_cache: dict[int, dict[str, str]] = {}
 _file_excluded_cache: frozenset[str] | None = None
 
 
@@ -30,18 +43,25 @@ def _read_word_list(path: str) -> list[str]:
         return [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
 
-def load_words() -> list[str]:
+def _check_length(length: int) -> int:
+    if length not in SUPPORTED_LENGTHS:
+        raise ValueError(f"Длина слова {length} не поддерживается (доступно: {SUPPORTED_LENGTHS})")
+    return length
+
+
+def load_words(length: int = DEFAULT_LENGTH) -> list[str]:
     """
-    Основной автособранный список (answer_words.txt) плюс ручные точечные
-    дополнения (answer_words_extra.txt) — слова, которых не было в исходных
-    26 471 и которые обнаружились по факту игры (см. пункт бэклога про
-    неполноту словаря). Пересобирать answer_words.txt заново из-за одного
-    найденного слова не нужно — достаточно дописать строку в extra-файл.
+    Список ответов для длины: основной автособранный список плюс ручные точечные
+    дополнения (answer_words_extra.txt) — слова, которых не было в исходном
+    словаре и которые обнаружились по факту игры. Пересобирать списки заново из-за
+    одного найденного слова не нужно — достаточно дописать строку в extra-файл.
     """
-    global _words_cache
-    if _words_cache is None:
-        _words_cache = _read_word_list(_WORDS_PATH) + _read_word_list(_EXTRA_WORDS_PATH)
-    return _words_cache
+    _check_length(length)
+    if length not in _words_cache:
+        base_path = _WORDS_PATH if length == 5 else os.path.join(_DATA_DIR, f"answers_{length}.txt")
+        extra = [w for w in _read_word_list(_EXTRA_WORDS_PATH) if len(w) == length]
+        _words_cache[length] = _read_word_list(base_path) + extra
+    return _words_cache[length]
 
 
 def load_file_excluded_words() -> frozenset[str]:
@@ -67,13 +87,21 @@ def normalize_yo(word: str) -> str:
     return word.replace("ё", "е")
 
 
-def _normalized_index() -> dict[str, str]:
+def _normalized_index(length: int = DEFAULT_LENGTH) -> dict[str, str]:
     """normalize_yo(слово) -> каноническое написание из словаря (то, что реально
-    хранится и показывается игроку как ответ)."""
-    global _normalized_index_cache
-    if _normalized_index_cache is None:
-        _normalized_index_cache = {normalize_yo(w): w for w in load_words()}
-    return _normalized_index_cache
+    хранится и показывается игроку как ответ). Допустимые попытки: все
+    существительные длины (valid_N.txt) плюс ответы — написание из ответов главнее."""
+    _check_length(length)
+    if length not in _normalized_index_cache:
+        index: dict[str, str] = {}
+        valid_path = os.path.join(_DATA_DIR, f"valid_{length}.txt")
+        if os.path.exists(valid_path):
+            for w in _read_word_list(valid_path):
+                index[normalize_yo(w)] = w
+        for w in load_words(length):
+            index[normalize_yo(w)] = w
+        _normalized_index_cache[length] = index
+    return _normalized_index_cache[length]
 
 
 def register_added_word(word: str) -> None:
@@ -86,34 +114,47 @@ def register_added_word(word: str) -> None:
     api/main.py из БД, а при добавлении через админку вызывается сразу же,
     без перезапуска. Не трогает файлы репозитория (в отличие от
     answer_words_extra.txt) — переживает только до следующего деплоя/рестарта
-    процесса, для чего и нужна БД как источник правды.
+    процесса, для чего и нужна БД как источник правды. Длина — по самому слову.
     """
-    words = load_words()  # гарантирует, что кэш уже инициализирован
+    if len(word) not in SUPPORTED_LENGTHS:
+        return
+    words = load_words(len(word))  # гарантирует, что кэш уже инициализирован
     if word in words:
         return
     words.append(word)
-    _normalized_index()[normalize_yo(word)] = word
+    _normalized_index(len(word))[normalize_yo(word)] = word
 
 
 def unregister_added_word(word: str) -> None:
     """Обратное действие — админ удалил ранее добавленное слово из панели."""
-    words = load_words()
+    if len(word) not in SUPPORTED_LENGTHS:
+        return
+    words = load_words(len(word))
     if word in words:
         words.remove(word)
-    normalized = _normalized_index()
+    normalized = _normalized_index(len(word))
     if normalized.get(normalize_yo(word)) == word:
         del normalized[normalize_yo(word)]
 
 
-def is_valid_word(word: str) -> bool:
-    """Проверка и вводимой попытки, и кандидата на слово дня — один и тот же список."""
-    return normalize_yo(word.lower()) in _normalized_index()
+def is_valid_word(word: str, length: int | None = None) -> bool:
+    """Допустимая попытка заданной длины (по умолчанию — по длине самого слова).
+    Слово другой длины недопустимо."""
+    w = normalize_yo(word.lower())
+    length = len(w) if length is None else length
+    if length not in SUPPORTED_LENGTHS or len(w) != length:
+        return False
+    return w in _normalized_index(length)
 
 
-def canonical_word(word: str) -> str | None:
+def canonical_word(word: str, length: int | None = None) -> str | None:
     """Каноническое написание словарного слова (с ё, если оно у него есть) для
     введённого варианта (с е или ё) — None, если такого слова в словаре нет."""
-    return _normalized_index().get(normalize_yo(word.lower()))
+    w = normalize_yo(word.lower())
+    length = len(w) if length is None else length
+    if length not in SUPPORTED_LENGTHS or len(w) != length:
+        return None
+    return _normalized_index(length).get(w)
 
 
 def _seeded_rng(label: str) -> random.Random:
@@ -130,15 +171,16 @@ def _seeded_rng(label: str) -> random.Random:
     return random.Random(int.from_bytes(digest, "big"))
 
 
-
-def pick_word_for_day(tournament_id: int, day_number: int, already_used: set[str]) -> str:
+def pick_word_for_day(
+    tournament_id: int, day_number: int, already_used: set[str], length: int = DEFAULT_LENGTH
+) -> str:
     """
     Детерминированный выбор слова дня: одинаковый tournament_id + day_number всегда
     дают одно и то же слово (не нужно хранить выбор заранее и он воспроизводим),
     но при этом слово не повторяется в рамках розыгрыша (already_used — уже
     использованные слова в этом розыгрыше, передаются из БД).
     """
-    words = load_words()
+    words = load_words(length)
     rng = _seeded_rng(f"day:{tournament_id}:{day_number}")
     candidates = [w for w in words if w not in already_used]
     if not candidates:
@@ -146,13 +188,13 @@ def pick_word_for_day(tournament_id: int, day_number: int, already_used: set[str
     return rng.choice(candidates)
 
 
-def pick_word_for_label(label: str, already_used: set[str]) -> str:
+def pick_word_for_label(label: str, already_used: set[str], length: int = DEFAULT_LENGTH) -> str:
     """
     Детерминированный выбор слова по произвольной метке сида (например,
     "marathon:<розыгрыш>:<участник>:<номер>" для личных наборов слов марафона) —
     так же, как pick_word_for_day: слово не повторяет already_used.
     """
-    words = load_words()
+    words = load_words(length)
     rng = _seeded_rng(label)
     candidates = [w for w in words if w not in already_used]
     if not candidates:
@@ -160,7 +202,9 @@ def pick_word_for_label(label: str, already_used: set[str]) -> str:
     return rng.choice(candidates)
 
 
-def pick_word_for_match(match_id: int, game_number: int, already_used: set[str]) -> str:
+def pick_word_for_match(
+    match_id: int, game_number: int, already_used: set[str], length: int = DEFAULT_LENGTH
+) -> str:
     """
     Детерминированный выбор слова для конкретной игры внутри пары сетки —
     аналог pick_word_for_day, но сид строится из id пары и номера игры (у пар
@@ -172,7 +216,7 @@ def pick_word_for_match(match_id: int, game_number: int, already_used: set[str])
     использованных слов (замена слова соседней игры пары, слово из другой
     пары) сдвигало и все остальные превью очереди.
     """
-    words = load_words()
+    words = load_words(length)
     rng = _seeded_rng(f"match:{match_id}:{game_number}")
     for _ in range(200):
         word = words[rng.randrange(len(words))]
@@ -184,14 +228,14 @@ def pick_word_for_match(match_id: int, game_number: int, already_used: set[str])
     return rng.choice(candidates)
 
 
-def pick_alternative_word(already_used: set[str], exclude: str | None = None) -> str:
+def pick_alternative_word(already_used: set[str], exclude: str | None = None, length: int = DEFAULT_LENGTH) -> str:
     """
     Выбор нового случайного предложения взамен текущего (кнопка "предложить
     другое слово" в админке) — в отличие от pick_word_for_day, недетерминирован:
     иначе повторное нажатие всегда возвращало бы то же самое слово.
     exclude — текущее предложенное слово, чтобы не предложить его же снова.
     """
-    words = load_words()
+    words = load_words(length)
     excluded = already_used | ({exclude} if exclude else set())
     candidates = [w for w in words if w not in excluded]
     if not candidates:
@@ -199,16 +243,22 @@ def pick_alternative_word(already_used: set[str], exclude: str | None = None) ->
     return random.choice(candidates)
 
 
-def validate_manual_word(word: str, already_used: set[str]) -> str | None:
+def validate_manual_word(word: str, already_used: set[str], length: int | None = None) -> str | None:
     """
     Проверка слова, которое администратор вводит вручную взамен предложенного.
     Возвращает текст ошибки (для показа в UI) или None, если всё в порядке.
+    length=None — допустима любая поддерживаемая длина (ручное слово главнее
+    плана длин); иначе слово должно быть ровно такой длины.
     """
     word = word.lower().strip()
-    if len(word) != 5:
-        return "Слово должно быть из 5 букв"
-    if not is_valid_word(word):
-        return "Слово должно быть существительным в именительном падеже из словаря ответов"
+    if length is None:
+        if len(word) not in SUPPORTED_LENGTHS:
+            return "Слово должно быть из 5, 6 или 7 букв"
+        length = len(word)
+    elif len(word) != length:
+        return f"Слово должно быть из {length} букв"
+    if not is_valid_word(word, length):
+        return "Слово должно быть существительным в именительном падеже из словаря"
     already_used_normalized = {normalize_yo(w) for w in already_used}
     if normalize_yo(word) in already_used_normalized:
         return "Это слово уже использовалось в этом розыгрыше"

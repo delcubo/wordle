@@ -98,6 +98,7 @@ class TournamentConfigRequest(BaseModel):
     words_count: int | None = None  # только marathon: сколько слов подряд
     end_date: date | None = None  # только marathon: последний день игры (необязательно)
     individual_words: bool = False  # только marathon: у каждого участника свой набор слов
+    word_length: int = 5  # базовая длина слов: 5, 6 или 7 (выбирается при создании)
 
 
 class TournamentOut(BaseModel):
@@ -121,6 +122,8 @@ class TournamentOut(BaseModel):
     words_count: int | None = None  # только marathon
     end_date: date | None = None  # только marathon
     individual_words: bool = False  # только marathon
+    word_length: int = 5
+    word_plan: dict | None = None  # длины слов по позициям (см. api/word_plan.py)
 
     class Config:
         from_attributes = True
@@ -238,6 +241,7 @@ class TiebreakWordQueueEntry(BaseModel):
     day_number: int
     word: str
     editable: bool
+    length: int = 5
 
 
 class SetTiebreakWordRequest(BaseModel):
@@ -312,6 +316,7 @@ class TodayWordStatus(BaseModel):
     words_total: int | None = None
     marathon_done: bool = False
     marathon_total_attempts: int | None = None  # сумма попыток по всем словам (неугаданное = 7)
+    word_length: int | None = None  # длина текущего слова (число колонок сетки)
 
 
 class BracketTodayStatus(BaseModel):
@@ -325,6 +330,7 @@ class BracketTodayStatus(BaseModel):
     game_number: int | None = None
     is_sudden_death: bool = False
     is_third_place: bool = False  # это игра за 3 место
+    word_length: int | None = None  # длина слова текущей игры (число колонок сетки)
     already_played: bool = False
     attempts_used: int | None = None
     solved: bool | None = None
@@ -512,6 +518,15 @@ class PlayoffWordQueueEntry(BaseModel):
     game_number: int
     word: str
     editable: bool
+    length: int = 5
+
+
+class SlotLengthRequest(BaseModel):
+    length: int  # 5, 6 или 7 — какой длины должно быть слово позиции
+
+
+class WordPlanRequest(BaseModel):
+    plan: dict | None = None  # план длин по позициям (api/word_plan.py); None/пусто — всё по базовой длине
 
 
 class SetPlayoffWordRequest(BaseModel):
@@ -550,6 +565,7 @@ class MarathonWordOut(BaseModel):
     started: int  # сколько участников уже начали это слово
     finished: int  # сколько участников его закончили
     editable: bool  # слово можно заменить: его ещё никто не начал
+    length: int = 5
 
 
 class MarathonCellOut(BaseModel):
@@ -587,6 +603,7 @@ class MarathonIndividualWordOut(BaseModel):
     state: str  # "new" — не начато, "started" — идёт, "finished" — пройдено
     editable: bool  # можно заменить: слово ещё не начато
     guesses: list[str] = []  # попытки игрока по этому слову (для подсказки при наведении)
+    length: int = 5
 
 
 class MarathonPlayerWordsOut(BaseModel):

@@ -15,6 +15,7 @@ from api.models import (
 )
 from api.dictionary import pick_word_for_day, pick_alternative_word, pick_word_for_match, load_file_excluded_words
 from api.tournament_time import today, day_number_for_date, date_for_day_number
+from api.word_plan import base_length, playoff_length, tiebreak_length
 
 
 # ---------- Users (глобальная личность) ----------
@@ -546,7 +547,7 @@ async def get_or_suggest_daily_word(session: AsyncSession, tournament: Tournamen
         return existing
 
     already_used = await _get_used_words(session, tournament.id)
-    word = pick_word_for_day(tournament.id, day_number, already_used)
+    word = pick_word_for_day(tournament.id, day_number, already_used, base_length(tournament))
     daily_word = DailyWord(
         tournament_id=tournament.id,
         day_number=day_number,
@@ -584,7 +585,7 @@ async def reroll_daily_word(session: AsyncSession, daily_word: DailyWord) -> Dai
     заменить вручную или запросить ещё вариант.
     """
     already_used = await _get_used_words(session, daily_word.tournament_id)
-    daily_word.word = pick_alternative_word(already_used, exclude=daily_word.word)
+    daily_word.word = pick_alternative_word(already_used, exclude=daily_word.word, length=len(daily_word.word))
     session.add(daily_word)
     await session.commit()
     await session.refresh(daily_word)
@@ -792,8 +793,15 @@ async def create_tiebreak_round(
     """
     already_used = await _get_used_words(session, tournament.id)
     day_number = await _next_free_day_number(session, tournament.id)
+    round_number = 1  # глубина раунда в цепочке: определяет длину слова по плану
+    if previous_round_id is not None:
+        previous_round = await session.get(TiebreakRound, previous_round_id)
+        if previous_round is not None:
+            round_number = previous_round.round_number + 1
     override = (tournament.word_overrides or {}).get(str(day_number))
-    word = override if override else pick_word_for_day(tournament.id, day_number, already_used)
+    word = override if override else pick_word_for_day(
+        tournament.id, day_number, already_used, tiebreak_length(tournament, round_number)
+    )
 
     daily_word = DailyWord(
         tournament_id=tournament.id,
@@ -804,12 +812,6 @@ async def create_tiebreak_round(
     )
     session.add(daily_word)
     await session.flush()
-
-    round_number = 1
-    if previous_round_id is not None:
-        previous_round = await session.get(TiebreakRound, previous_round_id)
-        if previous_round is not None:
-            round_number = previous_round.round_number + 1
 
     tiebreak_round = TiebreakRound(
         tournament_id=tournament.id,
@@ -854,11 +856,13 @@ async def get_tiebreak_word_queue(session: AsyncSession, tournament: Tournament,
     for day_number in range(1, count + 1):
         existing = existing_by_day.get(day_number)
         if existing is not None:
-            queue.append({"day_number": day_number, "word": existing.word, "editable": False})
+            queue.append({"day_number": day_number, "word": existing.word, "editable": False, "length": len(existing.word)})
             continue
         override = overrides.get(str(day_number))
-        word = override if override else pick_word_for_day(tournament.id, day_number, already_used)
-        queue.append({"day_number": day_number, "word": word, "editable": True})
+        word = override if override else pick_word_for_day(
+            tournament.id, day_number, already_used, tiebreak_length(tournament, day_number)
+        )
+        queue.append({"day_number": day_number, "word": word, "editable": True, "length": len(word)})
     return queue
 
 
@@ -1121,7 +1125,12 @@ async def create_playoff_game(
             session.add(match)
     else:
         already_used = await get_all_used_words(session, tournament_id)
-        word = pick_word_for_match(match_id, game_number, already_used)
+        tournament = await session.get(Tournament, tournament_id)
+        length = (
+            playoff_length(tournament, match.round_number, game_number, match.is_third_place)
+            if match is not None else base_length(tournament)
+        )
+        word = pick_word_for_match(match_id, game_number, already_used, length)
     game = PlayoffGame(
         match_id=match_id,
         game_number=game_number,

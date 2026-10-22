@@ -20,6 +20,7 @@ from api.models import TournamentType, TournamentStatus, PlayoffMatchStatus
 from api.tournament_title import render_tournament_title, THIRD_PLACE_STAGE
 from api import crud, tiebreak, bracket_game, notify, marathon
 from api.report import build_report_text, build_marathon_summary_text
+from api.word_plan import base_length
 
 logger = logging.getLogger("wordle.game")
 
@@ -291,14 +292,18 @@ async def _marathon_status(session: AsyncSession, tournament, entry) -> TodayWor
         hashtag=tournament.hashtag, paused=tournament.paused, is_marathon=True, max_attempts=MAX_ATTEMPTS,
     )
     if tournament.paused:
-        return TodayWordStatus(has_word_today=False, already_played=False, **base)
+        return TodayWordStatus(has_word_today=False, already_played=False, word_length=base_length(tournament), **base)
     if not marathon.is_open(tournament):
-        return TodayWordStatus(has_word_today=False, already_played=False, **base, **_unavailable_info(tournament))
+        return TodayWordStatus(
+            has_word_today=False, already_played=False, word_length=base_length(tournament),
+            **base, **_unavailable_info(tournament),
+        )
 
     progress = await marathon.get_progress(session, tournament, entry.id)
     if progress.done:
         return TodayWordStatus(
             has_word_today=False, already_played=False, marathon_done=True, word_index=progress.total,
+            word_length=base_length(tournament),
             words_total=progress.total, marathon_total_attempts=progress.total_attempts,
             report_text=_marathon_final_text(tournament, entry, progress), **base,
         )
@@ -307,7 +312,7 @@ async def _marathon_status(session: AsyncSession, tournament, entry) -> TodayWor
     attempt = progress.attempts.get(daily_word.day_number)
     common = dict(
         has_word_today=True, already_played=False, day_number=daily_word.day_number,
-        word_index=daily_word.day_number, words_total=progress.total, **base,
+        word_index=daily_word.day_number, words_total=progress.total, word_length=len(daily_word.word), **base,
     )
     if attempt is None:
         return TodayWordStatus(**common)
@@ -442,7 +447,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             has_word_today=False, already_played=False, callsign=entry.callsign, tournament_title=tournament_title,
             base_title=tournament.title, is_endless=is_endless, hashtag=tournament.hashtag, paused=tournament.paused,
             is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=shown_tiebreak_place,
-            is_standard_report=is_standard_report,
+            is_standard_report=is_standard_report, word_length=base_length(tournament),
             **last_attempt_fields,
             **(
                 _unavailable_info(tournament, day_number_for_date(tournament.start_date, today()))
@@ -463,7 +468,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             callsign=entry.callsign, tournament_title=tournament_title, base_title=tournament.title,
             is_endless=is_endless, hashtag=tournament.hashtag,
             is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=shown_tiebreak_place,
-            is_standard_report=is_standard_report,
+            is_standard_report=is_standard_report, word_length=len(daily_word.word),
         )
 
     already_played = attempt.solved or attempt.attempts_used >= MAX_ATTEMPTS
@@ -494,7 +499,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         hashtag=tournament.hashtag,
         next_word_at=next_publish_at().isoformat() if already_played and not is_tiebreak else None,
         is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=shown_tiebreak_place,
-        is_standard_report=is_standard_report, streak_days=streak_days,
+        is_standard_report=is_standard_report, streak_days=streak_days, word_length=len(daily_word.word),
     )
 
 
@@ -502,14 +507,16 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
 async def submit_guess(payload: GuessRequest, session: AsyncSession = Depends(get_session)):
     guess = payload.guess.strip().lower()
 
-    if len(guess) != 5:
-        raise HTTPException(status_code=400, detail="Слово должно быть из 5 букв")
-    if not is_valid_word(guess):
-        raise HTTPException(status_code=400, detail="Такого слова нет в словаре")
-
     entry, tournament, daily_word = await _resolve_context(session, payload.token, payload.tournament_id)
     if daily_word is None:
         raise HTTPException(status_code=400, detail="Слово дня сегодня недоступно")
+
+    # длина догадки — длина текущего слова (у разных розыгрышей и позиций она своя)
+    length = len(daily_word.word)
+    if len(guess) != length:
+        raise HTTPException(status_code=400, detail=f"Слово должно быть из {length} букв")
+    if not is_valid_word(guess, length):
+        raise HTTPException(status_code=400, detail="Такого слова нет в словаре")
 
     # Состояние попытки хранится на сервере и привязано к entry.id — открытие той же
     # персональной ссылки с другого устройства не даёт мошеннически начать заново.
@@ -601,11 +608,6 @@ async def get_bracket_today(token: str, tournament_id: int, session: AsyncSessio
 async def submit_bracket_guess(payload: GuessRequest, session: AsyncSession = Depends(get_session)):
     guess = payload.guess.strip().lower()
 
-    if len(guess) != 5:
-        raise HTTPException(status_code=400, detail="Слово должно быть из 5 букв")
-    if not is_valid_word(guess):
-        raise HTTPException(status_code=400, detail="Такого слова нет в словаре")
-
     user = await _authenticate_user(session, payload.token)
     entry = await crud.get_entry(session, payload.tournament_id, user.id)
     if entry is None:
@@ -620,6 +622,14 @@ async def submit_bracket_guess(payload: GuessRequest, session: AsyncSession = De
     active_matches = [m for m in matches if m.status != PlayoffMatchStatus.finished]
     if not active_matches:
         raise HTTPException(status_code=400, detail="У вас сейчас нет активного матча сетки")
+
+    # длина догадки — длина слова текущей игры пары (её задаёт план длин стадии)
+    current_game = await bracket_game.get_current_game(session, active_matches[0])
+    length = len(current_game.word) if current_game is not None else base_length(tournament)
+    if len(guess) != length:
+        raise HTTPException(status_code=400, detail=f"Слово должно быть из {length} букв")
+    if not is_valid_word(guess, length):
+        raise HTTPException(status_code=400, detail="Такого слова нет в словаре")
 
     try:
         statuses, solved, attempts_used, game_over = await bracket_game.submit_guess(

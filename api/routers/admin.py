@@ -28,17 +28,20 @@ from api.schemas import (
     ThemeOut, ThemeUpdateRequest,
     ExcludedWordOut, ExcludedWordCreateRequest,
     AddedWordOut, AddedWordCreateRequest,
-    MarathonWordOut, MarathonStandingsOut, MarathonPlayerWordsOut,
+    MarathonWordOut, MarathonStandingsOut, MarathonPlayerWordsOut, SlotLengthRequest, WordPlanRequest,
 )
 from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry, PlayoffMatch, TiebreakRound
 from api.admin_auth import (
     check_password, create_session_token, require_admin, COOKIE_NAME, SESSION_MAX_AGE_SECONDS,
     client_ip, login_retry_after, record_login_failure, clear_login_failures,
 )
-from api.dictionary import validate_manual_word, canonical_word, is_valid_word, register_added_word, unregister_added_word
+from api.dictionary import (
+    validate_manual_word, canonical_word, is_valid_word, register_added_word, unregister_added_word, SUPPORTED_LENGTHS,
+)
 from api.scoring import calculate_points
 from api.tournament_time import today, day_number_for_date, effective_status
 from api import crud, tiebreak, bracket, bracket_game, notify, marathon
+from api import word_plan as wp
 from api.standings_view import compute_standings
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -131,8 +134,8 @@ async def add_excluded_word(
     На уже назначенные слова (в т.ч. сегодняшнее) и на проверку вводимых
     попыток не влияет — см. ExcludedWord."""
     word = payload.word.strip().lower()
-    if len(word) != 5:
-        raise HTTPException(status_code=400, detail="Слово должно быть из 5 букв")
+    if len(word) not in SUPPORTED_LENGTHS:
+        raise HTTPException(status_code=400, detail="Слово должно быть из 5, 6 или 7 букв")
     canonical = canonical_word(word) or word  # приводим е/ё к варианту из словаря, если слово там есть
     excluded = await crud.exclude_word(session, canonical)
     return ExcludedWordOut(id=excluded.id, word=excluded.word, excluded_at=str(excluded.excluded_at))
@@ -163,8 +166,8 @@ async def add_added_word(
     валидной попыткой, и кандидатом на будущее слово дня, без деплоя (см.
     AddedWord и dictionary.register_added_word)."""
     word = payload.word.strip().lower()
-    if len(word) != 5:
-        raise HTTPException(status_code=400, detail="Слово должно быть из 5 букв")
+    if len(word) not in SUPPORTED_LENGTHS:
+        raise HTTPException(status_code=400, detail="Слово должно быть из 5, 6 или 7 букв")
     if not all("а" <= ch <= "я" or ch == "ё" for ch in word):
         raise HTTPException(status_code=400, detail="Слово должно состоять только из русских букв")
     if is_valid_word(word):
@@ -282,6 +285,9 @@ async def create_tournament(
     if t_type == TournamentType.knockout and not payload.bracket_size:
         raise HTTPException(status_code=400, detail="Для розыгрыша на вылет нужно указать размер сетки")
 
+    if payload.word_length not in SUPPORTED_LENGTHS:
+        raise HTTPException(status_code=400, detail="Длина слов должна быть 5, 6 или 7 букв")
+
     if t_type == TournamentType.marathon:
         if payload.words_count is None or not (marathon.MIN_WORDS <= payload.words_count <= marathon.MAX_WORDS):
             raise HTTPException(
@@ -311,6 +317,7 @@ async def create_tournament(
         words_count=payload.words_count if t_type == TournamentType.marathon else None,
         end_date=payload.end_date if t_type == TournamentType.marathon else None,
         individual_words=bool(payload.individual_words) and t_type == TournamentType.marathon,
+        word_length=payload.word_length,
         skip_flag_symbol=payload.skip_flag_symbol,
         bracket_size=payload.bracket_size,
         rounds_per_match=payload.rounds_per_match,
@@ -323,6 +330,42 @@ async def create_tournament(
     await session.refresh(tournament)
     if t_type == TournamentType.marathon and not tournament.individual_words:
         await marathon.ensure_words(session, tournament)  # общие слова видны админу сразу
+    return _tournament_out(tournament)
+
+
+@router.put("/tournaments/{tournament_id}/word-plan", response_model=TournamentOut)
+async def put_word_plan(
+    tournament_id: int, payload: WordPlanRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """План длин слов по позициям (api/word_plan.py): марафон — по номеру слова,
+    плей-офф — по стадии и номеру игры, тай-брейк — по глубине раунда. Полностью
+    заменяет прежний план (пустой — сброс на базовую длину). Влияет только на ещё не
+    созданные слова; у марафона не начатые слова, предложенные системой, тут же
+    заменяются словами нужной длины, а подтверждённые/введённые вручную остаются."""
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    try:
+        plan = wp.validate_plan(payload.plan)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if plan:
+        if "marathon" in plan:
+            if tournament.type != TournamentType.marathon:
+                raise HTTPException(status_code=400, detail="План по номерам слов — только для марафона")
+            if len(plan["marathon"]) > (tournament.words_count or 0):
+                raise HTTPException(status_code=400, detail="В плане больше длин, чем слов в марафоне")
+        if "playoff" in plan and tournament.type not in (TournamentType.championship, TournamentType.knockout):
+            raise HTTPException(status_code=400, detail="План по стадиям — только для розыгрышей с сеткой плей-офф")
+        if "tiebreak" in plan and tournament.type not in (TournamentType.tiebreak, TournamentType.championship):
+            raise HTTPException(status_code=400, detail="План по раундам — только для тай-брейка")
+    tournament.word_plan = plan
+    session.add(tournament)
+    await session.commit()
+    if tournament.type == TournamentType.marathon:
+        await marathon.apply_lengths(session, tournament)
+    await session.refresh(tournament)
     return _tournament_out(tournament)
 
 
@@ -1295,6 +1338,32 @@ async def set_bracket_word(
         await crud.set_playoff_game_word(session, existing, word)
     else:
         await crud.set_playoff_word_override(session, match, game_number, word)
+
+    queue = await bracket_game.get_word_queue(session, match)
+    return PlayoffWordQueueEntry(**next(q for q in queue if q["game_number"] == game_number))
+
+
+@router.post("/bracket/matches/{match_id}/words/{game_number}/length", response_model=PlayoffWordQueueEntry)
+async def set_bracket_slot_length(
+    match_id: int, game_number: int, payload: SlotLengthRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """Сменить длину слова слота пары: система подбирает новое слово нужной длины
+    (как «Предложить другое», но с выбранной длиной)."""
+    if payload.length not in SUPPORTED_LENGTHS:
+        raise HTTPException(status_code=400, detail="Длина слова должна быть 5, 6 или 7 букв")
+    if not 1 <= game_number <= bracket_game.WORD_QUEUE_SIZE:
+        raise HTTPException(status_code=400, detail=f"Слово можно задать только для игр 1-{bracket_game.WORD_QUEUE_SIZE} этой пары")
+    match = await session.get(PlayoffMatch, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Пара не найдена")
+
+    games = await crud.list_playoff_games(session, match.id)
+    existing = next((g for g in games if g.game_number == game_number), None)
+    if existing is not None and not bracket_game.game_word_editable(existing, match):
+        raise HTTPException(status_code=400, detail="Игра уже началась (есть догадки) или закончилась — слово менять поздно")
+
+    await bracket_game.reroll_word_queue_slot(session, match, game_number, length=payload.length)
 
     queue = await bracket_game.get_word_queue(session, match)
     return PlayoffWordQueueEntry(**next(q for q in queue if q["game_number"] == game_number))

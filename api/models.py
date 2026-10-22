@@ -136,6 +136,11 @@ class Tournament(Base):
     # Только для marathon: у каждого участника свой набор слов (DailyWord.entry_id)
     # вместо одного общего. Меняется, пока никто не сделал ни одной догадки.
     individual_words: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Длина слов розыгрыша (5, 6 или 7 букв) — базовая, задаётся при создании — и
+    # точечный план по позициям (api/word_plan.py): какой длины слово на конкретной
+    # позиции марафона / стадии плей-офф / раунде тай-брейка.
+    word_length: Mapped[int] = mapped_column(Integer, default=5)
+    word_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

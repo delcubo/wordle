@@ -29,6 +29,7 @@ from api.tournament_time import today, day_number_for_date
 from api.standings_view import compute_standings
 from api.scoring import groups_needing_tiebreak
 from api.dictionary import pick_alternative_word
+from api.word_plan import tiebreak_length
 from api import crud
 
 
@@ -256,7 +257,8 @@ async def reroll_tiebreak_word(session: AsyncSession, tournament: Tournament, da
     слово)."""
     already_used = await crud.get_all_used_words(session, tournament.id)
     current = (tournament.word_overrides or {}).get(str(day_number))
-    new_word = pick_alternative_word(already_used, exclude=current)
+    length = len(current) if current else tiebreak_length(tournament, day_number)  # длина слота сохраняется
+    new_word = pick_alternative_word(already_used, exclude=current, length=length)
     await crud.set_tiebreak_word_override(session, tournament, day_number, new_word)
     return new_word
 

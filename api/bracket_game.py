@@ -26,6 +26,7 @@ from api.tournament_time import today
 from api.wordle_logic import check_guess, is_solved
 from api.dictionary import pick_word_for_match, pick_alternative_word
 from api import crud
+from api.word_plan import playoff_length
 
 MAX_ATTEMPTS = 6
 # Сколько первых игр пары админ может задать заранее (текущая + превью на случай
@@ -456,6 +457,7 @@ async def get_player_view(session: AsyncSession, tournament: Tournament, entry) 
             "opponent_solved": getattr(game, f"entry_{opponent_side}_solved"),
             "round_number": match.round_number,
             "is_third_place": match.is_third_place,
+            "word_length": len(game.word),
             "game_number": game.game_number,
             "is_sudden_death": game.is_sudden_death,
             "already_played": True,
@@ -472,6 +474,7 @@ async def get_player_view(session: AsyncSession, tournament: Tournament, entry) 
         "opponent_callsign": opponent.callsign if opponent else None,
         "round_number": match.round_number,
         "is_third_place": match.is_third_place,
+        "word_length": len(game.word),
         "game_number": game.game_number,
         "is_sudden_death": game.is_sudden_death,
         "already_played": my_attempts_used is not None,
@@ -509,6 +512,7 @@ async def get_word_queue(session: AsyncSession, match: PlayoffMatch) -> list[dic
     games_by_number = {g.game_number: g for g in games}
     overrides = match.word_overrides or {}
     already_used = await crud.get_all_used_words(session, match.tournament_id)
+    tournament = await session.get(Tournament, match.tournament_id)
 
     queue = []
     for game_number in range(1, WORD_QUEUE_SIZE + 1):
@@ -521,10 +525,11 @@ async def get_word_queue(session: AsyncSession, match: PlayoffMatch) -> list[dic
             if override:
                 word = override
             else:
-                word = pick_word_for_match(match.id, game_number, already_used)
+                length = playoff_length(tournament, match.round_number, game_number, match.is_third_place)
+                word = pick_word_for_match(match.id, game_number, already_used, length)
             already_used = already_used | {word}
             editable = True
-        queue.append({"game_number": game_number, "word": word, "editable": editable})
+        queue.append({"game_number": game_number, "word": word, "editable": editable, "length": len(word)})
     return queue
 
 
@@ -534,22 +539,35 @@ async def sibling_queue_words(session: AsyncSession, match: PlayoffMatch, game_n
     return {q["word"] for q in await get_word_queue(session, match) if q["game_number"] != game_number}
 
 
-async def reroll_word_queue_slot(session: AsyncSession, match: PlayoffMatch, game_number: int) -> str:
+async def reroll_word_queue_slot(
+    session: AsyncSession, match: PlayoffMatch, game_number: int, length: int | None = None
+) -> str:
     """"Предложить другое слово" для слота очереди (см. пункт бэклога — раньше
     в сетке можно было только вручную задать своё слово, без реролла, в
     отличие от обычного слова дня). Если игра уже реально существует (не
     наступила — иначе сюда и не попадём, см. editable в get_word_queue),
-    меняет её слово; иначе просто перезаписывает превью-оверрайд."""
+    меняет её слово; иначе просто перезаписывает превью-оверрайд.
+    length — длина нового слова (смена длины позиции); по умолчанию сохраняется
+    длина текущего слова слота (а если слот ещё без слова — длина по плану)."""
     games = await crud.list_playoff_games(session, match.id)
     existing = next((g for g in games if g.game_number == game_number), None)
     already_used = await crud.get_all_used_words(session, match.tournament_id)
     already_used = already_used | await sibling_queue_words(session, match, game_number)
+    current = (match.word_overrides or {}).get(str(game_number))
+
+    if length is None:
+        if existing is not None:
+            length = len(existing.word)
+        elif current:
+            length = len(current)
+        else:
+            tournament = await session.get(Tournament, match.tournament_id)
+            length = playoff_length(tournament, match.round_number, game_number, match.is_third_place)
 
     if existing is not None:
-        new_word = pick_alternative_word(already_used, exclude=existing.word)
+        new_word = pick_alternative_word(already_used, exclude=existing.word, length=length)
         await crud.set_playoff_game_word(session, existing, new_word)
     else:
-        current = (match.word_overrides or {}).get(str(game_number))
-        new_word = pick_alternative_word(already_used, exclude=current)
+        new_word = pick_alternative_word(already_used, exclude=current, length=length)
         await crud.set_playoff_word_override(session, match, game_number, new_word)
     return new_word
