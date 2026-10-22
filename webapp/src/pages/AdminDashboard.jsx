@@ -165,6 +165,7 @@ export default function AdminDashboard() {
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
   const [theme, setTheme] = useState("dark");
+  const [teamsVersion, setTeamsVersion] = useState(0); // меняется при правке команд — командная таблица перечитывается
 
   async function refreshTournaments() {
     const data = await api("/api/admin/tournaments");
@@ -246,11 +247,17 @@ export default function AdminDashboard() {
             {selected ? (
               <>
                 <EntriesPanel tournament={selected} users={users} allTournaments={tournaments} />
+                {selected.type === "marathon" && selected.teams_enabled && (
+                  <MarathonTeamsPanel tournament={selected} onChanged={() => setTeamsVersion((v) => v + 1)} />
+                )}
                 {selected.type === "tiebreak" && <TiebreakWordsPanel tournament={selected} />}
                 {selected.type === "marathon" && (
                   selected.individual_words
                     ? <MarathonIndividualWordsPanel tournament={selected} onTournamentChanged={refreshTournaments} />
                     : <MarathonWordsPanel tournament={selected} onTournamentChanged={refreshTournaments} />
+                )}
+                {selected.type === "marathon" && selected.teams_enabled && (
+                  <MarathonTeamStandingsPanel tournament={selected} refreshKey={teamsVersion} />
                 )}
                 {selected.type === "marathon" && <MarathonStandingsPanel tournament={selected} />}
                 {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <TodayWordPanel tournament={selected} />}
@@ -846,7 +853,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   const [editingSettings, setEditingSettings] = useState(null); // id розыгрыша | null
   const [settingsForm, setSettingsForm] = useState({
     title: "", duration_days: "", hashtag: "", note: "", start_date: "", notify_admin: false, first_place: 1,
-    third_place_match: false, words_count: "", end_date: "", individual_words: false,
+    third_place_match: false, words_count: "", end_date: "", individual_words: false, teams_enabled: false,
   });
   const [telegramTest, setTelegramTest] = useState(null); // { ok, detail } | null
   const [showArchive, setShowArchive] = useState(false);
@@ -861,6 +868,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
       note: t.note || "", start_date: t.start_date, notify_admin: !!t.notify_admin,
       first_place: t.first_place ?? 1, third_place_match: !!t.third_place_match,
       words_count: t.words_count ?? "", end_date: t.end_date || "", individual_words: !!t.individual_words,
+      teams_enabled: !!t.teams_enabled,
     });
     setTelegramTest(null);
   }
@@ -886,6 +894,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
       if (t.type === "marathon") {
         body.words_count = Number(settingsForm.words_count);
         body.individual_words = settingsForm.individual_words;
+        body.teams_enabled = settingsForm.teams_enabled;
         if (settingsForm.end_date) body.end_date = settingsForm.end_date;
         else if (t.end_date) body.clear_end_date = true;
       }
@@ -974,7 +983,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           {TYPE_LABEL[t.type] || t.type} · {t.start_date}
           {t.duration_days != null ? ` · ${t.duration_days} дн.` : ""}
           {t.word_length && t.word_length !== 5 ? ` · ${t.word_length} букв` : ""}
-          {t.type === "marathon" && t.words_count != null ? ` · ${t.words_count} сл.${t.individual_words ? " (личные)" : ""}` : ""} · {STATUS_LABEL[t.status] || t.status}
+          {t.type === "marathon" && t.words_count != null ? ` · ${t.words_count} сл.${t.individual_words ? " (личные)" : ""}${t.teams_enabled ? " · команды" : ""}` : ""} · {STATUS_LABEL[t.status] || t.status}
         </div>
         {t.note && editingSettings !== t.id && (
           <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4, whiteSpace: "pre-wrap" }}>{t.note}</div>
@@ -1030,6 +1039,27 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                 <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
                   Менять режим можно, пока никто не сделал ни одной догадки: слова пересоздаются заново.
                 </div>
+              </div>
+            )}
+            {t.type === "marathon" && (
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                  <input
+                    type="checkbox" checked={settingsForm.teams_enabled}
+                    onChange={(e) => setSettingsForm((f) => ({ ...f, teams_enabled: e.target.checked }))}
+                  />
+                  Командный зачёт
+                </label>
+                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
+                  Админ собирает игроков в команды (от 2 человек); место команды — по среднему числу попыток на слово.
+                  Игра для участников не меняется, в копируемый результат добавляется название команды.
+                </div>
+                {settingsForm.teams_enabled && !settingsForm.individual_words && (
+                  <div style={{ fontSize: 11, color: "#e5a94c", marginTop: 2 }}>
+                    Внимание: у всех общий набор слов — участники одной команды могут подсказывать друг другу ответы.
+                    Командный зачёт рассчитан на личные наборы слов.
+                  </div>
+                )}
               </div>
             )}
             {t.duration_days != null && (
@@ -2493,6 +2523,425 @@ function MarathonStandingsPanel({ tournament }) {
   );
 }
 
+// Команды марафона: создание/переименование/удаление и распределение игроков (api/teams.py).
+function MarathonTeamsPanel({ tournament, onChanged }) {
+  const tournamentIdRef = useLatest(tournament.id);
+  const [teams, setTeams] = useState(null);
+  const [entries, setEntries] = useState([]);
+  const [newName, setNewName] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState("");
+
+  async function refresh() {
+    const id = tournament.id;
+    try {
+      const [t, e] = await Promise.all([
+        api(`/api/admin/tournaments/${id}/teams`),
+        api(`/api/admin/tournaments/${id}/entries`),
+      ]);
+      if (tournamentIdRef.current === id) {
+        setTeams(t);
+        setEntries(e);
+      }
+    } catch (err) {
+      if (tournamentIdRef.current === id) setError(err.message);
+    }
+  }
+
+  useEffect(() => {
+    setTeams(null);
+    setEditingId(null);
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id]);
+
+  async function run(action) {
+    setError("");
+    try {
+      await action();
+    } catch (e) {
+      setError(e.message);
+    }
+    await refresh();
+    if (onChanged) onChanged();
+  }
+
+  function handleCreate(ev) {
+    ev.preventDefault();
+    if (!newName.trim()) return;
+    run(async () => {
+      await api(`/api/admin/tournaments/${tournament.id}/teams`, { method: "POST", body: JSON.stringify({ name: newName }) });
+      setNewName("");
+    });
+  }
+
+  function handleRename(team) {
+    run(async () => {
+      await api(`/api/admin/teams/${team.id}`, { method: "PATCH", body: JSON.stringify({ name: editName }) });
+      setEditingId(null);
+    });
+  }
+
+  function handleDelete(team) {
+    if (!window.confirm(`Удалить команду «${team.name}»? Её участники останутся в розыгрыше без команды.`)) return;
+    run(() => api(`/api/admin/teams/${team.id}`, { method: "DELETE" }));
+  }
+
+  function handleAssign(entry, value) {
+    run(() => api(`/api/admin/entries/${entry.id}/team`, {
+      method: "PUT", body: JSON.stringify({ team_id: value === "" ? null : Number(value) }),
+    }));
+  }
+
+  if (!teams) return error ? <div style={{ ...panelStyle, marginTop: 20, color: "#e5484d" }}>{error}</div> : null;
+
+  const teamName = (id) => teams.find((t) => t.id === id)?.name || "";
+  const counted = (team) => entries.filter((e) => e.team_id === team.id && !e.hidden_from_standings);
+  const q = search.trim().toLowerCase();
+  const shown = entries
+    .filter((e) => !q || e.callsign.toLowerCase().includes(q) || teamName(e.team_id).toLowerCase().includes(q))
+    .sort((a, b) => {
+      const ta = a.team_id == null ? "\uffff" : teamName(a.team_id).toLowerCase();
+      const tb = b.team_id == null ? "\uffff" : teamName(b.team_id).toLowerCase();
+      return ta !== tb ? ta.localeCompare(tb, "ru") : a.callsign.localeCompare(b.callsign, "ru");
+    });
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20, border: "1px solid #b59f3b" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <h3 style={{ margin: 0 }}>Команды «{tournament.title}»</h3>
+        <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+      </div>
+      <p style={{ fontSize: 13, opacity: 0.7 }}>
+        Команда идёт в зачёт, если в ней не меньше 2 участников (скрытые из таблицы не считаются). Состав можно менять
+        в любой момент — таблица пересчитывается сразу. Игрок без команды остаётся только в личном зачёте.
+      </p>
+      {!tournament.individual_words && (
+        <p style={{ fontSize: 12, color: "#e5a94c" }}>
+          Внимание: у всех общий набор слов — участники одной команды могут подсказывать друг другу ответы.
+        </p>
+      )}
+      <form onSubmit={handleCreate} style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <input
+          placeholder="Название новой команды" value={newName} maxLength={100}
+          onChange={(e) => setNewName(e.target.value)} style={{ ...inputStyle, flex: "1 1 200px" }}
+        />
+        <button type="submit" disabled={!newName.trim()} style={buttonStyle}>Создать команду</button>
+      </form>
+      {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
+
+      {teams.length === 0 ? (
+        <div style={{ opacity: 0.7, fontSize: 13 }}>Команд пока нет.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+          {teams.map((team) => {
+            const members = entries.filter((e) => e.team_id === team.id);
+            const small = counted(team).length < 2;
+            return (
+              <div key={team.id} style={{ background: "#242426", borderRadius: 6, padding: "6px 10px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  {editingId === team.id ? (
+                    <>
+                      <input
+                        autoFocus value={editName} maxLength={100} onChange={(e) => setEditName(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") handleRename(team); if (e.key === "Escape") setEditingId(null); }}
+                        style={{ ...inputStyle, padding: "2px 6px", fontSize: 13, width: 180 }}
+                      />
+                      <button onClick={() => handleRename(team)} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
+                      <button onClick={() => setEditingId(null)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>Отмена</button>
+                    </>
+                  ) : (
+                    <>
+                      <strong style={{ fontSize: 14 }}>{team.name}</strong>
+                      <button
+                        onClick={() => { setEditingId(team.id); setEditName(team.name); }}
+                        title="Переименовать" style={{ ...ghostButtonStyle, padding: "0 6px", fontSize: 11 }}
+                      >✎</button>
+                      <span style={{ fontSize: 12, opacity: 0.7 }}>{counted(team).length} в зачёте</span>
+                      {small && <span style={{ fontSize: 12, color: "#e5a94c" }}>меньше 2 участников — в зачёт не идёт</span>}
+                      <button
+                        onClick={() => handleDelete(team)} title="Удалить команду"
+                        style={{ ...ghostButtonStyle, padding: "0 6px", fontSize: 11, marginLeft: "auto" }}
+                      >✕</button>
+                    </>
+                  )}
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+                  {members.length === 0 ? "нет участников" : members.map((e) => e.callsign + (e.hidden_from_standings ? " (не в таблице)" : "")).join(", ")}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <input
+        placeholder="🔎 Поиск по позывному или команде" value={search} onChange={(e) => setSearch(e.target.value)}
+        style={{ ...inputStyle, marginBottom: 8, maxWidth: 300 }}
+      />
+      <div style={{ maxHeight: 340, overflowY: "auto" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
+          <thead>
+            <tr style={{ textAlign: "left", opacity: 0.7 }}>
+              <th style={thStyle}>Позывной</th>
+              <th style={thStyle}>Команда</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((e) => (
+              <tr key={e.id} style={{ borderTop: "1px solid #2a2a2c", opacity: e.active ? 1 : 0.5 }}>
+                <td style={tdStyle}>
+                  {e.callsign}
+                  {!e.active && <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.7 }}>отключён</span>}
+                </td>
+                <td style={tdStyle}>
+                  <select
+                    value={e.team_id ?? ""} onChange={(ev) => handleAssign(e, ev.target.value)}
+                    style={{ ...inputStyle, padding: "2px 4px", fontSize: 12, width: "auto", minWidth: 160 }}
+                  >
+                    <option value="">— без команды —</option>
+                    {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {shown.length === 0 && <div style={{ opacity: 0.6, fontSize: 13, marginTop: 6 }}>Никого не найдено.</div>}
+      </div>
+    </div>
+  );
+}
+
+// Командная таблица марафона: среднее число попыток на слово (api/teams.py).
+function MarathonTeamStandingsPanel({ tournament, refreshKey }) {
+  const tournamentIdRef = useLatest(tournament.id);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(() => new Set());
+  const tie = useTieResolution(tournament.id, () => refresh(), {
+    groupsPath: "team-tie-groups", savePath: "team-tie-resolutions", idKey: "team_id", idsKey: "team_ids", nameKey: "name",
+  });
+  const placeLabel = (r) => `${r.place}${r.tie_resolved ? "*" : ""}`;
+  const TIE_FOOTNOTE = "* - место определено разбором ничьей";
+  const RULE_NOTE = (d) => `Среднее число попыток на слово; неугаданное и непройденное слово = ${d.unsolved_attempts} попыток`;
+
+  async function refresh() {
+    const id = tournament.id;
+    try {
+      const res = await api(`/api/admin/tournaments/${id}/marathon/team-standings`);
+      if (tournamentIdRef.current === id) {
+        setData(res);
+        setError("");
+      }
+    } catch (e) {
+      if (tournamentIdRef.current === id) setError(e.message);
+    }
+  }
+
+  useEffect(() => {
+    setData(null);
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id, tournament.words_count, refreshKey]);
+
+  function toggleExpanded(id) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function handleCopy() {
+    const tags = [data.hashtag, "#командный_зачёт"].filter(Boolean).join(" ");
+    // "·", а не "N. " — иначе Telegram склеивает строки в нумерованный список
+    const lines = data.rows.map((r) => `${placeLabel(r)} · ${r.name} — ${r.average} (${r.words_done}/${r.words_total})`);
+    const hasTie = data.rows.some((r) => r.tie_resolved);
+    const text = `${tags}\n\n${lines.join("\n")}\n\nсреднее число попыток на слово (слов пройдено/всего). Неугаданное и непройденное слово = ${data.unsolved_attempts}${hasTie ? `\n${TIE_FOOTNOTE}` : ""}`;
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      },
+      () => setCopied(false)
+    );
+  }
+
+  function handleDownload() {
+    const dpr = window.devicePixelRatio || 1;
+    const placeCol = 40;
+    const sizeCol = 70;
+    const doneCol = 70;
+    const avgCol = 80;
+    const font = "14px system-ui, sans-serif";
+    const mctx = document.createElement("canvas").getContext("2d");
+    mctx.font = "bold 14px system-ui, sans-serif";
+    const nameCol = Math.max(120, ...data.rows.map((r) => mctx.measureText(r.name).width + 20));
+    const hasTie = data.rows.some((r) => r.tie_resolved);
+    const padding = 16;
+    const rowHeight = 28;
+    const headerHeight = 28;
+    const noteHeight = 26 + (hasTie ? 18 : 0);
+    const tableWidth = placeCol + nameCol + sizeCol + doneCol + avgCol;
+    mctx.font = "12px system-ui, sans-serif";
+    const noteWidth = mctx.measureText(RULE_NOTE(data)).width;
+    const width = Math.max(tableWidth, noteWidth) + padding * 2;
+    const height = headerHeight + rowHeight * data.rows.length + padding * 2 + noteHeight;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.textBaseline = "middle";
+
+    const top = padding;
+    ctx.fillStyle = "#f2f2f2";
+    ctx.fillRect(padding, top, tableWidth, headerHeight);
+    ctx.fillStyle = "#666";
+    ctx.font = "bold 12px system-ui, sans-serif";
+    const xName = padding + placeCol;
+    const xSize = xName + nameCol;
+    const xDone = xSize + sizeCol;
+    const xAvg = xDone + doneCol;
+    ctx.textAlign = "center";
+    ctx.fillText("#", padding + placeCol / 2, top + headerHeight / 2);
+    ctx.textAlign = "left";
+    ctx.fillText("Команда", xName + 6, top + headerHeight / 2);
+    ctx.textAlign = "center";
+    ctx.fillText("Игроков", xSize + sizeCol / 2, top + headerHeight / 2);
+    ctx.fillText("Слов", xDone + doneCol / 2, top + headerHeight / 2);
+    ctx.fillText("Среднее", xAvg + avgCol / 2, top + headerHeight / 2);
+
+    data.rows.forEach((r, ri) => {
+      const y = top + headerHeight + ri * rowHeight;
+      if (ri % 2 === 1) {
+        ctx.fillStyle = "#fafafa";
+        ctx.fillRect(padding, y, tableWidth, rowHeight);
+      }
+      ctx.fillStyle = "#1a1a1b";
+      ctx.font = font;
+      ctx.textAlign = "center";
+      ctx.fillText(placeLabel(r), padding + placeCol / 2, y + rowHeight / 2);
+      ctx.textAlign = "left";
+      ctx.fillText(r.name, xName + 6, y + rowHeight / 2);
+      ctx.textAlign = "center";
+      ctx.fillText(String(r.members_count), xSize + sizeCol / 2, y + rowHeight / 2);
+      ctx.fillText(`${r.words_done}/${r.words_total}`, xDone + doneCol / 2, y + rowHeight / 2);
+      ctx.font = "bold " + font;
+      ctx.fillText(r.average, xAvg + avgCol / 2, y + rowHeight / 2);
+    });
+
+    ctx.strokeStyle = "#ddd";
+    ctx.lineWidth = 1;
+    for (let ri = 0; ri <= data.rows.length; ri++) {
+      const y = top + headerHeight + ri * rowHeight;
+      ctx.beginPath();
+      ctx.moveTo(padding, y);
+      ctx.lineTo(padding + tableWidth, y);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#666";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(RULE_NOTE(data), padding, top + headerHeight + rowHeight * data.rows.length + 16);
+    if (hasTie) ctx.fillText(TIE_FOOTNOTE, padding, top + headerHeight + rowHeight * data.rows.length + 34);
+
+    canvas.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${tournament.title.replace(/[^\p{L}\p{N}]+/gu, "_")}_команды.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  if (!data) return error ? <div style={{ ...panelStyle, marginTop: 20, color: "#e5484d" }}>{error}</div> : null;
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20, border: "1px solid #b59f3b" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <h3 style={{ margin: 0 }}>Командный зачёт</h3>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {data.rows.length > 0 && (
+            <>
+              <button onClick={handleCopy} style={ghostButtonStyle}>{copied ? "Скопировано!" : "Скопировать таблицу"}</button>
+              <button onClick={handleDownload} style={ghostButtonStyle}>Скачать таблицу</button>
+              {data.rows.some((r) => r.place.includes("-") || r.tie_resolved) && (
+                <button onClick={tie.openTies} style={ghostButtonStyle}>Разобрать ничьи</button>
+              )}
+            </>
+          )}
+          <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+        </div>
+      </div>
+      <p style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>
+        Место — по среднему числу попыток на слово: (попытки по пройденным словам + {data.unsolved_attempts} за каждое
+        непройденное) ÷ (участники × слова). Меньше — лучше. Нажмите на команду, чтобы увидеть игроков.
+      </p>
+      {tie.open && <TieResolutionPanel tie={tie} />}
+      {data.rows.length === 0 ? (
+        <div style={{ opacity: 0.7, fontSize: 13 }}>Пока нет команд, подходящих для зачёта (нужно не меньше 2 участников).</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
+            <thead>
+              <tr style={{ textAlign: "left", opacity: 0.7 }}>
+                <th style={thStyle}>Место</th>
+                <th style={thStyle}>Команда</th>
+                <th style={{ ...thStyle, textAlign: "center" }}>Игроков</th>
+                <th style={{ ...thStyle, textAlign: "center" }}>Слов пройдено</th>
+                <th style={{ ...thStyle, textAlign: "center" }}>Среднее</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((r) => (
+                <Fragment key={r.team_id}>
+                  <tr onClick={() => toggleExpanded(r.team_id)} style={{ borderTop: "1px solid #2a2a2c", cursor: "pointer" }}>
+                    <td style={{ ...tdStyle, fontWeight: !r.place.includes("-") ? 700 : 400 }}>{placeLabel(r)}</td>
+                    <td style={tdStyle}>{expanded.has(r.team_id) ? "▾" : "▸"} {r.name}</td>
+                    <td style={{ ...tdStyle, textAlign: "center" }}>{r.members_count}</td>
+                    <td style={{ ...tdStyle, textAlign: "center" }}>{r.words_done}/{r.words_total}</td>
+                    <td style={{ ...tdStyle, textAlign: "center", fontWeight: 700 }}>{r.average}</td>
+                  </tr>
+                  {expanded.has(r.team_id) && (
+                    <tr>
+                      <td></td>
+                      <td colSpan={4} style={{ ...tdStyle, fontSize: 12, opacity: 0.85 }}>
+                        {r.members.map((m) => (
+                          <div key={m.entry_id}>
+                            {m.callsign} — {m.words_done}/{data.words_count} слов, {m.total_attempts} попыток
+                            {!m.active && " (отключён)"}
+                          </div>
+                        ))}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {data.excluded.length > 0 && (
+        <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
+          Не в зачёте (меньше 2 участников):{" "}
+          {data.excluded.map((t) => `${t.name} (${t.members_count})`).join(", ")}
+        </div>
+      )}
+      {error && <div style={{ color: "#e5484d", marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
 function TodayWordPanel({ tournament }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [word, setWord] = useState(null);
@@ -3046,7 +3495,11 @@ function TiebreakResultsPanel({ tournament }) {
 // Разбор ничьих по итогам тай-брейка (см. пункт бэклога): окончательный порядок
 // внутри групп с общим местом — место со звёздочкой, как "2*". Общий для
 // стандартного режима и марафона (бэкенд: /tie-groups и /tie-resolutions).
-function useTieResolution(tournamentId, onSaved) {
+// opts — для командного зачёта: другие адреса и поля (по умолчанию — игроки)
+function useTieResolution(tournamentId, onSaved, opts = {}) {
+  const {
+    groupsPath = "tie-groups", savePath = "tie-resolutions", idKey = "entry_id", idsKey = "entry_ids", nameKey = "callsign",
+  } = opts;
   const [open, setOpen] = useState(false);
   const [data, setData] = useState(null); // ответ /tie-groups | null
   const [state, setState] = useState({}); // place группы -> { use, order, source }
@@ -3056,7 +3509,7 @@ function useTieResolution(tournamentId, onSaved) {
   function initState(data) {
     const next = {};
     for (const g of data.groups) {
-      const order = g.applied_order || g.suggested_order || g.members.map((m) => m.entry_id);
+      const order = g.applied_order || g.suggested_order || g.members.map((m) => m[idKey]);
       next[g.place] = {
         use: Boolean(g.applied_order || g.suggested_order),
         order,
@@ -3070,7 +3523,7 @@ function useTieResolution(tournamentId, onSaved) {
     setOpen(true);
     setError("");
     try {
-      const data = await api(`/api/admin/tournaments/${tournamentId}/tie-groups`);
+      const data = await api(`/api/admin/tournaments/${tournamentId}/${groupsPath}`);
       setData(data);
       initState(data);
     } catch (e) {
@@ -3093,7 +3546,7 @@ function useTieResolution(tournamentId, onSaved) {
     setBusy(true);
     setError("");
     try {
-      const data = await api(`/api/admin/tournaments/${tournamentId}/tie-resolutions`, {
+      const data = await api(`/api/admin/tournaments/${tournamentId}/${savePath}`, {
         method: "PUT",
         body: JSON.stringify({ resolutions }),
       });
@@ -3110,18 +3563,18 @@ function useTieResolution(tournamentId, onSaved) {
   function applySelected() {
     const resolutions = data.groups
       .filter((g) => state[g.place]?.use)
-      .map((g) => ({ entry_ids: state[g.place].order, source: state[g.place].source }));
+      .map((g) => ({ [idsKey]: state[g.place].order, source: state[g.place].source }));
     saveTies(resolutions);
   }
 
-  return { open, setOpen, data, state, setState, busy, error, openTies, moveTie, saveTies, applySelected };
+  return { open, setOpen, data, state, setState, busy, error, openTies, moveTie, saveTies, applySelected, idKey, nameKey };
 }
 
 function TieResolutionPanel({ tie }) {
   return (
         <div style={{ background: "#242426", borderRadius: 6, padding: 10, marginBottom: 12, maxWidth: 560 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <strong style={{ fontSize: 14 }}>Окончательные места по итогам тай-брейка</strong>
+            <strong style={{ fontSize: 14 }}>{tie.idKey === "team_id" ? "Окончательные места при равном среднем" : "Окончательные места по итогам тай-брейка"}</strong>
             <button onClick={() => tie.setOpen(false)} style={{ ...ghostButtonStyle, fontSize: 11, padding: "1px 8px" }}>Закрыть</button>
           </div>
           {tie.error && <div style={{ color: "#e5484d", fontSize: 12, marginTop: 6 }}>{tie.error}</div>}
@@ -3134,13 +3587,15 @@ function TieResolutionPanel({ tie }) {
           ) : (
             <>
               <p style={{ fontSize: 12, opacity: 0.7, margin: "6px 0" }}>
-                Порядок предложен по найденному тай-брейку, его можно поправить стрелками. Места, определённые тай-брейком, помечаются звёздочкой (например, 2*).
+                {tie.idKey === "team_id"
+                  ? "Порядок команд с равным средним задаётся вручную стрелками. Места, определённые разбором, помечаются звёздочкой (например, 2*)."
+                  : "Порядок предложен по найденному тай-брейку, его можно поправить стрелками. Места, определённые тай-брейком, помечаются звёздочкой (например, 2*)."}
               </p>
               {tie.data.groups.map((g) => {
                 const st = tie.state[g.place];
                 if (!st) return null;
                 const startPlace = parseInt(g.place.split("-")[0], 10);
-                const nameOf = (id) => g.members.find((m) => m.entry_id === id)?.callsign || id;
+                const nameOf = (id) => g.members.find((m) => m[tie.idKey] === id)?.[tie.nameKey] || id;
                 return (
                   <div key={g.place} style={{ borderTop: "1px solid #3a3a3c", paddingTop: 8, marginTop: 8 }}>
                     <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
