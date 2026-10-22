@@ -1,6 +1,9 @@
 """
-Командный зачёт марафона. Игроков в команды объединяет админ (TournamentEntry.team_id);
-сама игра не меняется — меняется только таблица результатов.
+Командный зачёт марафона и командный тай-брейк. Игроков в команды объединяет админ
+(TournamentEntry.team_id); сама игра не меняется — меняется только таблица результатов.
+В командном тай-брейке (тип tiebreak, см. api/tiebreak.py) команда — единица места, у каждого
+игрока своё слово, а результат команды в раунде — среднее по игрокам. Ничья между командами
+марафона разбирается таким тай-брейком (create_tiebreak_for_group).
 
 Балл команды — среднее число попыток на слово по всем её участникам:
 
@@ -56,8 +59,8 @@ async def _check_name_free(session: AsyncSession, tournament_id: int, name: str,
 
 
 async def create_team(session: AsyncSession, tournament: Tournament, name: str) -> Team:
-    if tournament.type != TournamentType.marathon:
-        raise ValueError("Команды есть только в марафоне")
+    if tournament.type not in (TournamentType.marathon, TournamentType.tiebreak):
+        raise ValueError("Команды есть только в марафоне и тай-брейке")
     name = _clean_name(name)
     await _check_name_free(session, tournament.id, name)
     team = Team(tournament_id=tournament.id, name=name)
@@ -215,10 +218,39 @@ async def compute_team_standings(
     }
 
 
+def _playing_user_sets(entries: list[TournamentEntry]) -> dict[int, frozenset[int]]:
+    """team_id -> множество user_id подключённых игроков команды (так команды из разных розыгрышей
+    сопоставляются «по людям», а не по названию)."""
+    by_team: dict[int, set[int]] = defaultdict(set)
+    for entry in entries:
+        if entry.team_id is not None and entry.active and not entry.hidden_from_standings:
+            by_team[entry.team_id].add(entry.user_id)
+    return {team_id: frozenset(users) for team_id, users in by_team.items()}
+
+
+async def _find_team_tiebreaks(
+    session: AsyncSession, tournament: Tournament, target: set[frozenset[int]]
+) -> list[tuple[Tournament, dict[frozenset[int], int]]]:
+    """Командные тай-брейки, в которых команды — в точности те же группы людей, что в target
+    (неархивные первыми). Для каждого — соответствие «люди команды -> team_id тай-брейка»."""
+    found = []
+    for t in sorted(
+        [t for t in await crud.list_tournaments(session) if crud.is_team_tiebreak(t)], key=lambda t: t.archived
+    ):
+        entries = await crud.list_entries(session, t.id)
+        by_users = {users: team_id for team_id, users in _playing_user_sets(entries).items()}
+        if set(by_users) == target:
+            found.append((t, by_users))
+    return found
+
+
 async def tie_groups(session: AsyncSession, tournament: Tournament) -> list[dict]:
-    """Группы команд с общим местом (без учёта уже применённых порядков) + применённый порядок."""
+    """Группы команд с общим местом (без учёта уже применённых порядков) + применённый порядок +
+    предложение по итогам командного тай-брейка с теми же командами (если он уже расставил места)."""
+    from api import tiebreak
     data = await compute_team_standings(session, tournament, apply_tie_resolutions=False)
     applied = {frozenset(r["team_ids"]): r for r in (tournament.team_tie_resolutions or [])}
+    user_sets = _playing_user_sets(await crud.list_entries(session, tournament.id))
     groups = []
     seen: set[str] = set()
     for row in data["rows"]:
@@ -227,11 +259,65 @@ async def tie_groups(session: AsyncSession, tournament: Tournament) -> list[dict
         seen.add(row["place"])
         members = [r for r in data["rows"] if r["place"] == row["place"]]
         current = applied.get(frozenset(m["team_id"] for m in members))
-        groups.append({
+        group = {
             "place": row["place"],
             "summary": f"{row['average']} попыток на слово · {row['words_done']}/{row['words_total']} слов",
             "members": [{"team_id": m["team_id"], "name": m["name"]} for m in members],
             "applied_order": current["team_ids"] if current else None,
             "applied_source": (current.get("source") or None) if current else None,
-        })
+            "suggested_order": None, "suggested_source": None, "suggestion_note": None,
+            "tiebreak_id": None,
+        }
+        target_by_users = {user_sets.get(m["team_id"], frozenset()): m["team_id"] for m in members}
+        found = await _find_team_tiebreaks(session, tournament, set(target_by_users))
+        if not found:
+            group["suggestion_note"] = "Тай-брейк с этими командами ещё не создан — можно создать или расставить порядок вручную"
+        else:
+            tb, tb_team_by_users = found[0]
+            group["tiebreak_id"] = tb.id
+            results = await tiebreak.build_team_results(session, tb)
+            place_by_tb_team = {r["team_id"]: r["place"] for r in results["rows"]}
+            places = {users: place_by_tb_team.get(tb_team) for users, tb_team in tb_team_by_users.items()}
+            if all(p and "-" not in p for p in places.values()) and len(set(places.values())) == len(places):
+                ordered = sorted(places, key=lambda users: int(places[users]))
+                group["suggested_order"] = [target_by_users[users] for users in ordered]
+                group["suggested_source"] = tb.title
+            else:
+                group["suggestion_note"] = f"Тай-брейк «{tb.title}» ещё не определил все места"
+        groups.append(group)
     return groups
+
+
+async def create_tiebreak_for_group(
+    session: AsyncSession, tournament: Tournament, place: str, start_date=None
+) -> Tournament:
+    """Создаёт командный тай-брейк для группы команд с общим местом: новый розыгрыш типа tiebreak с
+    включёнными командами, теми же командами (по названию) и теми же подключёнными игроками (с теми
+    же позывными). first_place — начало диапазона мест группы."""
+    from api.tournament_time import today
+    group = next((g for g in await tie_groups(session, tournament) if g["place"] == place), None)
+    if group is None:
+        raise ValueError("Такой группы с общим местом нет")
+    if group["tiebreak_id"] is not None:
+        raise ValueError("Тай-брейк с этими командами уже создан")
+    first_place = int(place.split("-")[0])
+    names = " – ".join(m["name"] for m in group["members"])
+    new = Tournament(
+        title=f"Тай-брейк команд: {names}"[:200], type=TournamentType.tiebreak,
+        start_date=start_date or today(), scoring_rules=None, hashtag=tournament.hashtag,
+        first_place=first_place, teams_enabled=True, word_length=tournament.word_length or 5,
+        note=f"Создан из разбора ничьих «{tournament.title}», места {place}",
+    )
+    session.add(new)
+    await session.commit()
+    await session.refresh(new)
+
+    entries = [e for e in await crud.list_entries(session, tournament.id) if e.active and not e.hidden_from_standings]
+    for member in group["members"]:
+        old_team = await session.get(Team, member["team_id"])
+        team = await create_team(session, new, old_team.name)
+        for entry in entries:
+            if entry.team_id == old_team.id:
+                created = await crud.create_entry(session, new, entry.user_id, entry.callsign)
+                await assign_entry(session, created, team.id)
+    return new

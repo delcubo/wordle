@@ -307,6 +307,7 @@ class TodayWordStatus(BaseModel):
     hashtag: str | None = None
     next_word_at: str | None = None  # ISO-момент публикации следующего слова — для попапа-обратного отсчёта
     paused: bool = False
+    team_name: str | None = None  # название команды игрока (командный тай-брейк) — для текста места
     is_tiebreak: bool = False  # только для розыгрыша типа tiebreak — переключает текст ожидания/финала на фронте
     tiebreak_started: bool = False  # розыгрыш типа tiebreak уже стартовал (хотя бы корневой раунд создан)
     tiebreak_place: str | None = None  # текущее/итоговое место — "2" или диапазон "2-4", пока группа ещё играет
@@ -678,6 +679,15 @@ class TeamTieGroupOut(BaseModel):
     members: list[TeamTieMember]
     applied_order: list[int] | None = None  # team_id, лучшая первой
     applied_source: str | None = None
+    suggested_order: list[int] | None = None  # по итогам командного тай-брейка с теми же командами
+    suggested_source: str | None = None
+    suggestion_note: str | None = None
+    tiebreak_id: int | None = None  # уже созданный командный тай-брейк для этой группы
+
+
+class TeamTiebreakCreateRequest(BaseModel):
+    place: str  # место группы, как в team-tie-groups, например "1-2"
+    start_date: date | None = None  # по умолчанию сегодня
 
 
 class TeamTieGroupsResponse(BaseModel):
@@ -693,3 +703,55 @@ class TeamTieResolutionItem(BaseModel):
 
 class TeamTieResolutionsRequest(BaseModel):
     resolutions: list[TeamTieResolutionItem]
+
+
+# ---------- Командный тай-брейк (api/tiebreak.py) ----------
+
+class TeamWordPlayerOut(BaseModel):
+    entry_id: int
+    callsign: str
+    team_id: int | None = None
+    team_name: str | None = None
+    slot: int  # номер игрока в своей команде (по порядку подключения)
+    word: str
+    length: int
+    editable: bool
+
+
+class TeamWordDayOut(BaseModel):
+    day_number: int
+    editable: bool  # раунд ещё не наступил
+    players: list[TeamWordPlayerOut]
+
+
+class TiebreakTeamMemberOut(BaseModel):
+    entry_id: int
+    callsign: str
+    active: bool
+    cells: list[TiebreakResultCell | None]
+
+
+class TiebreakTeamCellOut(BaseModel):
+    average: str  # среднее команды в раунде, подпись
+    average_value: float
+
+
+class TiebreakTeamRowOut(BaseModel):
+    team_id: int
+    name: str
+    place: str | None
+    cells: list[TiebreakTeamCellOut | None]
+    members: list[TiebreakTeamMemberOut]
+
+
+class TiebreakTeamRoundOut(BaseModel):
+    id: int
+    round_number: int
+    completed: bool
+
+
+class TiebreakTeamResultsOut(BaseModel):
+    rounds: list[TiebreakTeamRoundOut]
+    rows: list[TiebreakTeamRowOut]
+    first_place: int = 1
+    last_place: int | None = None

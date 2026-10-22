@@ -13,7 +13,9 @@ from api.models import (
     Tournament, TournamentStatus, TournamentType, TournamentEntry, User, DailyWord, DailyWordStatus, Attempt,
     TiebreakRound, TiebreakParticipant, PlayoffMatch, PlayoffGame, AppSettings, ExcludedWord, AddedWord,
 )
-from api.dictionary import pick_word_for_day, pick_alternative_word, pick_word_for_match, load_file_excluded_words
+from api.dictionary import (
+    pick_word_for_day, pick_word_for_label, pick_alternative_word, pick_word_for_match, load_file_excluded_words,
+)
 from api.tournament_time import today, day_number_for_date, date_for_day_number
 from api.word_plan import base_length, playoff_length, tiebreak_length
 
@@ -782,6 +784,17 @@ async def _next_free_day_number(session: AsyncSession, tournament_id: int) -> in
     return (result.scalar_one_or_none() or 0) + 1
 
 
+def is_team_tiebreak(tournament: Tournament) -> bool:
+    """Командный тай-брейк: розыгрыш типа tiebreak с включённым командным зачётом (у каждого игрока
+    раунда своё слово, результат команды — среднее по её игрокам, см. api/tiebreak.py)."""
+    return tournament.type == TournamentType.tiebreak and bool(tournament.teams_enabled)
+
+
+def team_override_key(day_number: int, entry_id: int) -> str:
+    """Ключ ручной замены слова игрока в командном тай-брейке (Tournament.word_overrides)."""
+    return f"{day_number}:{entry_id}"
+
+
 async def create_tiebreak_round(
     session: AsyncSession, tournament: Tournament, entry_ids: list[int], previous_round_id: int | None = None
 ) -> TiebreakRound:
@@ -798,6 +811,10 @@ async def create_tiebreak_round(
         previous_round = await session.get(TiebreakRound, previous_round_id)
         if previous_round is not None:
             round_number = previous_round.round_number + 1
+    if is_team_tiebreak(tournament):
+        return await _create_team_tiebreak_round(
+            session, tournament, entry_ids, previous_round_id, day_number, round_number, already_used
+        )
     override = (tournament.word_overrides or {}).get(str(day_number))
     word = override if override else pick_word_for_day(
         tournament.id, day_number, already_used, tiebreak_length(tournament, round_number)
@@ -828,6 +845,95 @@ async def create_tiebreak_round(
     await session.commit()
     await session.refresh(tiebreak_round)
     return tiebreak_round
+
+
+def pick_team_round_words(
+    tournament: Tournament, day_number: int, round_number: int, entries: list, already_used: set[str]
+) -> dict[int, str]:
+    """Слова игроков раунда командного тай-брейка: у каждого своё и все разные. Ручная замена
+    (word_overrides["<день>:<entry_id>"]) главнее; остальным слова подбираются детерминированно по
+    (розыгрыш, день, игрок) и не повторяют уже использованные и друг друга. entries — участники с
+    командой; порядок обхода — по (команда, id), чтобы превью и реальный раунд давали одно и то же."""
+    overrides = tournament.word_overrides or {}
+    used = set(already_used)
+    length = tiebreak_length(tournament, round_number)
+    words: dict[int, str] = {}
+    for entry in sorted(entries, key=lambda e: (e.team_id, e.id)):
+        word = overrides.get(team_override_key(day_number, entry.id))
+        if not word:
+            word = pick_word_for_label(f"tiebreak:{tournament.id}:{day_number}:{entry.id}", used, length)
+        used.add(word)
+        words[entry.id] = word
+    return words
+
+
+async def _create_team_tiebreak_round(
+    session: AsyncSession, tournament: Tournament, entry_ids: list[int], previous_round_id: int | None,
+    day_number: int, round_number: int, already_used: set[str],
+) -> TiebreakRound:
+    """Раунд командного тай-брейка: общий «якорный» DailyWord дня (по нему работают проверки «раунд уже
+    наступил» и срок раунда) и у каждого участника свой DailyWord (entry_id участника) — своё слово."""
+    entries = []
+    for entry_id in entry_ids:
+        entry = await session.get(TournamentEntry, entry_id)
+        if entry is not None and entry.team_id is not None:
+            entries.append(entry)
+    entries.sort(key=lambda e: (e.team_id, e.id))
+    if not entries:
+        raise ValueError("В раунде командного тай-брейка нет участников с командой")
+    words = pick_team_round_words(tournament, day_number, round_number, entries, already_used)
+
+    anchor = DailyWord(
+        tournament_id=tournament.id, day_number=day_number, word=words[entries[0].id],
+        calendar_date=today(), status=DailyWordStatus.suggested,
+    )
+    session.add(anchor)
+    await session.flush()
+    tiebreak_round = TiebreakRound(
+        tournament_id=tournament.id, daily_word_id=anchor.id, round_number=round_number,
+        previous_round_id=previous_round_id,
+    )
+    session.add(tiebreak_round)
+    await session.flush()
+    for entry in entries:
+        personal = DailyWord(
+            tournament_id=tournament.id, entry_id=entry.id, day_number=day_number, word=words[entry.id],
+            calendar_date=today(), status=DailyWordStatus.suggested,
+        )
+        session.add(personal)
+        await session.flush()
+        session.add(TiebreakParticipant(
+            round_id=tiebreak_round.id, entry_id=entry.id, daily_word_id=personal.id, team_id=entry.team_id
+        ))
+    await session.commit()
+    await session.refresh(tiebreak_round)
+    return tiebreak_round
+
+
+async def round_word_id_for_entry(session: AsyncSession, round_: TiebreakRound, entry_id: int) -> int:
+    """Слово игрока в раунде: личное (командный тай-брейк) либо общее слово раунда."""
+    result = await session.execute(
+        select(TiebreakParticipant.daily_word_id).where(
+            TiebreakParticipant.round_id == round_.id, TiebreakParticipant.entry_id == entry_id
+        )
+    )
+    personal = result.scalar_one_or_none()
+    return personal or round_.daily_word_id
+
+
+async def count_round_finished_until(session: AsyncSession, round_: TiebreakRound, finished_at) -> int:
+    """Сколько участников раунда закончили своё слово к моменту finished_at — число N в «сыграло N/M»
+    (в командном тай-брейке у каждого своё слово, поэтому считаем по словам участников)."""
+    participants = await list_tiebreak_participants(session, round_.id)
+    word_ids = [p.daily_word_id or round_.daily_word_id for p in participants]
+    entry_ids = [p.entry_id for p in participants]
+    result = await session.execute(
+        select(func.count(Attempt.id)).where(
+            Attempt.daily_word_id.in_(word_ids), Attempt.entry_id.in_(entry_ids),
+            Attempt.finished_at.is_not(None), Attempt.finished_at <= finished_at,
+        )
+    )
+    return int(result.scalar_one())
 
 
 async def get_tiebreak_word_queue(session: AsyncSession, tournament: Tournament, count: int = 5) -> list[dict]:
@@ -938,8 +1044,17 @@ async def get_last_tiebreak_round_for_entry(
 async def get_tiebreak_round_by_daily_word(session: AsyncSession, daily_word_id: int) -> TiebreakRound | None:
     """Раунд тай-брейка, для которого заведено это слово (одно слово — один
     раунд) — нужен, чтобы знать настоящий номер раунда по слову, даже когда
-    раунд уже разрешён и не считается "активным" (см. отчёт игрока)."""
+    раунд уже разрешён и не считается "активным" (см. отчёт игрока). В командном
+    тай-брейке слово может быть личным словом участника раунда."""
     result = await session.execute(select(TiebreakRound).where(TiebreakRound.daily_word_id == daily_word_id))
+    found = result.scalars().first()
+    if found is not None:
+        return found
+    result = await session.execute(
+        select(TiebreakRound)
+        .join(TiebreakParticipant, TiebreakParticipant.round_id == TiebreakRound.id)
+        .where(TiebreakParticipant.daily_word_id == daily_word_id)
+    )
     return result.scalars().first()
 
 

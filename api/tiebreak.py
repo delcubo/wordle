@@ -16,15 +16,26 @@
 подгруппа не участвовала вовсе: новый раунд тут не поможет (играть некому),
 нужна ручная доигровка.
 
+Командный тай-брейк (тип tiebreak + Tournament.teams_enabled, см. api/teams.py): игроки
+объединены в команды, у каждого игрока раунда СВОЁ слово (все разные — подсказывать друг
+другу нечего), а место определяют команды. Результат команды в раунде — среднее по её
+игрокам: угадал — число попыток, не угадал или не успел доиграть — 7, не сделал ни одной
+попытки — 8 (неявка по-прежнему хуже неудачи). Одинаковое среднее (точное сравнение) —
+продолжение раунда для этих команд с новыми личными словами; если среднее равно 8, то
+никто из них не играл, и продолжение не заводится (как и у обычного тай-брейка).
+
 compute_final_order() восстанавливает итоговый порядок участников по цепочкам
 разрешённых раундов championship — им пользуется генерация сетки плей-офф
 (api/bracket.py). build_results() — аналог для розыгрыша типа tiebreak целиком,
 терпимый к ещё не разрешённым раундам (для живого отображения в админке и
 игроку — см. get_entry_place).
 """
+from collections import defaultdict
+from fractions import Fraction
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.models import Tournament, TournamentType, TournamentStatus, TiebreakRound
+from api.models import Tournament, TournamentType, TournamentStatus, TiebreakRound, DailyWord, TournamentEntry
 from api.tournament_time import today, day_number_for_date
 from api.standings_view import compute_standings
 from api.scoring import groups_needing_tiebreak
@@ -83,6 +94,12 @@ async def ensure_started(session: AsyncSession, tournament: Tournament) -> None:
         return
     if await crud.list_root_tiebreak_rounds(session, tournament.id):
         return  # уже запущен
+    if crud.is_team_tiebreak(tournament):
+        entries = await team_participants(session, tournament)
+        if len({e.team_id for e in entries}) < 2:
+            return  # нужно хотя бы две команды (в каждой не меньше MIN_TEAM_SIZE подключённых игроков)
+        await crud.create_tiebreak_round(session, tournament, [e.id for e in entries])
+        return
     entries = [e for e in await crud.list_entries(session, tournament.id) if e.active]
     if len(entries) < 2:
         return  # не с кем распределять места — ждём, пока подключат ещё игроков
@@ -95,7 +112,10 @@ async def resolve_ready_rounds(session: AsyncSession, tournament: Tournament) ->
     после этого сразу проверяет, не разошлись ли уже все места, и если да,
     сам завершает розыгрыш (см. _maybe_finish)."""
     for round_ in await crud.list_active_tiebreak_rounds(session, tournament.id):
-        await _try_resolve_round(session, tournament, round_)
+        if crud.is_team_tiebreak(tournament):
+            await _try_resolve_team_round(session, tournament, round_)
+        else:
+            await _try_resolve_round(session, tournament, round_)
     if tournament.type == TournamentType.tiebreak:
         await _maybe_finish(session, tournament)
 
@@ -113,6 +133,20 @@ async def _maybe_finish(session: AsyncSession, tournament: Tournament) -> None:
     roots = await crud.list_root_tiebreak_rounds(session, tournament.id)
     if not roots:
         return
+    if crud.is_team_tiebreak(tournament):
+        team_ids: set[int] = set()
+        for root in roots:
+            team_ids.update(p.team_id for p in await crud.list_tiebreak_participants(session, root.id) if p.team_id)
+        if not team_ids:
+            return
+        team_results = await build_team_results(session, tournament)
+        place_by_team = {row["team_id"]: row["place"] for row in team_results["rows"]}
+        if all(place_by_team.get(tid) is not None and "-" not in place_by_team[tid] for tid in team_ids):
+            tournament.status = TournamentStatus.finished
+            session.add(tournament)
+            await session.commit()
+        return
+
     participating_ids: set[int] = set()
     for root in roots:
         participating_ids.update(p.entry_id for p in await crud.list_tiebreak_participants(session, root.id))
@@ -244,7 +278,11 @@ async def get_entry_place(session: AsyncSession, tournament: Tournament, entry_i
     """Текущее место entry в розыгрыше типа tiebreak — диапазон вида "2-4",
     пока группа ещё не разошлась до конца, точное число, когда место уже не
     изменится, либо None, если розыгрыш ещё не стартовал или entry в нём не
-    участвовал (см. build_results)."""
+    участвовал (см. build_results). В командном тай-брейке — место команды игрока."""
+    if crud.is_team_tiebreak(tournament):
+        results = await build_team_results(session, tournament)
+        row = next((r for r in results["rows"] if any(m["entry_id"] == entry_id for m in r["members"])), None)
+        return row["place"] if row else None
     results = await build_results(session, tournament)
     row = next((r for r in results["rows"] if r["entry_id"] == entry_id), None)
     return row["place"] if row else None
@@ -457,3 +495,273 @@ async def get_rounds_view(session: AsyncSession, tournament_id: int) -> list[dic
             "admin_note": round_.admin_note,
         })
     return views
+
+
+# ---------- Командный тай-брейк ----------
+
+SCORE_FAILED = 7    # не угадал (или начал и не успел доиграть до дедлайна)
+SCORE_NO_SHOW = 8   # не сделал ни одной попытки — хуже неудачи
+
+
+def member_score(key: tuple[bool, bool, int]) -> int:
+    """Вклад игрока в среднее команды по ключу _result_key: попытки / 7 / 8."""
+    no_show, failed, attempts = key
+    if no_show:
+        return SCORE_NO_SHOW
+    return SCORE_FAILED if failed else attempts
+
+
+async def team_participants(session: AsyncSession, tournament: Tournament) -> list[TournamentEntry]:
+    """Игроки, с которых начинается командный тай-брейк: подключённые игроки команд, в которых
+    таких игроков не меньше MIN_TEAM_SIZE (игроки вне команд и команды из одного не играют)."""
+    from api.teams import MIN_TEAM_SIZE
+    by_team: dict[int, list[TournamentEntry]] = defaultdict(list)
+    for entry in await crud.list_entries(session, tournament.id):
+        if entry.active and entry.team_id is not None:
+            by_team[entry.team_id].append(entry)
+    return [e for members in by_team.values() if len(members) >= MIN_TEAM_SIZE for e in members]
+
+
+async def word_for_entry(session: AsyncSession, round_: TiebreakRound, entry_id: int) -> DailyWord:
+    """Слово игрока в раунде тай-брейка: личное (командный) либо общее слово раунда."""
+    return await crud.get_daily_word_by_id(session, await crud.round_word_id_for_entry(session, round_, entry_id))
+
+
+def _team_scores(participants, keys: dict[int, tuple[bool, bool, int]]) -> dict[int, Fraction]:
+    scores: dict[int, list[int]] = defaultdict(list)
+    for p in participants:
+        scores[p.team_id].append(member_score(keys[p.entry_id]))
+    return {team_id: Fraction(sum(values), len(values)) for team_id, values in scores.items()}
+
+
+async def _try_resolve_team_round(session: AsyncSession, tournament: Tournament, round_: TiebreakRound) -> None:
+    anchor = await crud.get_daily_word_by_id(session, round_.daily_word_id)
+    deadline_passed = anchor.calendar_date < today()
+
+    participants = await crud.list_tiebreak_participants(session, round_.id)
+    keys: dict[int, tuple[bool, bool, int] | None] = {}
+    all_finished = True
+    for p in participants:
+        key = await _result_key(session, p.entry_id, p.daily_word_id, finalize=False)
+        if key is None:
+            all_finished = False
+        keys[p.entry_id] = key
+
+    if not all_finished and not deadline_passed:
+        return  # ждём, пока доиграют остальные
+
+    if not all_finished:
+        for p in participants:
+            if keys[p.entry_id] is None:
+                keys[p.entry_id] = await _result_key(session, p.entry_id, p.daily_word_id, finalize=True)
+
+    round_.completed = True
+    session.add(round_)
+    await session.commit()
+
+    by_score: dict[Fraction, list[int]] = defaultdict(list)
+    for team_id, score in _team_scores(participants, keys).items():
+        by_score[score].append(team_id)
+    for score, team_ids in by_score.items():
+        # среднее 8 — никто из этих команд не играл: новый раунд играть некому
+        if len(team_ids) > 1 and score != SCORE_NO_SHOW:
+            entry_ids = [p.entry_id for p in participants if p.team_id in team_ids]
+            await crud.create_tiebreak_round(session, tournament, entry_ids, previous_round_id=round_.id)
+
+
+async def build_team_results(session: AsyncSession, tournament: Tournament) -> dict:
+    """Сводная таблица командного тай-брейка: раунды и по каждой команде — место (число, диапазон
+    «2-3», пока команды ещё играют дальше или продолжение не заведено, либо None, если команда ещё
+    не участвовала), среднее по каждому завершённому раунду и результаты её игроков."""
+    from api import teams as teams_module
+    rounds = await crud.list_tiebreak_rounds(session, tournament.id)
+    entries = {e.id: e for e in await crud.list_entries(session, tournament.id)}
+    team_by_id = {t.id: t for t in await teams_module.list_teams(session, tournament.id)}
+
+    participants_by_round = {r.id: await crud.list_tiebreak_participants(session, r.id) for r in rounds}
+    children_by_round: dict[int, dict[frozenset, TiebreakRound]] = {}
+    for r in rounds:
+        children_by_round[r.id] = {
+            frozenset(p.entry_id for p in participants_by_round[child.id]): child
+            for child in await crud.get_child_rounds(session, r.id)
+        }
+
+    member_cells: dict[int, dict[int, dict | None]] = defaultdict(dict)   # entry -> round -> результат
+    keys_by_round: dict[int, dict[int, tuple[bool, bool, int]]] = {}
+    for r in rounds:
+        keys_by_round[r.id] = {}
+        for p in participants_by_round[r.id]:
+            attempt = await crud.get_attempt(session, p.entry_id, p.daily_word_id)
+            member_cells[p.entry_id][r.id] = (
+                {"solved": attempt.solved, "attempts_used": attempt.attempts_used} if attempt else None
+            )
+            if r.completed:
+                keys_by_round[r.id][p.entry_id] = await _result_key(session, p.entry_id, p.daily_word_id, finalize=True)
+
+    scores_by_round = {
+        r.id: _team_scores(participants_by_round[r.id], keys_by_round[r.id]) for r in rounds if r.completed
+    }
+
+    places: dict[int, str] = {}
+
+    async def walk(round_: TiebreakRound, offset: int) -> int:
+        parts = participants_by_round[round_.id]
+        team_ids = sorted({p.team_id for p in parts})
+        if not round_.completed:
+            place_str = str(offset + 1) if len(team_ids) == 1 else f"{offset + 1}-{offset + len(team_ids)}"
+            for team_id in team_ids:
+                places[team_id] = place_str
+            return offset + len(team_ids)
+        by_score: dict[Fraction, list[int]] = defaultdict(list)
+        for team_id, score in scores_by_round[round_.id].items():
+            by_score[score].append(team_id)
+        cur = offset
+        for score in sorted(by_score):
+            group = by_score[score]
+            if len(group) == 1:
+                places[group[0]] = str(cur + 1)
+                cur += 1
+                continue
+            group_entries = frozenset(p.entry_id for p in parts if p.team_id in group)
+            child = children_by_round[round_.id].get(group_entries)
+            if child is not None:
+                cur = await walk(child, cur)
+            else:
+                place_str = f"{cur + 1}-{cur + len(group)}"
+                for team_id in group:
+                    places[team_id] = place_str
+                cur += len(group)
+        return cur
+
+    offset = 0
+    for root in await crud.list_root_tiebreak_rounds(session, tournament.id):
+        offset = await walk(root, offset)
+
+    rows = []
+    for team_id, team in sorted(team_by_id.items()):
+        member_ids = {e.id for e in entries.values() if e.team_id == team_id}
+        for r in rounds:
+            member_ids.update(p.entry_id for p in participants_by_round[r.id] if p.team_id == team_id)
+        team_cells = []
+        for r in rounds:
+            in_round = any(p.team_id == team_id for p in participants_by_round[r.id])
+            if in_round and r.completed:
+                score = scores_by_round[r.id][team_id]
+                team_cells.append({"average": teams_module._format(score, 2), "average_value": float(score)})
+            else:
+                team_cells.append(None)
+        rows.append({
+            "team_id": team_id, "name": team.name, "place": places.get(team_id), "cells": team_cells,
+            "members": [
+                {
+                    "entry_id": eid, "callsign": entries[eid].callsign if eid in entries else "?",
+                    "active": entries[eid].active if eid in entries else False,
+                    "cells": [member_cells.get(eid, {}).get(r.id) for r in rounds],
+                }
+                for eid in sorted(member_ids, key=lambda i: entries[i].callsign.lower() if i in entries else "")
+            ],
+        })
+    rows.sort(key=lambda r: (r["place"] is None, [int(x) for x in r["place"].split("-")] if r["place"] else [0], r["name"].lower()))
+    return {
+        "rounds": [{"id": r.id, "round_number": r.round_number, "completed": r.completed} for r in rounds],
+        "rows": rows,
+    }
+
+
+# Слова игроков командного тай-брейка (превью очереди + ручные правки админа)
+
+async def get_team_word_queue(session: AsyncSession, tournament: Tournament, count: int = 5) -> list[dict]:
+    """Очередь слов командного тай-брейка по раундам (номерам дня) и игрокам: для ещё не наступивших
+    раундов — слова по сиду (или ручная замена), как только раунд создан — реальные слова, без
+    правки. Игроки превью — те, с кого начинается тай-брейк (team_participants); slot — номер
+    игрока в своей команде (по порядку подключения)."""
+    words = await crud.list_daily_words(session, tournament.id)
+    anchors = {w.day_number for w in words if w.entry_id is None}
+    personal: dict[int, dict[int, DailyWord]] = defaultdict(dict)
+    for w in words:
+        if w.entry_id is not None:
+            personal[w.day_number][w.entry_id] = w
+
+    entries = {e.id: e for e in await crud.list_entries(session, tournament.id)}
+    from api import teams as teams_module
+    team_by_id = {t.id: t for t in await teams_module.list_teams(session, tournament.id)}
+    preview_entries = await team_participants(session, tournament)
+    already_used = await crud._get_used_words(session, tournament.id)
+
+    def player_row(entry_id: int, word: str, editable: bool, slot_of: dict[int, int]) -> dict:
+        entry = entries.get(entry_id)
+        team = team_by_id.get(entry.team_id) if entry else None
+        return {
+            "entry_id": entry_id, "callsign": entry.callsign if entry else "?",
+            "team_id": team.id if team else None, "team_name": team.name if team else None,
+            "slot": slot_of.get(entry_id, 0), "word": word, "length": len(word), "editable": editable,
+        }
+
+    queue = []
+    for day in range(1, count + 1):
+        if day in anchors:
+            day_entries = [entries[eid] for eid in personal[day] if eid in entries]
+            slot_of = _slots(day_entries)
+            players = [player_row(eid, personal[day][eid].word, False, slot_of) for eid in
+                       sorted(personal[day], key=lambda i: (entries[i].team_id or 0, i) if i in entries else (0, i))]
+            queue.append({"day_number": day, "editable": False, "players": players})
+            continue
+        picked = crud.pick_team_round_words(tournament, day, day, preview_entries, already_used)
+        slot_of = _slots(preview_entries)
+        players = [player_row(e.id, picked[e.id], True, slot_of) for e in sorted(preview_entries, key=lambda e: (e.team_id, e.id))]
+        queue.append({"day_number": day, "editable": True, "players": players})
+    return queue
+
+
+def _slots(entries: list) -> dict[int, int]:
+    """entry_id -> номер игрока в своей команде (1, 2, ...) по порядку id."""
+    by_team: dict[int, list[int]] = defaultdict(list)
+    for e in entries:
+        by_team[e.team_id].append(e.id)
+    return {eid: i + 1 for ids in by_team.values() for i, eid in enumerate(sorted(ids))}
+
+
+async def _queue_day(session: AsyncSession, tournament: Tournament, day_number: int) -> dict:
+    queue = await get_team_word_queue(session, tournament, count=max(day_number, 1))
+    return next(q for q in queue if q["day_number"] == day_number)
+
+
+async def set_player_word(session: AsyncSession, tournament: Tournament, day_number: int, entry_id: int, word: str) -> None:
+    overrides = dict(tournament.word_overrides or {})
+    overrides[crud.team_override_key(day_number, entry_id)] = word
+    tournament.word_overrides = overrides
+    session.add(tournament)
+    await session.commit()
+
+
+async def reroll_player_word(
+    session: AsyncSession, tournament: Tournament, day_number: int, entry_id: int, length: int | None = None
+) -> str:
+    """«Предложить другое» для слова игрока в ещё не наступившем раунде; слово не повторяет уже
+    использованные и слова остальных игроков этого раунда. По умолчанию длина сохраняется."""
+    from api.dictionary import pick_alternative_word
+    day = await _queue_day(session, tournament, day_number)
+    current = next((p for p in day["players"] if p["entry_id"] == entry_id), None)
+    if current is None:
+        raise ValueError("Игрок не участвует в этом раунде")
+    used = await crud.get_all_used_words(session, tournament.id) | {p["word"] for p in day["players"]}
+    new_word = pick_alternative_word(used, exclude=current["word"], length=length or current["length"])
+    await set_player_word(session, tournament, day_number, entry_id, new_word)
+    return new_word
+
+
+async def sync_slot_word(session: AsyncSession, tournament: Tournament, day_number: int, slot: int) -> str:
+    """Одно слово на слот: слово k-го игрока первой команды становится словом k-го игрока каждой
+    команды (так все команды решают один набор слов — как в варианте «по слотам»)."""
+    day = await _queue_day(session, tournament, day_number)
+    in_slot = [p for p in day["players"] if p["slot"] == slot]
+    if not in_slot:
+        raise ValueError("В этом раунде нет игроков с таким номером в команде")
+    word = in_slot[0]["word"]
+    overrides = dict(tournament.word_overrides or {})
+    for p in in_slot:
+        overrides[crud.team_override_key(day_number, p["entry_id"])] = word
+    tournament.word_overrides = overrides
+    session.add(tournament)
+    await session.commit()
+    return word

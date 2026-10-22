@@ -163,6 +163,7 @@ async def _daily_report_text(session: AsyncSession, tournament, entry, daily_wor
         day_number=day_number,
         streak_days=streak_days,
         title=tournament_title,
+        team_name=await teams.team_name_for_entry(session, tournament, entry) if is_tiebreak else None,
     )
 
 
@@ -217,9 +218,12 @@ async def _notify_daily_finished(session: AsyncSession, tournament, entry, daily
         if tournament.type == TournamentType.tiebreak:
             round_ = await crud.get_tiebreak_round_by_daily_word(session, daily_word.id)
             ids = {p.entry_id for p in await crud.list_tiebreak_participants(session, round_.id)} if round_ else set()
+            played = (
+                await crud.count_round_finished_until(session, round_, attempt.finished_at) if round_ else 0
+            )  # в командном тай-брейке у каждого своё слово
         else:
             ids = {e.id for e in await crud.list_entries(session, tournament.id) if e.active}
-        played = await crud.count_finished_attempts_until(session, daily_word.id, attempt.finished_at, ids)
+            played = await crud.count_finished_attempts_until(session, daily_word.id, attempt.finished_at, ids)
         footer = _notification_footer(attempt.finished_at, played, len(ids))
         notify.notify_admin_in_background(f"{text}\n\n{footer}")
     except Exception:
@@ -374,14 +378,14 @@ async def _resolve_context(session: AsyncSession, token: str, tournament_id: int
         round_ = await crud.get_active_tiebreak_round_for_entry(session, tournament.id, entry.id)
         if round_ is None:
             return entry, tournament, None  # ещё не стартовал / ждёт итогов раунда / уже получил место
-        daily_word = await crud.get_daily_word_by_id(session, round_.daily_word_id)
+        daily_word = await tiebreak.word_for_entry(session, round_, entry.id)  # в командном — своё слово
         return entry, tournament, daily_word
 
     if tournament.status == TournamentStatus.tiebreak:
         round_ = await crud.get_active_tiebreak_round_for_entry(session, tournament.id, entry.id)
         if round_ is None:
             return entry, tournament, None  # не в тай-брейк-группе — просто ждёт итогов
-        daily_word = await crud.get_daily_word_by_id(session, round_.daily_word_id)
+        daily_word = await tiebreak.word_for_entry(session, round_, entry.id)
         return entry, tournament, daily_word
 
     day_number = day_number_for_date(tournament.start_date, today())
@@ -411,6 +415,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         and tournament.status not in (TournamentStatus.tiebreak, TournamentStatus.playoff)
     )
 
+    team_name = await teams.team_name_for_entry(session, tournament, entry) if is_tiebreak else None
     tiebreak_started = False
     tiebreak_place = None
     if is_tiebreak:
@@ -431,11 +436,10 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         last_attempt_fields = {}
         if is_tiebreak and tiebreak_place is not None and "-" not in tiebreak_place:
             last_round = await crud.get_last_tiebreak_round_for_entry(session, tournament.id, entry.id)
-            last_attempt = (
-                await crud.get_attempt(session, entry.id, last_round.daily_word_id) if last_round else None
-            )
+            last_word_id = await crud.round_word_id_for_entry(session, last_round, entry.id) if last_round else None
+            last_attempt = await crud.get_attempt(session, entry.id, last_word_id) if last_word_id else None
             if last_attempt is not None:
-                last_daily_word = await crud.get_daily_word_by_id(session, last_round.daily_word_id)
+                last_daily_word = await crud.get_daily_word_by_id(session, last_word_id)
                 last_attempt_fields = dict(
                     report_text=await _daily_report_text(
                         session, tournament, entry, last_daily_word, last_attempt, tournament_title
@@ -451,7 +455,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             has_word_today=False, already_played=False, callsign=entry.callsign, tournament_title=tournament_title,
             base_title=tournament.title, is_endless=is_endless, hashtag=tournament.hashtag, paused=tournament.paused,
             is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=shown_tiebreak_place,
-            is_standard_report=is_standard_report, word_length=base_length(tournament),
+            team_name=team_name, is_standard_report=is_standard_report, word_length=base_length(tournament),
             **last_attempt_fields,
             **(
                 _unavailable_info(tournament, day_number_for_date(tournament.start_date, today()))
@@ -472,7 +476,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             callsign=entry.callsign, tournament_title=tournament_title, base_title=tournament.title,
             is_endless=is_endless, hashtag=tournament.hashtag,
             is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=shown_tiebreak_place,
-            is_standard_report=is_standard_report, word_length=len(daily_word.word),
+            team_name=team_name, is_standard_report=is_standard_report, word_length=len(daily_word.word),
         )
 
     already_played = attempt.solved or attempt.attempts_used >= MAX_ATTEMPTS
@@ -503,7 +507,8 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         hashtag=tournament.hashtag,
         next_word_at=next_publish_at().isoformat() if already_played and not is_tiebreak else None,
         is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=shown_tiebreak_place,
-        is_standard_report=is_standard_report, streak_days=streak_days, word_length=len(daily_word.word),
+        team_name=team_name, is_standard_report=is_standard_report, streak_days=streak_days,
+        word_length=len(daily_word.word),
     )
 
 

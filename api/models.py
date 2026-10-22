@@ -413,6 +413,11 @@ class TiebreakParticipant(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     round_id: Mapped[int] = mapped_column(ForeignKey("tiebreak_rounds.id"))
     entry_id: Mapped[int] = mapped_column(ForeignKey("tournament_entries.id"))
+    # Командный тай-брейк (Tournament.teams_enabled у типа tiebreak, см. api/tiebreak.py): у каждого
+    # участника раунда своё слово (DailyWord с entry_id участника) и команда на момент создания раунда.
+    # В обычном тай-брейке оба поля пусты — слово общее, round.daily_word_id.
+    daily_word_id: Mapped[int | None] = mapped_column(ForeignKey("daily_words.id"), nullable=True)
+    team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id", ondelete="SET NULL"), nullable=True)
 
     round: Mapped["TiebreakRound"] = relationship(back_populates="participants")
 
