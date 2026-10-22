@@ -143,7 +143,9 @@ export default function PlayerGame() {
       } else if (data.is_tiebreak && !data.tiebreak_started) {
         setMessage("Тай-брейк ещё не начался.");
       } else if (data.is_tiebreak && data.tiebreak_place) {
-        const finalText = `Тай-брейк завершён — ваше место: ${data.tiebreak_place}.`;
+        const finalText = data.team_name
+          ? `Тай-брейк завершён — место вашей команды «${data.team_name}»: ${data.tiebreak_place}.`
+          : `Тай-брейк завершён — ваше место: ${data.tiebreak_place}.`;
         setMessage(finalText);
         // Если есть реальная попытка последнего раунда — попап с её сеткой,
         // как при обычном завершённом дне, а не пустое поле ввода (см. пункт

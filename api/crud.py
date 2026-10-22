@@ -855,14 +855,21 @@ def pick_team_round_words(
     (розыгрыш, день, игрок) и не повторяют уже использованные и друг друга. entries — участники с
     командой; порядок обхода — по (команда, id), чтобы превью и реальный раунд давали одно и то же."""
     overrides = tournament.word_overrides or {}
-    used = set(already_used)
     length = tiebreak_length(tournament, round_number)
+    manual = {e.id: overrides.get(team_override_key(day_number, e.id)) for e in entries}
+    taken = {w for w in manual.values() if w}  # ручные слова (у разных игроков могут и совпадать — «слово на слот»)
     words: dict[int, str] = {}
     for entry in sorted(entries, key=lambda e: (e.team_id, e.id)):
-        word = overrides.get(team_override_key(day_number, entry.id))
+        word = manual[entry.id]
         if not word:
-            word = pick_word_for_label(f"tiebreak:{tournament.id}:{day_number}:{entry.id}", used, length)
-        used.add(word)
+            # выбор по сиду игрока и ТОЛЬКО по использованным в розыгрыше словам: правка слова одного игрока не
+            # сдвигает слова остальных; при совпадении с уже занятым словом раунда берётся следующий сид
+            label = f"tiebreak:{tournament.id}:{day_number}:{entry.id}"
+            for attempt in range(50):
+                word = pick_word_for_label(label if attempt == 0 else f"{label}:{attempt}", already_used, length)
+                if word not in taken:
+                    break
+        taken.add(word)
         words[entry.id] = word
     return words
 

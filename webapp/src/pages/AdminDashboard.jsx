@@ -247,23 +247,34 @@ export default function AdminDashboard() {
             {selected ? (
               <>
                 <EntriesPanel tournament={selected} users={users} allTournaments={tournaments} />
-                {selected.type === "marathon" && selected.teams_enabled && (
+                {(selected.type === "marathon" || selected.type === "tiebreak") && selected.teams_enabled && (
                   <MarathonTeamsPanel tournament={selected} onChanged={() => setTeamsVersion((v) => v + 1)} />
                 )}
-                {selected.type === "tiebreak" && <TiebreakWordsPanel tournament={selected} />}
+                {selected.type === "tiebreak" && (
+                  selected.teams_enabled
+                    ? <TiebreakTeamWordsPanel tournament={selected} />
+                    : <TiebreakWordsPanel tournament={selected} />
+                )}
                 {selected.type === "marathon" && (
                   selected.individual_words
                     ? <MarathonIndividualWordsPanel tournament={selected} onTournamentChanged={refreshTournaments} />
                     : <MarathonWordsPanel tournament={selected} onTournamentChanged={refreshTournaments} />
                 )}
                 {selected.type === "marathon" && selected.teams_enabled && (
-                  <MarathonTeamStandingsPanel tournament={selected} refreshKey={teamsVersion} />
+                  <MarathonTeamStandingsPanel
+                    tournament={selected} refreshKey={teamsVersion} tournaments={tournaments}
+                    onTournamentsChanged={refreshTournaments}
+                  />
                 )}
                 {selected.type === "marathon" && <MarathonStandingsPanel tournament={selected} />}
                 {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <TodayWordPanel tournament={selected} />}
                 {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordConfirmPanel tournament={selected} />}
                 {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordHistoryPanel tournament={selected} />}
-                {selected.type === "tiebreak" && <TiebreakResultsPanel tournament={selected} />}
+                {selected.type === "tiebreak" && (
+                  selected.teams_enabled
+                    ? <TiebreakTeamResultsPanel tournament={selected} />
+                    : <TiebreakResultsPanel tournament={selected} />
+                )}
                 {selected.duration_days != null && <StandingsPanel tournament={selected} />}
                 {selected.type === "championship" && <TiebreakPanel tournament={selected} onTournamentChanged={refreshTournaments} />}
                 {(selected.type === "championship" || selected.type === "knockout") && (
@@ -889,7 +900,10 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
         title: settingsForm.title, hashtag: settingsForm.hashtag, note: settingsForm.note,
         notify_admin: settingsForm.notify_admin,
       };
-      if (t.type === "tiebreak") body.first_place = Number(settingsForm.first_place) || 1;
+      if (t.type === "tiebreak") {
+        body.first_place = Number(settingsForm.first_place) || 1;
+        body.teams_enabled = settingsForm.teams_enabled;
+      }
       if (supportsThirdPlace(t)) body.third_place_match = settingsForm.third_place_match;
       if (t.type === "marathon") {
         body.words_count = Number(settingsForm.words_count);
@@ -983,7 +997,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           {TYPE_LABEL[t.type] || t.type} · {t.start_date}
           {t.duration_days != null ? ` · ${t.duration_days} дн.` : ""}
           {t.word_length && t.word_length !== 5 ? ` · ${t.word_length} букв` : ""}
-          {t.type === "marathon" && t.words_count != null ? ` · ${t.words_count} сл.${t.individual_words ? " (личные)" : ""}${t.teams_enabled ? " · команды" : ""}` : ""} · {STATUS_LABEL[t.status] || t.status}
+          {t.type === "marathon" && t.words_count != null ? ` · ${t.words_count} сл.${t.individual_words ? " (личные)" : ""}${t.teams_enabled ? " · команды" : ""}` : ""}{t.type === "tiebreak" && t.teams_enabled ? " · команды" : ""} · {STATUS_LABEL[t.status] || t.status}
         </div>
         {t.note && editingSettings !== t.id && (
           <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4, whiteSpace: "pre-wrap" }}>{t.note}</div>
@@ -1060,6 +1074,22 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                     Командный зачёт рассчитан на личные наборы слов.
                   </div>
                 )}
+              </div>
+            )}
+            {t.type === "tiebreak" && (
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                  <input
+                    type="checkbox" checked={settingsForm.teams_enabled}
+                    onChange={(e) => setSettingsForm((f) => ({ ...f, teams_enabled: e.target.checked }))}
+                  />
+                  Командный тай-брейк
+                </label>
+                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
+                  Места разыгрывают команды (от 2 подключённых игроков): у каждого игрока в раунде своё слово, результат
+                  команды — среднее число попыток (не угадал — 7, не играл — 8). Включить и собрать команды нужно до
+                  начала: после старта менять нельзя.
+                </div>
               </div>
             )}
             {t.duration_days != null && (
@@ -2614,11 +2644,18 @@ function MarathonTeamsPanel({ tournament, onChanged }) {
         <h3 style={{ margin: 0 }}>Команды «{tournament.title}»</h3>
         <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
       </div>
-      <p style={{ fontSize: 13, opacity: 0.7 }}>
-        Команда идёт в зачёт, если в ней не меньше 2 участников (скрытые из таблицы не считаются). Состав можно менять
-        в любой момент — таблица пересчитывается сразу. Игрок без команды остаётся только в личном зачёте.
-      </p>
-      {!tournament.individual_words && (
+      {tournament.type === "tiebreak" ? (
+        <p style={{ fontSize: 13, opacity: 0.7 }}>
+          В раунд попадают игроки команд, где не меньше 2 подключённых игроков (нужно хотя бы две такие команды).
+          Игроки без команды не играют. Состав нужно собрать до начала тай-брейка — после старта менять нельзя.
+        </p>
+      ) : (
+        <p style={{ fontSize: 13, opacity: 0.7 }}>
+          Команда идёт в зачёт, если в ней не меньше 2 участников (скрытые из таблицы не считаются). Состав можно менять
+          в любой момент — таблица пересчитывается сразу. Игрок без команды остаётся только в личном зачёте.
+        </p>
+      )}
+      {tournament.type !== "tiebreak" && !tournament.individual_words && (
         <p style={{ fontSize: 12, color: "#e5a94c" }}>
           Внимание: у всех общий набор слов — участники одной команды могут подсказывать друг другу ответы.
         </p>
@@ -2716,14 +2753,62 @@ function MarathonTeamsPanel({ tournament, onChanged }) {
 }
 
 // Командная таблица марафона: среднее число попыток на слово (api/teams.py).
-function MarathonTeamStandingsPanel({ tournament, refreshKey }) {
+function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], onTournamentsChanged }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(() => new Set());
+  const [tbDate, setTbDate] = useState(""); // дата старта создаваемого тай-брейка; пусто — сегодня
+  const [tbMessage, setTbMessage] = useState("");
+  const [tbBusy, setTbBusy] = useState(false);
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  // Командный тай-брейк для группы команд с общим местом: новый розыгрыш с теми же командами и игроками
+  async function createTiebreak(place) {
+    setTbBusy(true);
+    setTbMessage("");
+    try {
+      const created = await api(`/api/admin/tournaments/${tournament.id}/team-tie-groups/create-tiebreak`, {
+        method: "POST", body: JSON.stringify({ place, start_date: tbDate || null }),
+      });
+      setTbMessage(`Создан тай-брейк «${created.title}» (старт ${created.start_date}). Он в списке розыгрышей слева; игроки играют по своим обычным ссылкам.`);
+      if (onTournamentsChanged) await onTournamentsChanged();
+      await tie.openTies();
+    } catch (e) {
+      setTbMessage(e.message);
+    } finally {
+      setTbBusy(false);
+    }
+  }
+
   const tie = useTieResolution(tournament.id, () => refresh(), {
     groupsPath: "team-tie-groups", savePath: "team-tie-resolutions", idKey: "team_id", idsKey: "team_ids", nameKey: "name",
+    renderGroupExtra: (g) => {
+      if (g.tiebreak_id != null) {
+        const tb = tournaments.find((t) => t.id === g.tiebreak_id);
+        return (
+          <span style={{ fontSize: 12, opacity: 0.8 }}>
+            Тай-брейк команд создан{tb ? `: «${tb.title}»` : ` (розыгрыш №${g.tiebreak_id})`}
+          </span>
+        );
+      }
+      return (
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="date" min={todayIso} value={tbDate} onChange={(e) => setTbDate(e.target.value)}
+            title="Дата старта тай-брейка (пусто — сегодня)"
+            style={{ ...inputStyle, padding: "2px 6px", fontSize: 12, width: "auto" }}
+          />
+          <button
+            onClick={() => createTiebreak(g.place)} disabled={tbBusy}
+            style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 12, opacity: tbBusy ? 0.6 : 1 }}
+          >
+            Создать тай-брейк для этих команд
+          </button>
+        </div>
+      );
+    },
   });
   const placeLabel = (r) => `${r.place}${r.tie_resolved ? "*" : ""}`;
   const TIE_FOOTNOTE = "* - место определено разбором ничьей";
@@ -2887,6 +2972,9 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey }) {
         Место — по среднему числу попыток на слово: (попытки по пройденным словам + {data.unsolved_attempts} за каждое
         непройденное) ÷ (участники × слова). Меньше — лучше. Нажмите на команду, чтобы увидеть игроков.
       </p>
+      {tbMessage && (
+        <div style={{ fontSize: 12, background: "#242426", borderRadius: 6, padding: "6px 10px", marginBottom: 8 }}>{tbMessage}</div>
+      )}
       {tie.open && <TieResolutionPanel tie={tie} />}
       {data.rows.length === 0 ? (
         <div style={{ opacity: 0.7, fontSize: 13 }}>Пока нет команд, подходящих для зачёта (нужно не меньше 2 участников).</div>
@@ -3305,6 +3393,374 @@ function TiebreakWordsPanel({ tournament }) {
   );
 }
 
+// Слова командного тай-брейка: у каждого игрока в раунде своё слово (api/tiebreak.py).
+function TiebreakTeamWordsPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
+  const [days, setDays] = useState(null);
+  const [openDay, setOpenDay] = useState(1);
+  const [custom, setCustom] = useState({}); // "день:entry_id" -> введённое слово
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function refresh() {
+    const id = tournament.id;
+    try {
+      const data = await api(`/api/admin/tournaments/${id}/tiebreak-team-words`);
+      if (tournamentIdRef.current === id) {
+        setDays(data);
+        setError("");
+      }
+    } catch (e) {
+      if (tournamentIdRef.current === id) setError(e.message);
+    }
+  }
+
+  useEffect(() => {
+    setDays(null);
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id, tournament.teams_enabled]);
+
+  async function call(path, body) {
+    const id = tournament.id;
+    setError("");
+    setBusy(true);
+    try {
+      const res = await api(`/api/admin/tournaments/${id}/tiebreak-team-words/${path}`, {
+        method: "POST", body: body ? JSON.stringify(body) : undefined,
+      });
+      if (tournamentIdRef.current === id) setDays(res);
+    } catch (e) {
+      setError(e.message);
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!days) return error ? <div style={{ ...panelStyle, marginTop: 20, color: "#e5484d" }}>{error}</div> : null;
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ margin: 0 }}>Слова командного тай-брейка</h3>
+        <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+      </div>
+      <p style={{ fontSize: 13, opacity: 0.7 }}>
+        У каждого игрока в раунде своё слово. Раунд 1 действует сразу после старта, остальные пригодятся, если команды
+        сравняются по среднему (продолжение — только для равных команд). Слова наступившего раунда менять нельзя.
+        «Одно слово на слот» даёт k-м игрокам всех команд слово первой команды — так все команды решают один набор слов.
+      </p>
+      {days.map((day) => {
+        const maxSlot = Math.max(0, ...day.players.map((pl) => pl.slot));
+        const isOpen = openDay === day.day_number;
+        return (
+          <div key={day.day_number} style={{ borderTop: "1px solid #2a2a2c", paddingTop: 6, marginTop: 6 }}>
+            <button
+              onClick={() => setOpenDay(isOpen ? null : day.day_number)}
+              style={{ ...ghostButtonStyle, fontSize: 13 }}
+            >
+              {isOpen ? "▾" : "▸"} Раунд {day.day_number}
+              {!day.editable && <span style={{ opacity: 0.6, fontWeight: 400 }}> · уже наступил</span>}
+            </button>
+            {isOpen && (
+              day.players.length === 0 ? (
+                <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>
+                  Пока некому играть: нужно хотя бы две команды, в каждой не меньше 2 подключённых игроков.
+                </div>
+              ) : (
+                <>
+                  {day.editable && maxSlot > 0 && (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "6px 0" }}>
+                      {Array.from({ length: maxSlot }, (_, i) => (
+                        <button
+                          key={i} disabled={busy} onClick={() => call(`${day.day_number}/slot/${i + 1}/sync`)}
+                          title={`Игроки №${i + 1} всех команд получат слово игрока №${i + 1} первой команды`}
+                          style={{ ...ghostButtonStyle, fontSize: 11, padding: "2px 8px" }}
+                        >
+                          Одно слово на слот {i + 1}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
+                      <thead>
+                        <tr style={{ textAlign: "left", opacity: 0.7 }}>
+                          <th style={thStyle}>Команда</th>
+                          <th style={thStyle}>№</th>
+                          <th style={thStyle}>Игрок</th>
+                          <th style={thStyle}>Слово</th>
+                          <th style={thStyle}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {day.players.map((pl) => {
+                          const key = `${day.day_number}:${pl.entry_id}`;
+                          return (
+                            <tr key={pl.entry_id} style={{ borderTop: "1px solid #2a2a2c" }}>
+                              <td style={tdStyle}>{pl.team_name}</td>
+                              <td style={tdStyle}>{pl.slot}</td>
+                              <td style={tdStyle}>{pl.callsign}</td>
+                              <td style={{ ...tdStyle, textTransform: "uppercase", letterSpacing: 1, fontWeight: 700 }}>{pl.word}</td>
+                              <td style={tdStyle}>
+                                {pl.editable && (
+                                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+                                    <LengthSelect
+                                      value={pl.length} disabled={busy}
+                                      onChange={(n) => { if (n != null && n !== pl.length) call(`${day.day_number}/${pl.entry_id}/length`, { length: n }); }}
+                                      title="Сменить длину слова: система подберёт новое слово"
+                                    />
+                                    <button
+                                      disabled={busy} onClick={() => call(`${day.day_number}/${pl.entry_id}/reroll`)}
+                                      style={{ ...ghostButtonStyle, fontSize: 11, padding: "2px 8px" }}
+                                    >
+                                      Предложить другое
+                                    </button>
+                                    <input
+                                      placeholder="Своё слово" maxLength={7} value={custom[key] || ""}
+                                      onChange={(e) => setCustom((prev) => ({ ...prev, [key]: e.target.value }))}
+                                      style={{ ...inputStyle, padding: "2px 6px", fontSize: 12, width: 90 }}
+                                    />
+                                    <button
+                                      disabled={busy || !isWordLength(custom[key])}
+                                      onClick={async () => {
+                                        await call(`${day.day_number}/${pl.entry_id}`, { word: (custom[key] || "").trim().toLowerCase() });
+                                        setCustom((prev) => ({ ...prev, [key]: "" }));
+                                      }}
+                                      style={{ ...ghostButtonStyle, fontSize: 11, padding: "2px 8px" }}
+                                    >
+                                      Заменить
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )
+            )}
+          </div>
+        );
+      })}
+      {error && <div style={{ color: "#e5484d", marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
+// Результаты командного тай-брейка: место команды, среднее по раундам, результаты игроков.
+function TiebreakTeamResultsPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(() => new Set());
+
+  async function refresh() {
+    const id = tournament.id;
+    try {
+      const res = await api(`/api/admin/tournaments/${id}/tiebreak-team-results`);
+      if (tournamentIdRef.current === id) {
+        setData(res);
+        setError("");
+      }
+    } catch (e) {
+      if (tournamentIdRef.current === id) setError(e.message);
+    }
+  }
+
+  useEffect(() => {
+    setData(null);
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id, tournament.teams_enabled]);
+
+  if (!data) return error ? <div style={{ ...panelStyle, marginTop: 20, color: "#e5484d" }}>{error}</div> : null;
+
+  const cellText = (cell) => (!cell ? "-" : cell.solved ? `${cell.attempts_used}/6` : "X/6");
+  const toggle = (id) => setExpanded((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
+
+  const NOTE = "Среднее число попыток команды в раунде; не угадал — 7, не играл — 8";
+
+  // Картинка таблицы: место, команда и среднее по каждому раунду — в том же стиле, что "Скачать" у
+  // индивидуального тай-брейка (TiebreakResultsPanel). Команды, которые ещё не играли, не включаются.
+  function handleDownload() {
+    const rows = data.rows.filter((r) => r.place);
+    const dpr = window.devicePixelRatio || 1;
+    const font = "14px system-ui, sans-serif";
+    const mctx = document.createElement("canvas").getContext("2d");
+    mctx.font = "bold 14px system-ui, sans-serif";
+    const nameCol = Math.max(120, ...rows.map((r) => mctx.measureText(r.name).width + 20));
+    mctx.font = "bold 13px system-ui, sans-serif";
+    const placeCol = Math.max(40, ...rows.map((r) => mctx.measureText(r.place).width + 16));
+    mctx.font = "bold 11px system-ui, sans-serif";
+    const roundCol = Math.max(70, ...data.rounds.map((r) => mctx.measureText(`Раунд ${r.round_number}`).width + 14));
+    mctx.font = "12px system-ui, sans-serif";
+    const noteWidth = mctx.measureText(NOTE).width;
+
+    const padding = 16;
+    const rowHeight = 28;
+    const headerHeight = 28;
+    const noteHeight = 26;
+    const tableWidth = placeCol + nameCol + roundCol * data.rounds.length;
+    const width = Math.max(tableWidth, noteWidth) + padding * 2;
+    const height = headerHeight + rowHeight * rows.length + padding * 2 + noteHeight;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.textBaseline = "middle";
+
+    const top = padding;
+    const xName = padding + placeCol;
+    const roundX = data.rounds.map((_, i) => xName + nameCol + roundCol * i);
+    ctx.fillStyle = "#f2f2f2";
+    ctx.fillRect(padding, top, tableWidth, headerHeight);
+    ctx.fillStyle = "#666";
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Место", padding + placeCol / 2, top + headerHeight / 2);
+    ctx.textAlign = "left";
+    ctx.fillText("Команда", xName + 6, top + headerHeight / 2);
+    ctx.font = "bold 11px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    data.rounds.forEach((r, i) => ctx.fillText(`Раунд ${r.round_number}`, roundX[i] + roundCol / 2, top + headerHeight / 2));
+
+    rows.forEach((r, ri) => {
+      const y = top + headerHeight + ri * rowHeight;
+      if (ri % 2 === 1) {
+        ctx.fillStyle = "#fafafa";
+        ctx.fillRect(padding, y, tableWidth, rowHeight);
+      }
+      ctx.fillStyle = "#1a1a1b";
+      ctx.font = "bold " + font;
+      ctx.textAlign = "center";
+      ctx.fillText(r.place, padding + placeCol / 2, y + rowHeight / 2);
+      ctx.textAlign = "left";
+      ctx.fillText(r.name, xName + 6, y + rowHeight / 2);
+      ctx.textAlign = "center";
+      r.cells.forEach((cell, i) => {
+        ctx.fillStyle = cell ? "#1a1a1b" : "#999";
+        ctx.font = cell ? "bold " + font : font;
+        ctx.fillText(cell ? cell.average : "-", roundX[i] + roundCol / 2, y + rowHeight / 2);
+      });
+    });
+
+    ctx.strokeStyle = "#ddd";
+    ctx.lineWidth = 1;
+    for (let ri = 0; ri <= rows.length; ri++) {
+      const y = top + headerHeight + ri * rowHeight;
+      ctx.beginPath();
+      ctx.moveTo(padding, y);
+      ctx.lineTo(padding + tableWidth, y);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#666";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(NOTE, padding, top + headerHeight + rowHeight * rows.length + 16);
+
+    canvas.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${tournament.title.replace(/[^\p{L}\p{N}]+/gu, "_")}_тайбрейк_команд.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  function handleCopy() {
+    const tags = [tournament.hashtag, "#тайбрейк_команд"].filter(Boolean).join(" ");
+    const lines = data.rows
+      .filter((r) => r.place)
+      .map((r) => `${r.place} · ${r.name}${r.cells.some(Boolean) ? ` — ${r.cells.filter(Boolean).map((c) => c.average).join(" · ")}` : ""}`);
+    const text = `${tags}\n\n${lines.join("\n")}\n\nсреднее число попыток команды по раундам; не угадал — 7, не играл — 8`;
+    navigator.clipboard.writeText(text).then(
+      () => { setCopied(true); setTimeout(() => setCopied(false), 2000); },
+      () => setCopied(false)
+    );
+  }
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <h3 style={{ margin: 0 }}>
+          Результаты командного тай-брейка
+          {data.last_place != null && (
+            <span style={{ fontWeight: 400, fontSize: 13, opacity: 0.7 }}>
+              {" "}· места {data.last_place > data.first_place ? `${data.first_place}–${data.last_place}` : data.first_place}
+            </span>
+          )}
+        </h3>
+        <div style={{ display: "flex", gap: 8 }}>
+          {data.rounds.length > 0 && (
+            <>
+              <button onClick={handleCopy} style={ghostButtonStyle}>{copied ? "Скопировано!" : "Скопировать таблицу"}</button>
+              <button onClick={handleDownload} style={ghostButtonStyle}>Скачать таблицу</button>
+            </>
+          )}
+          <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+        </div>
+      </div>
+      {data.rounds.length === 0 ? (
+        <p style={{ opacity: 0.7, fontSize: 13, marginTop: 8 }}>Розыгрыш ещё не начался.</p>
+      ) : (
+        <>
+          <p style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>
+            Среднее число попыток команды в раунде (не угадал или не доиграл — 7, не играл — 8). Нажмите на команду, чтобы увидеть игроков.
+          </p>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
+              <thead>
+                <tr style={{ textAlign: "left", opacity: 0.7 }}>
+                  <th style={thStyle}>Место</th>
+                  <th style={thStyle}>Команда</th>
+                  {data.rounds.map((r) => <th key={r.id} style={{ ...thStyle, textAlign: "center" }}>Раунд {r.round_number}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {data.rows.map((row) => (
+                  <Fragment key={row.team_id}>
+                    <tr onClick={() => toggle(row.team_id)} style={{ borderTop: "1px solid #2a2a2c", cursor: "pointer" }}>
+                      <td style={{ ...tdStyle, fontWeight: row.place && !row.place.includes("-") ? 700 : 400 }}>{row.place || "-"}</td>
+                      <td style={tdStyle}>{expanded.has(row.team_id) ? "▾" : "▸"} {row.name}</td>
+                      {row.cells.map((cell, i) => (
+                        <td key={i} style={{ ...tdStyle, textAlign: "center", fontWeight: 700 }}>{cell ? cell.average : "-"}</td>
+                      ))}
+                    </tr>
+                    {expanded.has(row.team_id) && row.members.map((m) => (
+                      <tr key={m.entry_id} style={{ opacity: m.active ? 0.85 : 0.5, fontSize: 12 }}>
+                        <td></td>
+                        <td style={tdStyle}>{m.callsign}</td>
+                        {m.cells.map((cell, i) => <td key={i} style={{ ...tdStyle, textAlign: "center" }}>{cellText(cell)}</td>)}
+                      </tr>
+                    ))}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+      {error && <div style={{ color: "#e5484d", marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
 function TiebreakResultsPanel({ tournament }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [data, setData] = useState(null);
@@ -3499,6 +3955,7 @@ function TiebreakResultsPanel({ tournament }) {
 function useTieResolution(tournamentId, onSaved, opts = {}) {
   const {
     groupsPath = "tie-groups", savePath = "tie-resolutions", idKey = "entry_id", idsKey = "entry_ids", nameKey = "callsign",
+    renderGroupExtra = null,
   } = opts;
   const [open, setOpen] = useState(false);
   const [data, setData] = useState(null); // ответ /tie-groups | null
@@ -3567,7 +4024,7 @@ function useTieResolution(tournamentId, onSaved, opts = {}) {
     saveTies(resolutions);
   }
 
-  return { open, setOpen, data, state, setState, busy, error, openTies, moveTie, saveTies, applySelected, idKey, nameKey };
+  return { open, setOpen, data, state, setState, busy, error, openTies, moveTie, saveTies, applySelected, idKey, nameKey, renderGroupExtra };
 }
 
 function TieResolutionPanel({ tie }) {
@@ -3612,6 +4069,7 @@ function TieResolutionPanel({ tie }) {
                         : `По тай-брейку «${st.source}»`}
                       {!g.suggested_order && !g.applied_order && g.suggestion_note ? `. ${g.suggestion_note}` : ""}
                     </div>
+                    {tie.renderGroupExtra && <div style={{ margin: "4px 0 6px 22px" }}>{tie.renderGroupExtra(g)}</div>}
                     <div style={{ marginLeft: 22 }}>
                       {st.order.map((id, i) => (
                         <div key={id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "2px 0" }}>

@@ -1451,7 +1451,9 @@ async def set_tiebreak_team_word_length(
 @router.get("/tournaments/{tournament_id}/tiebreak-team-results", response_model=TiebreakTeamResultsOut)
 async def get_tiebreak_team_results(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
     tournament = await _require_team_tiebreak(session, tournament_id)
-    await tiebreak.ensure_started(session, tournament)
+    # в отличие от обычного тай-брейка, просмотр НЕ запускает первый раунд: иначе админ, открыв
+    # розыгрыш сразу после сборки команд, лишился бы возможности поправить слова и составы.
+    # Раунд стартует, когда первый игрок открывает игру (см. game._resolve_context).
     await tiebreak.resolve_ready_rounds(session, tournament)
     results = await tiebreak.build_team_results(session, tournament)
     first_place = tournament.first_place or 1
