@@ -29,7 +29,9 @@ from api.tournament_time import today
 from api import crud
 
 MAX_ATTEMPTS = 6
-UNSOLVED_ATTEMPTS = 7  # неугаданное слово в зачёте = 7 попыток
+from api.attempt_scores import FAILED_ATTEMPTS, SKIPPED_ATTEMPTS  # noqa: F401 — единая лестница очков
+
+UNSOLVED_ATTEMPTS = FAILED_ATTEMPTS  # неугаданное слово (все 6 попыток) в зачёте = 7 попыток
 MIN_WORDS = 2
 MAX_WORDS = 30
 

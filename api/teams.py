@@ -7,11 +7,12 @@
 
 Балл команды — среднее число попыток на слово по всем её участникам:
 
-    (попытки по пройденным словам + UNSOLVED_ATTEMPTS * каждое непройденное слово)
+    (попытки по пройденным словам + SKIPPED_ATTEMPTS * каждое непройденное слово)
         / (число участников * число слов марафона)
 
-Непройденное слово (в том числе ещё не начатое или начатое, но не законченное) считается
-как неугаданное, поэтому «спящий» игрок команду не выручает, а в начале игры все команды
+Неугаданное слово (все 6 попыток) даёт FAILED_ATTEMPTS = 7, а непройденное (не начатое или начатое, но
+не законченное) — SKIPPED_ATTEMPTS = 8, то есть хуже провала (см. api/attempt_scores.py), поэтому
+«спящий» игрок команду не выручает, а в начале игры все команды
 выглядят одинаково плохо — прогресс показывается рядом (words_done / words_total).
 Меньше — лучше. Сравнение точное (Fraction), показ — 2 знака, а если у команд с разными
 местами два знака совпали — столько знаков, чтобы увидеть первое отличие (format_averages).
@@ -167,7 +168,7 @@ async def compute_team_standings(
             attempts_sum += attempts
             words_done += done
             # среднее игрока по той же формуле, что у команды: среднее команды = среднее по её игрокам
-            own = Fraction(attempts + marathon.UNSOLVED_ATTEMPTS * (count - done), count) if count else Fraction(0)
+            own = Fraction(attempts + marathon.SKIPPED_ATTEMPTS * (count - done), count) if count else Fraction(0)
             # результаты слов без самих слов и попыток — подробная таблица не раскрывает ответы
             cells = [
                 None if c is None else
@@ -191,7 +192,7 @@ async def compute_team_standings(
         unplayed = size * count - words_done
         item["attempts_sum"] = attempts_sum
         item["unplayed_words"] = unplayed
-        item["score"] = Fraction(attempts_sum + marathon.UNSOLVED_ATTEMPTS * unplayed, size * count)
+        item["score"] = Fraction(attempts_sum + marathon.SKIPPED_ATTEMPTS * unplayed, size * count)
         ranked.append(item)
 
     ranked.sort(key=lambda t: (t["score"], t["name"].lower()))
@@ -223,7 +224,7 @@ async def compute_team_standings(
     for item in ranked:
         del item["score"]  # Fraction не сериализуется; для API есть average / average_value
     return {
-        "words_count": count, "unsolved_attempts": marathon.UNSOLVED_ATTEMPTS,
+        "words_count": count, "unsolved_attempts": marathon.UNSOLVED_ATTEMPTS, "skipped_attempts": marathon.SKIPPED_ATTEMPTS,
         "hashtag": tournament.hashtag, "rows": ranked, "excluded": excluded,
     }
 

@@ -1087,7 +1087,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                 </label>
                 <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
                   Места разыгрывают команды (от 2 подключённых игроков): у каждого игрока в раунде своё слово, результат
-                  команды — среднее число попыток (не угадал — 7, не играл — 8). Включить и собрать команды нужно до
+                  команды — среднее число попыток (не угадал — 7, не завершил или не играл — 8). Включить и собрать команды нужно до
                   начала: после старта менять нельзя.
                 </div>
               </div>
@@ -2807,7 +2807,7 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
   });
   const placeLabel = (r) => `${r.place}${r.tie_resolved ? "*" : ""}`;
   const TIE_FOOTNOTE = "* - место определено разбором ничьей";
-  const RULE_NOTE = (d) => `Среднее число попыток на слово; неугаданное и непройденное слово = ${d.unsolved_attempts} попыток`;
+  const RULE_NOTE = (d) => `Среднее число попыток на слово; неугаданное слово = ${d.unsolved_attempts}, непройденное = ${d.skipped_attempts}`;
 
   async function refresh() {
     const id = tournament.id;
@@ -2832,8 +2832,8 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
   const sortedMembers = (r) => [...r.members].sort(
     (a, b) => a.average_value - b.average_value || a.callsign.localeCompare(b.callsign, "ru")
   );
-  const DETAIL_NOTE = "Среднее игрока = (попытки + 7 × непройденные слова) ÷ слов; среднее команды — среднее по её игрокам";
-  const CELLS_LEGEND = "X — не угадано (считается как 7), … — слово начато, · — ещё не дошёл";
+  const DETAIL_NOTE = `Среднее игрока = (попытки + ${data?.skipped_attempts ?? 8} × непройденные слова) ÷ слов; среднее команды — среднее по её игрокам`;
+  const CELLS_LEGEND = `X — не угадано (= ${data?.unsolved_attempts ?? 7}), … — слово начато, · — ещё не дошёл (непройденное = ${data?.skipped_attempts ?? 8})`;
   const MAX_DETAIL_CELLS = 12; // при большем числе слов результаты по словам в картинку не рисуем
 
   function handleCopyDetailed() {
@@ -2843,7 +2843,7 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
       `${placeLabel(r)} · ${r.name} — ${r.average} (${r.words_done}/${r.words_total} слов)`,
       ...sortedMembers(r).map((m) => `  ${m.callsign} — ${m.average} · ${m.cells.map(marathonCellLabel).join(" ")}`),
     ].join("\n"));
-    const text = `${tags}\n\n${blocks.join("\n")}\n\nсреднее число попыток на слово; X — не угадано, · — ещё не дошёл; неугаданное и непройденное слово = ${data.unsolved_attempts}${hasTie ? `\n${TIE_FOOTNOTE}` : ""}`;
+    const text = `${tags}\n\n${blocks.join("\n")}\n\nсреднее число попыток на слово; X — не угадано, · — ещё не дошёл; неугаданное слово = ${data.unsolved_attempts}, непройденное = ${data.skipped_attempts}${hasTie ? `\n${TIE_FOOTNOTE}` : ""}`;
     navigator.clipboard.writeText(text).then(
       () => {
         setCopiedDetailed(true);
@@ -3004,7 +3004,7 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
     // "·", а не "N. " — иначе Telegram склеивает строки в нумерованный список
     const lines = data.rows.map((r) => `${placeLabel(r)} · ${r.name} — ${r.average} (${r.words_done}/${r.words_total})`);
     const hasTie = data.rows.some((r) => r.tie_resolved);
-    const text = `${tags}\n\n${lines.join("\n")}\n\nсреднее число попыток на слово (слов пройдено/всего). Неугаданное и непройденное слово = ${data.unsolved_attempts}${hasTie ? `\n${TIE_FOOTNOTE}` : ""}`;
+    const text = `${tags}\n\n${lines.join("\n")}\n\nсреднее число попыток на слово (слов пройдено/всего). Неугаданное слово = ${data.unsolved_attempts}, непройденное = ${data.skipped_attempts}${hasTie ? `\n${TIE_FOOTNOTE}` : ""}`;
     navigator.clipboard.writeText(text).then(
       () => {
         setCopied(true);
@@ -3128,7 +3128,7 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
         </div>
       </div>
       <p style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>
-        Место — по среднему числу попыток на слово: (попытки по пройденным словам + {data.unsolved_attempts} за каждое
+        Место — по среднему числу попыток на слово: (попытки по пройденным словам, неугаданное = {data.unsolved_attempts}, + {data.skipped_attempts} за каждое
         непройденное) ÷ (участники × слова). Меньше — лучше. Нажмите на команду, чтобы увидеть игроков.
       </p>
       {tbMessage && (
@@ -3749,7 +3749,7 @@ function TiebreakTeamResultsPanel({ tournament }) {
     return next;
   });
 
-  const NOTE = "Среднее число попыток команды в раунде; не угадал — 7, не играл — 8";
+  const NOTE = "Среднее число попыток команды в раунде; не угадал — 7, не завершил или не играл — 8";
 
   // Картинка таблицы: место, команда и среднее по каждому раунду — в том же стиле, что "Скачать" у
   // индивидуального тай-брейка (TiebreakResultsPanel). Команды, которые ещё не играли, не включаются.
@@ -3848,7 +3848,7 @@ function TiebreakTeamResultsPanel({ tournament }) {
     const lines = data.rows
       .filter((r) => r.place)
       .map((r) => `${r.place} · ${r.name}${r.cells.some(Boolean) ? ` — ${r.cells.filter(Boolean).map((c) => c.average).join(" · ")}` : ""}`);
-    const text = `${tags}\n\n${lines.join("\n")}\n\nсреднее число попыток команды по раундам; не угадал — 7, не играл — 8`;
+    const text = `${tags}\n\n${lines.join("\n")}\n\nсреднее число попыток команды по раундам; не угадал — 7, не завершил или не играл — 8`;
     navigator.clipboard.writeText(text).then(
       () => { setCopied(true); setTimeout(() => setCopied(false), 2000); },
       () => setCopied(false)
@@ -3881,7 +3881,7 @@ function TiebreakTeamResultsPanel({ tournament }) {
       ) : (
         <>
           <p style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>
-            Среднее число попыток команды в раунде (не угадал или не доиграл — 7, не играл — 8). Нажмите на команду, чтобы увидеть игроков.
+            Среднее число попыток команды в раунде (не угадал — 7, не завершил или не играл — 8). Нажмите на команду, чтобы увидеть игроков.
           </p>
           <div style={{ overflowX: "auto" }}>
             <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>

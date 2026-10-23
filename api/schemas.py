@@ -646,7 +646,7 @@ class TeamMemberOut(BaseModel):
     total_attempts: int  # сумма попыток по пройденным словам (неугаданное = unsolved_attempts)
     finished_all: bool
     active: bool = True
-    unplayed_words: int = 0  # слов, которые игрок ещё не прошёл (в среднем считаются как unsolved_attempts)
+    unplayed_words: int = 0  # слов, которые игрок ещё не прошёл (в среднем считаются как skipped_attempts)
     cells: list[TeamCellOut | None] = []  # результат по каждому слову; None — ещё не дошёл
     average: str = "0.00"  # среднее игрока: (попытки + 7 × непройденные слова) ÷ слов
     average_value: float = 0.0
@@ -663,7 +663,7 @@ class TeamExcludedOut(BaseModel):
 
 class TeamRowOut(TeamExcludedOut):
     attempts_sum: int  # попытки по пройденным словам всех участников
-    unplayed_words: int  # слова, которые команда ещё не прошла (в среднем считаются как unsolved_attempts)
+    unplayed_words: int  # слова, которые команда ещё не прошла (в среднем считаются как skipped_attempts)
     average: str  # среднее число попыток на слово, готовая подпись
     average_value: float
     place: str
@@ -672,7 +672,8 @@ class TeamRowOut(TeamExcludedOut):
 
 class TeamStandingsOut(BaseModel):
     words_count: int
-    unsolved_attempts: int
+    unsolved_attempts: int  # неугаданное слово (все попытки использованы)
+    skipped_attempts: int = 8  # непройденное слово (не начато или не завершено)
     hashtag: str | None = None
     rows: list[TeamRowOut]
     excluded: list[TeamExcludedOut] = []  # команды меньше двух участников — в зачёт не идут

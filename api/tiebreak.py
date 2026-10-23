@@ -9,7 +9,7 @@
 В обоих случаях раунд можно разрешить, когда либо все участники доиграли
 слово, либо наступил дедлайн (день раунда уже прошёл). На дедлайне тот, кто
 вообще не сделал ни одной попытки, всегда ставится ниже того, кто играл и не
-угадал за все 6 — неявка хуже участия, даже неудачного (см. _result_key). Если
+угадал за все 6 — пропуск хуже провала (см. _result_key и api/attempt_scores.py). Если
 после разрешения раунда часть группы всё ещё совпадает — для неё сразу
 заводится продолжение (новое слово того же дня, см. create_tiebreak_round),
 играть можно немедленно; исключение — если совпадение вызвано тем, что вся
@@ -19,8 +19,8 @@
 Командный тай-брейк (тип tiebreak + Tournament.teams_enabled, см. api/teams.py): игроки
 объединены в команды, у каждого игрока раунда СВОЁ слово (все разные — подсказывать друг
 другу нечего), а место определяют команды. Результат команды в раунде — среднее по её
-игрокам: угадал — число попыток, не угадал или не успел доиграть — 7, не сделал ни одной
-попытки — 8 (неявка по-прежнему хуже неудачи). Одинаковое среднее (точное сравнение) —
+игрокам: угадал — число попыток, не угадал (все 6 попыток) — 7, не завершил слово или не
+приступал к нему — 8 (пропуск хуже провала). Одинаковое среднее (точное сравнение) —
 продолжение раунда для этих команд с новыми личными словами; если среднее равно 8, то
 никто из них не играл, и продолжение не заводится (как и у обычного тай-брейка).
 
@@ -42,6 +42,7 @@ from api.scoring import groups_needing_tiebreak
 from api.dictionary import pick_alternative_word
 from api.word_plan import tiebreak_length
 from api import crud
+from api.attempt_scores import FAILED_ATTEMPTS, SKIPPED_ATTEMPTS
 
 
 async def start_tiebreak(session: AsyncSession, tournament: Tournament) -> list[TiebreakRound]:
@@ -306,26 +307,23 @@ async def reroll_tiebreak_word(
 
 async def _result_key(
     session: AsyncSession, entry_id: int, daily_word_id: int, *, finalize: bool
-) -> tuple[bool, bool, int] | None:
+) -> int | None:
     """
-    (не участвовал вовсе, не угадал, число попыток) — меньше значит лучше.
-    Участник, который не сделал ни одной попытки, всегда хуже того, кто играл
-    и не угадал за все 6 — даже на дедлайне оба не "закончили удачно", но один
-    хотя бы принял участие.
+    Очки игрока за слово тай-брейка по единой лестнице (api/attempt_scores.py), меньше — лучше:
+    угадал — число попыток (1-6), использовал все 6 попыток и не угадал — FAILED_ATTEMPTS (7),
+    не завершил слово или не приступал к нему — SKIPPED_ATTEMPTS (8). Провал всегда лучше
+    пропуска: игроку выгоднее доиграть до конца.
 
-    Пока finalize=False, недоигранная попытка (или её полное отсутствие) даёт
-    None — сигнал подождать. finalize=True вызывается только после дедлайна и
-    всегда возвращает окончательный ключ, засчитывая неявку как участие не
-    принявшего и недоигранную попытку как есть (сколько успел).
+    Пока finalize=False, недоигранная попытка (или её полное отсутствие) даёт None — сигнал
+    подождать. finalize=True вызывается только после дедлайна и всегда возвращает окончательный
+    результат: всё, что не завершено к дедлайну, — пропуск.
     """
     attempt = await crud.get_attempt(session, entry_id, daily_word_id)
     if attempt is not None and (attempt.solved or attempt.attempts_used >= 6):
-        return (False, not attempt.solved, attempt.attempts_used)
+        return attempt.attempts_used if attempt.solved else FAILED_ATTEMPTS
     if not finalize:
         return None
-    if attempt is None:
-        return (True, True, 6)  # не сделал ни одной попытки — хуже всех
-    return (False, True, attempt.attempts_used)  # начал, но не успел доиграть до дедлайна
+    return SKIPPED_ATTEMPTS
 
 
 async def _try_resolve_round(session: AsyncSession, tournament: Tournament, round_: TiebreakRound) -> None:
@@ -333,7 +331,7 @@ async def _try_resolve_round(session: AsyncSession, tournament: Tournament, roun
     deadline_passed = daily_word.calendar_date < today()
 
     participants = await crud.list_tiebreak_participants(session, round_.id)
-    keys: dict[int, tuple[bool, bool, int] | None] = {}
+    keys: dict[int, int | None] = {}
     all_finished = True
     for p in participants:
         key = await _result_key(session, p.entry_id, daily_word.id, finalize=False)
@@ -353,14 +351,14 @@ async def _try_resolve_round(session: AsyncSession, tournament: Tournament, roun
     session.add(round_)
     await session.commit()
 
-    still_tied: dict[tuple[bool, bool, int], list[int]] = {}
+    still_tied: dict[int, list[int]] = {}
     for entry_id, key in keys.items():
         still_tied.setdefault(key, []).append(entry_id)
 
     for key, entry_ids in still_tied.items():
-        # если ничья только потому, что вся подгруппа вообще не участвовала —
-        # новый раунд её не разрешит (играть некому), нужна ручная доигровка
-        if len(entry_ids) > 1 and not key[0]:
+        # если ничья только потому, что вся подгруппа пропустила слово (не завершила или не
+        # приступала) — новый раунд её не разрешит (играть некому), нужна ручная доигровка
+        if len(entry_ids) > 1 and key != SKIPPED_ATTEMPTS:
             await crud.create_tiebreak_round(session, tournament, entry_ids, previous_round_id=round_.id)
 
 
@@ -499,18 +497,6 @@ async def get_rounds_view(session: AsyncSession, tournament_id: int) -> list[dic
 
 # ---------- Командный тай-брейк ----------
 
-SCORE_FAILED = 7    # не угадал (или начал и не успел доиграть до дедлайна)
-SCORE_NO_SHOW = 8   # не сделал ни одной попытки — хуже неудачи
-
-
-def member_score(key: tuple[bool, bool, int]) -> int:
-    """Вклад игрока в среднее команды по ключу _result_key: попытки / 7 / 8."""
-    no_show, failed, attempts = key
-    if no_show:
-        return SCORE_NO_SHOW
-    return SCORE_FAILED if failed else attempts
-
-
 async def team_participants(session: AsyncSession, tournament: Tournament) -> list[TournamentEntry]:
     """Игроки, с которых начинается командный тай-брейк: подключённые игроки команд, в которых
     таких игроков не меньше MIN_TEAM_SIZE (игроки вне команд и команды из одного не играют)."""
@@ -527,10 +513,11 @@ async def word_for_entry(session: AsyncSession, round_: TiebreakRound, entry_id:
     return await crud.get_daily_word_by_id(session, await crud.round_word_id_for_entry(session, round_, entry_id))
 
 
-def _team_scores(participants, keys: dict[int, tuple[bool, bool, int]]) -> dict[int, Fraction]:
+def _team_scores(participants, keys: dict[int, int]) -> dict[int, Fraction]:
+    """Среднее команды в раунде: очки игроков (попытки / 7 / 8) по единой лестнице."""
     scores: dict[int, list[int]] = defaultdict(list)
     for p in participants:
-        scores[p.team_id].append(member_score(keys[p.entry_id]))
+        scores[p.team_id].append(keys[p.entry_id])
     return {team_id: Fraction(sum(values), len(values)) for team_id, values in scores.items()}
 
 
@@ -539,7 +526,7 @@ async def _try_resolve_team_round(session: AsyncSession, tournament: Tournament,
     deadline_passed = anchor.calendar_date < today()
 
     participants = await crud.list_tiebreak_participants(session, round_.id)
-    keys: dict[int, tuple[bool, bool, int] | None] = {}
+    keys: dict[int, int | None] = {}
     all_finished = True
     for p in participants:
         key = await _result_key(session, p.entry_id, p.daily_word_id, finalize=False)
@@ -563,8 +550,8 @@ async def _try_resolve_team_round(session: AsyncSession, tournament: Tournament,
     for team_id, score in _team_scores(participants, keys).items():
         by_score[score].append(team_id)
     for score, team_ids in by_score.items():
-        # среднее 8 — никто из этих команд не играл: новый раунд играть некому
-        if len(team_ids) > 1 and score != SCORE_NO_SHOW:
+        # среднее 8 — все игроки этих команд пропустили слово: новый раунд играть некому
+        if len(team_ids) > 1 and score != SKIPPED_ATTEMPTS:
             entry_ids = [p.entry_id for p in participants if p.team_id in team_ids]
             await crud.create_tiebreak_round(session, tournament, entry_ids, previous_round_id=round_.id)
 
@@ -587,7 +574,7 @@ async def build_team_results(session: AsyncSession, tournament: Tournament) -> d
         }
 
     member_cells: dict[int, dict[int, dict | None]] = defaultdict(dict)   # entry -> round -> результат
-    keys_by_round: dict[int, dict[int, tuple[bool, bool, int]]] = {}
+    keys_by_round: dict[int, dict[int, int]] = {}
     for r in rounds:
         keys_by_round[r.id] = {}
         for p in participants_by_round[r.id]:
