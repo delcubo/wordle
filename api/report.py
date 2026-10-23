@@ -106,11 +106,9 @@ def build_marathon_summary_text(
     border = BORDER["marathon"]
     per_word = " · ".join(str(used) if solved else "X" for used, solved in results)
     lines = [f"{border} {base_title.upper()} {border}"]
-    if callsign:
-        who = " · ".join(part for part in (callsign, f"команда «{team_name}»" if team_name else None) if part)
-        lines.append(f"\U0001f3c6 {who} · все слова пройдены")
-    else:
-        lines.append("\U0001f3c6 Все слова пройдены")
+    lines.append(f"\U0001f3c6 {callsign} · все слова пройдены" if callsign else "\U0001f3c6 Все слова пройдены")
+    if team_name:
+        lines.append(f"Команда «{team_name}»")  # команда — отдельной строкой, как в отчёте по слову
     lines += ["", f"Слова: {per_word}", f"Всего попыток: {total_attempts}"]
     if any(not solved for _, solved in results):
         lines.append(f"(X = {unsolved_attempts})")
