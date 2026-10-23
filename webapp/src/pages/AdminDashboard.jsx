@@ -2187,11 +2187,6 @@ function MarathonIndividualWordsPanel({ tournament, onTournamentChanged }) {
     return run(() => api(`/api/admin/tournaments/${tournament.id}/marathon/individual-words/${p.entry_id}/regenerate`, { method: "POST" }));
   }
 
-  function handleRegenerateAll() {
-    if (!window.confirm("Заново подобрать все ещё не начатые слова у ВСЕХ игроков?")) return;
-    return run(() => api(`/api/admin/tournaments/${tournament.id}/marathon/individual-words/regenerate`, { method: "POST" }));
-  }
-
   if (!players) return error ? <div style={{ ...panelStyle, marginTop: 20, color: "#e5484d" }}>{error}</div> : null;
 
   const q = query.trim().toLowerCase();
@@ -2214,7 +2209,6 @@ function MarathonIndividualWordsPanel({ tournament, onTournamentChanged }) {
           <button onClick={() => setShowWords((v) => !v)} style={ghostButtonStyle}>
             {showWords ? "Скрыть слова" : "Показать слова"}
           </button>
-          <button onClick={handleRegenerateAll} disabled={busy} style={ghostButtonStyle}>Перегенерировать у всех</button>
           <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
         </div>
       </div>
