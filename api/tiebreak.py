@@ -305,6 +305,16 @@ async def reroll_tiebreak_word(
     return new_word
 
 
+def round_deadline_passed(tournament: Tournament, anchor: DailyWord) -> bool:
+    """Вышел ли срок раунда. По умолчанию раунд закрывается в конце своего дня; если у тай-брейка
+    задана дата окончания (Tournament.end_date) — в конце этого дня, но не раньше дня самого раунда
+    (продолжение, заведённое уже после даты окончания, живёт свой день, а не умирает сразу)."""
+    last_day = anchor.calendar_date
+    if tournament.type == TournamentType.tiebreak and tournament.end_date is not None:
+        last_day = max(last_day, tournament.end_date)
+    return last_day < today()
+
+
 async def _result_key(
     session: AsyncSession, entry_id: int, daily_word_id: int, *, finalize: bool
 ) -> int | None:
@@ -328,7 +338,7 @@ async def _result_key(
 
 async def _try_resolve_round(session: AsyncSession, tournament: Tournament, round_: TiebreakRound) -> None:
     daily_word = await crud.get_daily_word_by_id(session, round_.daily_word_id)
-    deadline_passed = daily_word.calendar_date < today()
+    deadline_passed = round_deadline_passed(tournament, daily_word)
 
     participants = await crud.list_tiebreak_participants(session, round_.id)
     keys: dict[int, int | None] = {}
@@ -523,7 +533,7 @@ def _team_scores(participants, keys: dict[int, int]) -> dict[int, Fraction]:
 
 async def _try_resolve_team_round(session: AsyncSession, tournament: Tournament, round_: TiebreakRound) -> None:
     anchor = await crud.get_daily_word_by_id(session, round_.daily_word_id)
-    deadline_passed = anchor.calendar_date < today()
+    deadline_passed = round_deadline_passed(tournament, anchor)
 
     participants = await crud.list_tiebreak_participants(session, round_.id)
     keys: dict[int, int | None] = {}

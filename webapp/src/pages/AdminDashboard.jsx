@@ -903,6 +903,8 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
       if (t.type === "tiebreak") {
         body.first_place = Number(settingsForm.first_place) || 1;
         body.teams_enabled = settingsForm.teams_enabled;
+        if (settingsForm.end_date) body.end_date = settingsForm.end_date;
+        else if (t.end_date) body.clear_end_date = true;
       }
       if (supportsThirdPlace(t)) body.third_place_match = settingsForm.third_place_match;
       if (t.type === "marathon") {
@@ -954,7 +956,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           words_count: type === "marathon" ? Number(wordsCount) : null,
           individual_words: type === "marathon" ? individualWords : false,
           word_length: wordLength,
-          end_date: type === "marathon" && endDate ? endDate : null,
+          end_date: (type === "marathon" || type === "tiebreak") && endDate ? endDate : null,
           rounds_per_match: 1,
           hashtag: hashtag.trim() || null,
           note: note.trim() || null,
@@ -997,7 +999,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           {TYPE_LABEL[t.type] || t.type} · {t.start_date}
           {t.duration_days != null ? ` · ${t.duration_days} дн.` : ""}
           {t.word_length && t.word_length !== 5 ? ` · ${t.word_length} букв` : ""}
-          {t.type === "marathon" && t.words_count != null ? ` · ${t.words_count} сл.${t.individual_words ? " (личные)" : ""}${t.teams_enabled ? " · команды" : ""}` : ""}{t.type === "tiebreak" && t.teams_enabled ? " · команды" : ""} · {STATUS_LABEL[t.status] || t.status}
+          {t.type === "marathon" && t.words_count != null ? ` · ${t.words_count} сл.${t.individual_words ? " (личные)" : ""}${t.teams_enabled ? " · команды" : ""}` : ""}{t.type === "tiebreak" && t.teams_enabled ? " · команды" : ""}{t.type === "tiebreak" && t.end_date ? ` · до ${t.end_date}` : ""} · {STATUS_LABEL[t.status] || t.status}
         </div>
         {t.note && editingSettings !== t.id && (
           <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4, whiteSpace: "pre-wrap" }}>{t.note}</div>
@@ -1075,6 +1077,19 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                   </div>
                 )}
               </div>
+            )}
+            {t.type === "tiebreak" && (
+              <label style={{ fontSize: 11, opacity: 0.8 }}>
+                Дата окончания (пусто — раунд закрывается в конце дня, в который он начался)
+                <input
+                  type="date" min={t.start_date} value={settingsForm.end_date}
+                  onChange={(e) => setSettingsForm((f) => ({ ...f, end_date: e.target.value }))}
+                  style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", marginTop: 2, display: "block" }}
+                />
+                <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                  Игроки могут играть раунд до конца этого дня; тай-брейк закрывается, когда доиграли все, либо по истечении срока.
+                </span>
+              </label>
             )}
             {t.type === "tiebreak" && (
               <div>
@@ -1276,6 +1291,15 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                 У каждого участника свой набор слов
               </label>
             </>
+          )}
+          {type === "tiebreak" && (
+            <label style={{ fontSize: 12, opacity: 0.8 }}>
+              Дата окончания (необязательно: без неё раунд закрывается в конце дня старта)
+              <input
+                type="date" value={endDate} min={startDate || undefined}
+                onChange={(e) => setEndDate(e.target.value)} style={{ ...inputStyle, display: "block", marginTop: 2 }}
+              />
+            </label>
           )}
           {needsBracket && (
             <input type="number" placeholder="Размер сетки (степень двойки)" value={bracketSize} onChange={(e) => setBracketSize(e.target.value)} style={inputStyle} required min={2} />

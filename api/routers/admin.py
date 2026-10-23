@@ -299,6 +299,12 @@ async def create_tournament(
         if payload.end_date is not None and payload.end_date < payload.start_date:
             raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты старта")
 
+    if t_type == TournamentType.tiebreak:
+        if payload.end_date is not None and payload.end_date < payload.start_date:
+            raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты старта")
+    elif t_type != TournamentType.marathon and payload.end_date is not None:
+        raise HTTPException(status_code=400, detail="Дата окончания задаётся только у марафона и тай-брейка")
+
     if t_type == TournamentType.endless:
         # ручной активации больше нет — проверяем сразу при создании, чтобы не
         # завести вторую бессрочную игру, которая рано или поздно (по дате
@@ -318,7 +324,7 @@ async def create_tournament(
             if t_type not in (TournamentType.endless, TournamentType.tiebreak, TournamentType.marathon) else None
         ),
         words_count=payload.words_count if t_type == TournamentType.marathon else None,
-        end_date=payload.end_date if t_type == TournamentType.marathon else None,
+        end_date=payload.end_date if t_type in (TournamentType.marathon, TournamentType.tiebreak) else None,
         individual_words=bool(payload.individual_words) and t_type == TournamentType.marathon,
         word_length=payload.word_length,
         skip_flag_symbol=payload.skip_flag_symbol,
@@ -402,9 +408,12 @@ async def update_tournament_settings(
     if payload.notify_admin is not None:
         tournament.notify_admin = payload.notify_admin
 
-    if (payload.words_count is not None or payload.end_date is not None or payload.clear_end_date
-            or payload.individual_words is not None) and tournament.type != TournamentType.marathon:
-        raise HTTPException(status_code=400, detail="Число слов, дата окончания и режим слов настраиваются только у марафона")
+    if (payload.words_count is not None or payload.individual_words is not None) and tournament.type != TournamentType.marathon:
+        raise HTTPException(status_code=400, detail="Число слов и режим слов настраиваются только у марафона")
+    if (payload.end_date is not None or payload.clear_end_date) and tournament.type not in (
+        TournamentType.marathon, TournamentType.tiebreak
+    ):
+        raise HTTPException(status_code=400, detail="Дата окончания настраивается только у марафона и тай-брейка")
 
     if payload.teams_enabled is not None:
         if tournament.type not in (TournamentType.marathon, TournamentType.tiebreak):
