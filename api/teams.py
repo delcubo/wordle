@@ -166,9 +166,19 @@ async def compute_team_standings(
             attempts = row["total_attempts"] if row else 0
             attempts_sum += attempts
             words_done += done
+            # среднее игрока по той же формуле, что у команды: среднее команды = среднее по её игрокам
+            own = Fraction(attempts + marathon.UNSOLVED_ATTEMPTS * (count - done), count) if count else Fraction(0)
+            # результаты слов без самих слов и попыток — подробная таблица не раскрывает ответы
+            cells = [
+                None if c is None else
+                {"attempts_used": c["attempts_used"], "solved": c["solved"], "finished": c["finished"]}
+                for c in (row["cells"] if row else [None] * count)
+            ]
             member_rows.append({
                 "entry_id": entry.id, "callsign": entry.callsign, "words_done": done,
                 "total_attempts": attempts, "finished_all": count > 0 and done == count, "active": entry.active,
+                "unplayed_words": count - done, "cells": cells,
+                "average": _format(own, 2), "average_value": float(own),
             })
         size = len(members)
         item = {

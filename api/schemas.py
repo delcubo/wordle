@@ -633,6 +633,12 @@ class EntryTeamRequest(BaseModel):
     team_id: int | None = None  # None — убрать участника из команды
 
 
+class TeamCellOut(BaseModel):
+    attempts_used: int
+    solved: bool
+    finished: bool  # False — слово начато, но не закончено
+
+
 class TeamMemberOut(BaseModel):
     entry_id: int
     callsign: str
@@ -640,6 +646,10 @@ class TeamMemberOut(BaseModel):
     total_attempts: int  # сумма попыток по пройденным словам (неугаданное = unsolved_attempts)
     finished_all: bool
     active: bool = True
+    unplayed_words: int = 0  # слов, которые игрок ещё не прошёл (в среднем считаются как unsolved_attempts)
+    cells: list[TeamCellOut | None] = []  # результат по каждому слову; None — ещё не дошёл
+    average: str = "0.00"  # среднее игрока: (попытки + 7 × непройденные слова) ÷ слов
+    average_value: float = 0.0
 
 
 class TeamExcludedOut(BaseModel):

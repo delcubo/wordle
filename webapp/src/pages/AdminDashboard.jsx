@@ -2758,6 +2758,7 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [copiedDetailed, setCopiedDetailed] = useState(false);
   const [expanded, setExpanded] = useState(() => new Set());
   const [tbDate, setTbDate] = useState(""); // дата старта создаваемого тай-брейка; пусто — сегодня
   const [tbMessage, setTbMessage] = useState("");
@@ -2832,6 +2833,168 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tournament.id, tournament.words_count, refreshKey]);
+
+  // Игроки команды — от лучшего среднего к худшему
+  const sortedMembers = (r) => [...r.members].sort(
+    (a, b) => a.average_value - b.average_value || a.callsign.localeCompare(b.callsign, "ru")
+  );
+  const DETAIL_NOTE = "Среднее игрока = (попытки + 7 × непройденные слова) ÷ слов; среднее команды — среднее по её игрокам";
+  const CELLS_LEGEND = "X — не угадано (считается как 7), … — слово начато, · — ещё не дошёл";
+  const MAX_DETAIL_CELLS = 12; // при большем числе слов результаты по словам в картинку не рисуем
+
+  function handleCopyDetailed() {
+    const tags = [data.hashtag, "#командный_зачёт"].filter(Boolean).join(" ");
+    const hasTie = data.rows.some((r) => r.tie_resolved);
+    const blocks = data.rows.map((r) => [
+      `${placeLabel(r)} · ${r.name} — ${r.average} (${r.words_done}/${r.words_total} слов)`,
+      ...sortedMembers(r).map((m) => `  ${m.callsign} — ${m.average} · ${m.cells.map(marathonCellLabel).join(" ")}`),
+    ].join("\n"));
+    const text = `${tags}\n\n${blocks.join("\n")}\n\nсреднее число попыток на слово; X — не угадано, · — ещё не дошёл; неугаданное и непройденное слово = ${data.unsolved_attempts}${hasTie ? `\n${TIE_FOOTNOTE}` : ""}`;
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setCopiedDetailed(true);
+        setTimeout(() => setCopiedDetailed(false), 2000);
+      },
+      () => setCopiedDetailed(false)
+    );
+  }
+
+  // Подробная картинка: по блоку на команду — строка команды (итоги и среднее) и под ней строки её
+  // игроков (результаты по словам, попытки, непройденные слова, среднее игрока).
+  function handleDownloadDetailed() {
+    const withCells = data.words_count <= MAX_DETAIL_CELLS;
+    const hasTie = data.rows.some((r) => r.tie_resolved);
+    const dpr = window.devicePixelRatio || 1;
+    const placeCol = 40;
+    const wordCol = 32;
+    const doneCol = 56;
+    const attCol = 66;
+    const unplCol = 88;
+    const avgCol = 76;
+    const indent = 18;
+    const font = "14px system-ui, sans-serif";
+    const mctx = document.createElement("canvas").getContext("2d");
+    mctx.font = "bold 14px system-ui, sans-serif";
+    const teamW = Math.max(0, ...data.rows.map((r) => mctx.measureText(r.name).width));
+    mctx.font = "13px system-ui, sans-serif";
+    const playerW = Math.max(0, ...data.rows.flatMap((r) => r.members.map((m) => mctx.measureText(m.callsign + (m.active ? "" : " (откл.)")).width + indent)));
+    const nameCol = Math.max(150, teamW + 20, playerW + 20);
+    const cellsW = withCells ? wordCol * data.words_count : 0;
+    const tableWidth = placeCol + nameCol + cellsW + doneCol + attCol + unplCol + avgCol;
+
+    const notes = [DETAIL_NOTE];
+    if (withCells) notes.push(CELLS_LEGEND);
+    if (hasTie) notes.push(TIE_FOOTNOTE);
+    mctx.font = "12px system-ui, sans-serif";
+    const noteWidth = Math.max(...notes.map((n) => mctx.measureText(n).width));
+
+    const items = [];
+    data.rows.forEach((r) => {
+      items.push({ team: r });
+      sortedMembers(r).forEach((m) => items.push({ member: m }));
+    });
+    const padding = 16;
+    const rowHeight = 28;
+    const headerHeight = 28;
+    const noteHeight = 10 + notes.length * 18;
+    const width = Math.max(tableWidth, noteWidth) + padding * 2;
+    const height = headerHeight + rowHeight * items.length + padding * 2 + noteHeight;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.textBaseline = "middle";
+
+    const top = padding;
+    const xName = padding + placeCol;
+    const xCells = xName + nameCol;
+    const xDone = xCells + cellsW;
+    const xAtt = xDone + doneCol;
+    const xUnpl = xAtt + attCol;
+    const xAvg = xUnpl + unplCol;
+    const mid = (y) => y + rowHeight / 2;
+
+    ctx.fillStyle = "#f2f2f2";
+    ctx.fillRect(padding, top, tableWidth, headerHeight);
+    ctx.fillStyle = "#666";
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("#", padding + placeCol / 2, top + headerHeight / 2);
+    ctx.textAlign = "left";
+    ctx.fillText("Команда / игрок", xName + 6, top + headerHeight / 2);
+    ctx.textAlign = "center";
+    if (withCells) for (let i = 0; i < data.words_count; i++) ctx.fillText(String(i + 1), xCells + wordCol * i + wordCol / 2, top + headerHeight / 2);
+    ctx.fillText("Слов", xDone + doneCol / 2, top + headerHeight / 2);
+    ctx.fillText("Попыток", xAtt + attCol / 2, top + headerHeight / 2);
+    ctx.fillText("Не сыграно", xUnpl + unplCol / 2, top + headerHeight / 2);
+    ctx.fillText("Среднее", xAvg + avgCol / 2, top + headerHeight / 2);
+
+    items.forEach((item, i) => {
+      const y = top + headerHeight + i * rowHeight;
+      if (item.team) {
+        const r = item.team;
+        ctx.fillStyle = "#e8edf4";
+        ctx.fillRect(padding, y, tableWidth, rowHeight);
+        ctx.fillStyle = "#1a1a1b";
+        ctx.font = "bold " + font;
+        ctx.textAlign = "center";
+        ctx.fillText(placeLabel(r), padding + placeCol / 2, mid(y));
+        ctx.textAlign = "left";
+        ctx.fillText(r.name, xName + 6, mid(y));
+        ctx.textAlign = "center";
+        ctx.fillText(`${r.words_done}/${r.words_total}`, xDone + doneCol / 2, mid(y));
+        ctx.fillText(String(r.attempts_sum), xAtt + attCol / 2, mid(y));
+        ctx.fillText(String(r.unplayed_words), xUnpl + unplCol / 2, mid(y));
+        ctx.fillText(r.average, xAvg + avgCol / 2, mid(y));
+      } else {
+        const m = item.member;
+        ctx.fillStyle = m.active ? "#333" : "#999";
+        ctx.font = "13px system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillText(m.callsign + (m.active ? "" : " (откл.)"), xName + 6 + indent, mid(y));
+        ctx.textAlign = "center";
+        if (withCells) {
+          m.cells.forEach((c, ci) => {
+            ctx.fillStyle = c && c.finished ? "#1a1a1b" : "#999";
+            ctx.fillText(marathonCellLabel(c), xCells + wordCol * ci + wordCol / 2, mid(y));
+          });
+        }
+        ctx.fillStyle = m.active ? "#333" : "#999";
+        ctx.fillText(`${m.words_done}/${data.words_count}`, xDone + doneCol / 2, mid(y));
+        ctx.fillText(String(m.total_attempts), xAtt + attCol / 2, mid(y));
+        ctx.fillText(String(m.unplayed_words), xUnpl + unplCol / 2, mid(y));
+        ctx.font = "bold 13px system-ui, sans-serif";
+        ctx.fillText(m.average, xAvg + avgCol / 2, mid(y));
+      }
+    });
+
+    ctx.strokeStyle = "#ddd";
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= items.length; i++) {
+      const y = top + headerHeight + i * rowHeight;
+      ctx.beginPath();
+      ctx.moveTo(padding, y);
+      ctx.lineTo(padding + tableWidth, y);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#666";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    notes.forEach((n, i) => ctx.fillText(n, padding, top + headerHeight + rowHeight * items.length + 16 + i * 18));
+
+    canvas.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${tournament.title.replace(/[^\p{L}\p{N}]+/gu, "_")}_команды_подробно.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  }
 
   function toggleExpanded(id) {
     setExpanded((prev) => {
@@ -2960,6 +3123,8 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
             <>
               <button onClick={handleCopy} style={ghostButtonStyle}>{copied ? "Скопировано!" : "Скопировать таблицу"}</button>
               <button onClick={handleDownload} style={ghostButtonStyle}>Скачать таблицу</button>
+              <button onClick={handleCopyDetailed} style={ghostButtonStyle}>{copiedDetailed ? "Скопировано!" : "Скопировать подробно"}</button>
+              <button onClick={handleDownloadDetailed} style={ghostButtonStyle}>Скачать подробную</button>
               {data.rows.some((r) => r.place.includes("-") || r.tie_resolved) && (
                 <button onClick={tie.openTies} style={ghostButtonStyle}>Разобрать ничьи</button>
               )}
@@ -3004,9 +3169,10 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
                     <tr>
                       <td></td>
                       <td colSpan={4} style={{ ...tdStyle, fontSize: 12, opacity: 0.85 }}>
-                        {r.members.map((m) => (
+                        {sortedMembers(r).map((m) => (
                           <div key={m.entry_id}>
-                            {m.callsign} — {m.words_done}/{data.words_count} слов, {m.total_attempts} попыток
+                            {m.callsign} — среднее {m.average} · {m.words_done}/{data.words_count} слов, {m.total_attempts} попыток
+                            {" · "}{m.cells.map(marathonCellLabel).join(" ")}
                             {!m.active && " (отключён)"}
                           </div>
                         ))}
