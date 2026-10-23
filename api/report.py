@@ -67,9 +67,10 @@ def build_report_text(
             day_label = f"#{day_number}" if kind == "endless" else f"#д{day_number}"
         else:
             day_label = None
-        team_label = f"команда «{team_name}»" if team_name else None
-        meta = [part for part in (callsign, team_label, day_label, attempts_label) if part]
+        meta = [part for part in (callsign, day_label, attempts_label) if part]
         lines.append(f"{result_emoji} {' · '.join(meta)}")
+        if team_name:
+            lines.append(f"Команда «{team_name}»")  # команда — отдельной строкой под результатом
         lines += ["", emoji_grid]
         if streak_days is not None and streak_days >= 2:
             lines += ["", f"{STREAK_EMOJI} дней подряд: {streak_days}"]
