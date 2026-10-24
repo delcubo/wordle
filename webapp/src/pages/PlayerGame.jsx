@@ -493,7 +493,7 @@ export default function PlayerGame() {
       </Link>
       {tournamentTitle && <h2 style={{ margin: "0 0 4px" }}>{tournamentTitle}</h2>}
       {callsign && <div style={{ opacity: 0.6, marginBottom: 8 }}>Игрок: {callsign}</div>}
-      {marathon && (
+      {marathon && marathon.total > 1 && ( // при одном слове «Слово 1 из 1» не показываем
         <div style={{ opacity: 0.8, marginBottom: 8, fontWeight: 600 }}>
           Слово {marathon.index} из {marathon.total}
         </div>

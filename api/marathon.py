@@ -32,7 +32,7 @@ MAX_ATTEMPTS = 6
 from api.attempt_scores import FAILED_ATTEMPTS, SKIPPED_ATTEMPTS  # noqa: F401 — единая лестница очков
 
 UNSOLVED_ATTEMPTS = FAILED_ATTEMPTS  # неугаданное слово (все 6 попыток) в зачёте = 7 попыток
-MIN_WORDS = 2
+MIN_WORDS = 1
 MAX_WORDS = 30
 
 

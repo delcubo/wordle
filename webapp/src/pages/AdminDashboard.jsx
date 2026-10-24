@@ -1032,7 +1032,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                 <label style={{ fontSize: 11, opacity: 0.8 }}>
                   Число слов (увеличить можно всегда, уменьшить — пока убираемые слова не начаты)
                   <input
-                    type="number" min={2} max={30} value={settingsForm.words_count}
+                    type="number" min={1} max={30} value={settingsForm.words_count}
                     onChange={(e) => setSettingsForm((f) => ({ ...f, words_count: e.target.value }))}
                     style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", marginTop: 2, width: 90, display: "block" }}
                   />
@@ -1276,11 +1276,11 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           {type === "marathon" && (
             <>
               <label style={{ fontSize: 12, opacity: 0.8 }}>
-                Число слов (от 2 до 30)
+                Число слов (от 1 до 30)
                 <input
-                  type="number" placeholder="Число слов (2-30)" value={wordsCount}
+                  type="number" placeholder="Число слов (1-30)" value={wordsCount}
                   onChange={(e) => setWordsCount(e.target.value)} style={{ ...inputStyle, display: "block", marginTop: 2 }}
-                  required min={2} max={30}
+                  required min={1} max={30}
                 />
               </label>
               <label style={{ fontSize: 12, opacity: 0.8 }}>
