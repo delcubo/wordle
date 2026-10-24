@@ -166,6 +166,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [theme, setTheme] = useState("dark");
   const [teamsVersion, setTeamsVersion] = useState(0); // меняется при правке команд — командная таблица перечитывается
+  const [entriesVersion, setEntriesVersion] = useState(0); // меняется при удалении игрока — панели тай-брейка перечитываются
 
   async function refreshTournaments() {
     const data = await api("/api/admin/tournaments");
@@ -246,13 +247,16 @@ export default function AdminDashboard() {
           <div style={isMobile ? {} : { flex: "2 1 500px" }}>
             {selected ? (
               <>
-                <EntriesPanel tournament={selected} users={users} allTournaments={tournaments} />
+                <EntriesPanel
+                  tournament={selected} users={users} allTournaments={tournaments}
+                  onEntriesChanged={() => setEntriesVersion((v) => v + 1)}
+                />
                 {(selected.type === "marathon" || selected.type === "tiebreak") && selected.teams_enabled && (
-                  <MarathonTeamsPanel tournament={selected} onChanged={() => setTeamsVersion((v) => v + 1)} />
+                  <MarathonTeamsPanel tournament={selected} refreshKey={entriesVersion} onChanged={() => setTeamsVersion((v) => v + 1)} />
                 )}
                 {selected.type === "tiebreak" && (
                   selected.teams_enabled
-                    ? <TiebreakTeamWordsPanel tournament={selected} />
+                    ? <TiebreakTeamWordsPanel tournament={selected} refreshKey={entriesVersion} />
                     : <TiebreakWordsPanel tournament={selected} />
                 )}
                 {selected.type === "marathon" && (
@@ -272,8 +276,8 @@ export default function AdminDashboard() {
                 {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordHistoryPanel tournament={selected} />}
                 {selected.type === "tiebreak" && (
                   selected.teams_enabled
-                    ? <TiebreakTeamResultsPanel tournament={selected} />
-                    : <TiebreakResultsPanel tournament={selected} />
+                    ? <TiebreakTeamResultsPanel tournament={selected} refreshKey={entriesVersion} />
+                    : <TiebreakResultsPanel tournament={selected} refreshKey={entriesVersion} />
                 )}
                 {selected.duration_days != null && <StandingsPanel tournament={selected} />}
                 {selected.type === "championship" && <TiebreakPanel tournament={selected} onTournamentChanged={refreshTournaments} />}
@@ -1375,7 +1379,7 @@ function ClearableInput({ value, onClear, style, inputStyle: customInputStyle, .
   );
 }
 
-function EntriesPanel({ tournament, users, allTournaments }) {
+function EntriesPanel({ tournament, users, allTournaments, onEntriesChanged }) {
   const isMobile = useIsMobile();
   const tournamentIdRef = useLatest(tournament.id);
   const [entries, setEntries] = useState([]);
@@ -1582,6 +1586,30 @@ function EntriesPanel({ tournament, users, allTournaments }) {
     setTimeout(() => setCopiedEntryId(null), 1500);
   }
 
+  // Удалить игрока из тай-брейка совсем (в отличие от «Отключить» — результаты стираются, из таблицы и
+  // распределения мест он пропадает). Необратимо, поэтому с подтверждением.
+  async function handleDeleteEntry(entry) {
+    const teamNote = tournament.teams_enabled ? " Средние команд и места пересчитаются без него." : "";
+    if (!window.confirm(
+      `Удалить «${entry.callsign}» из тай-брейка «${tournament.title}»?\n\nЕго результаты и слова будут стёрты, он исчезнет из таблицы и из распределения мест.${teamNote}\n\nЭто нельзя отменить: подключить игрока заново можно, но его результаты не вернутся.`
+    )) {
+      return;
+    }
+    setError("");
+    try {
+      await api(`/api/admin/entries/${entry.id}`, { method: "DELETE" });
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(entry.id);
+        return next;
+      });
+      await refresh();
+      if (onEntriesChanged) onEntriesChanged();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   async function handleResetToday(entry) {
     if (!window.confirm(`Сбросить попытку «${entry.callsign}» за сегодня? Игрок сможет сыграть сегодняшнее слово заново с нуля — введённые буквы и результат за сегодня будут стёрты без возможности отмены.`)) {
       return;
@@ -1689,6 +1717,14 @@ function EntriesPanel({ tournament, users, allTournaments }) {
             {tournament.type !== "knockout" && tournament.type !== "tiebreak" && e.active && (
               <button onClick={() => runAction(handleResetToday)} style={{ ...ghostButtonStyle, textAlign: "left", fontSize: 12 }}>
                 Сбросить сегодня
+              </button>
+            )}
+            {tournament.type === "tiebreak" && (
+              <button
+                onClick={() => runAction(handleDeleteEntry)}
+                style={{ ...ghostButtonStyle, textAlign: "left", fontSize: 12, color: "#e5484d", borderColor: "#e5484d" }}
+              >
+                Удалить из розыгрыша
               </button>
             )}
           </div>
@@ -1927,6 +1963,15 @@ function EntriesPanel({ tournament, users, allTournaments }) {
                         {tournament.type !== "knockout" && tournament.type !== "tiebreak" && e.active && (
                           <button onClick={() => handleResetToday(e)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
                             Сбросить сегодня
+                          </button>
+                        )}
+                        {tournament.type === "tiebreak" && (
+                          <button
+                            onClick={() => handleDeleteEntry(e)}
+                            title="Стереть игрока из тай-брейка: из таблицы и распределения мест"
+                            style={{ ...ghostButtonStyle, fontSize: 12, color: "#e5484d", borderColor: "#e5484d" }}
+                          >
+                            Удалить из розыгрыша
                           </button>
                         )}
                       </div>
@@ -2602,7 +2647,7 @@ function MarathonStandingsPanel({ tournament }) {
 }
 
 // Команды марафона: создание/переименование/удаление и распределение игроков (api/teams.py).
-function MarathonTeamsPanel({ tournament, onChanged }) {
+function MarathonTeamsPanel({ tournament, onChanged, refreshKey }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [teams, setTeams] = useState(null);
   const [entries, setEntries] = useState([]);
@@ -2633,7 +2678,7 @@ function MarathonTeamsPanel({ tournament, onChanged }) {
     setEditingId(null);
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tournament.id]);
+  }, [tournament.id, refreshKey]);
 
   async function run(action) {
     setError("");
@@ -3608,7 +3653,7 @@ function TiebreakWordsPanel({ tournament }) {
 }
 
 // Слова командного тай-брейка: у каждого игрока в раунде своё слово (api/tiebreak.py).
-function TiebreakTeamWordsPanel({ tournament }) {
+function TiebreakTeamWordsPanel({ tournament, refreshKey }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [days, setDays] = useState(null);
   const [openDay, setOpenDay] = useState(1);
@@ -3633,7 +3678,7 @@ function TiebreakTeamWordsPanel({ tournament }) {
     setDays(null);
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tournament.id, tournament.teams_enabled]);
+  }, [tournament.id, tournament.teams_enabled, refreshKey]);
 
   async function call(path, body) {
     const id = tournament.id;
@@ -3767,7 +3812,7 @@ function TiebreakTeamWordsPanel({ tournament }) {
 }
 
 // Результаты командного тай-брейка: место команды, среднее по раундам, результаты игроков.
-function TiebreakTeamResultsPanel({ tournament }) {
+function TiebreakTeamResultsPanel({ tournament, refreshKey }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
@@ -3791,7 +3836,7 @@ function TiebreakTeamResultsPanel({ tournament }) {
     setData(null);
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tournament.id, tournament.teams_enabled]);
+  }, [tournament.id, tournament.teams_enabled, refreshKey]);
 
   if (!data) return error ? <div style={{ ...panelStyle, marginTop: 20, color: "#e5484d" }}>{error}</div> : null;
 
@@ -3975,7 +4020,7 @@ function TiebreakTeamResultsPanel({ tournament }) {
   );
 }
 
-function TiebreakResultsPanel({ tournament }) {
+function TiebreakResultsPanel({ tournament, refreshKey }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
@@ -3993,7 +4038,7 @@ function TiebreakResultsPanel({ tournament }) {
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tournament.id]);
+  }, [tournament.id, refreshKey]);
 
   if (!data) return null;
 

@@ -33,9 +33,12 @@ compute_final_order() восстанавливает итоговый поряд
 from collections import defaultdict
 from fractions import Fraction
 
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.models import Tournament, TournamentType, TournamentStatus, TiebreakRound, DailyWord, TournamentEntry
+from api.models import (
+    Tournament, TournamentType, TournamentStatus, TiebreakRound, TiebreakParticipant, DailyWord, TournamentEntry, Attempt,
+)
 from api.tournament_time import today, day_number_for_date
 from api.standings_view import compute_standings
 from api.scoring import groups_needing_tiebreak
@@ -762,3 +765,92 @@ async def sync_slot_word(session: AsyncSession, tournament: Tournament, day_numb
     session.add(tournament)
     await session.commit()
     return word
+
+
+# ---------- Удаление игрока из тай-брейка ----------
+
+async def _tie_groups_of_round(session: AsyncSession, tournament: Tournament, round_: TiebreakRound) -> list[frozenset]:
+    """Группы участников (наборы entry_id) завершённого раунда, которым по текущим результатам
+    нужно продолжение: равные результаты игроков (обычный тай-брейк) либо равное среднее команд
+    (командный; в группу входят все игроки этих команд). Пропустившие слово (8) продолжения не получают."""
+    participants = await crud.list_tiebreak_participants(session, round_.id)
+    if not participants:
+        return []
+    keys = {}
+    for p in participants:
+        keys[p.entry_id] = await _result_key(session, p.entry_id, p.daily_word_id or round_.daily_word_id, finalize=True)
+    groups: list[frozenset] = []
+    if crud.is_team_tiebreak(tournament):
+        by_score: dict[Fraction, list[int]] = defaultdict(list)
+        for team_id, score in _team_scores(participants, keys).items():
+            by_score[score].append(team_id)
+        for score, team_ids in by_score.items():
+            if len(team_ids) > 1 and score != SKIPPED_ATTEMPTS:
+                groups.append(frozenset(p.entry_id for p in participants if p.team_id in team_ids))
+    else:
+        by_key: dict[int, list[int]] = defaultdict(list)
+        for entry_id, key in keys.items():
+            by_key[key].append(entry_id)
+        for key, entry_ids in by_key.items():
+            if len(entry_ids) > 1 and key != SKIPPED_ATTEMPTS:
+                groups.append(frozenset(entry_ids))
+    return groups
+
+
+async def _delete_round(session: AsyncSession, round_id: int) -> None:
+    """Удаляет раунд вместе с продолжениями, его словами и попытками по ним."""
+    round_ = await session.get(TiebreakRound, round_id)
+    if round_ is None:
+        return
+    anchor_id = round_.daily_word_id  # до рекурсии: она сбрасывает кэш сессии (expire_all)
+    for child in await crud.get_child_rounds(session, round_id):
+        await _delete_round(session, child.id)
+    participants = await crud.list_tiebreak_participants(session, round_id)
+    word_ids = {p.daily_word_id for p in participants if p.daily_word_id} | {anchor_id}
+    await session.execute(delete(TiebreakParticipant).where(TiebreakParticipant.round_id == round_id))
+    await session.execute(delete(TiebreakRound).where(TiebreakRound.id == round_id))
+    await session.execute(delete(Attempt).where(Attempt.daily_word_id.in_(word_ids)))
+    await session.execute(delete(DailyWord).where(DailyWord.id.in_(word_ids)))
+    await session.commit()
+    session.expire_all()
+
+
+async def reconcile_rounds(session: AsyncSession, tournament: Tournament) -> None:
+    """Приводит цепочки раундов в соответствие с текущими результатами: продолжение, которое больше
+    не нужно (ничья распалась), удаляется, а для новой ничьи заводится недостающее. Нужно после
+    удаления игрока, когда результаты и средние команд пересчитываются."""
+    tournament_id = tournament.id
+    session.expire_all()
+    ids = sorted((r.round_number, r.id) for r in await crud.list_tiebreak_rounds(session, tournament_id))
+    for _, round_id in ids:
+        tournament = await crud.get_tournament(session, tournament_id)  # после expire_all — заново
+        round_ = await session.get(TiebreakRound, round_id)
+        if round_ is None or not round_.completed or round_.manual_order is not None:
+            continue
+        valid = set(await _tie_groups_of_round(session, tournament, round_))
+        existing: set[frozenset] = set()
+        for child in await crud.get_child_rounds(session, round_id):
+            members = frozenset(p.entry_id for p in await crud.list_tiebreak_participants(session, child.id))
+            if members in valid:
+                existing.add(members)
+            else:
+                await _delete_round(session, child.id)
+        for group in valid - existing:
+            await crud.create_tiebreak_round(session, tournament, sorted(group), previous_round_id=round_id)
+        session.expire_all()
+
+
+async def remove_entry(session: AsyncSession, tournament: Tournament, entry_id: int) -> None:
+    """Удаляет игрока из тай-брейка совсем: его попытки, слова и участие в раундах, затем саму запись
+    участника. Места и (в командном) средние команд пересчитываются без него; продолжения, которые
+    без него не нужны, удаляются, недостающие заводятся, раунды, которые теперь можно закрыть, закрываются.
+    Необратимо (человек остаётся в списке игроков платформы и его можно подключить заново)."""
+    tournament_id = tournament.id
+    await session.execute(delete(Attempt).where(Attempt.entry_id == entry_id))
+    await session.execute(delete(TiebreakParticipant).where(TiebreakParticipant.entry_id == entry_id))
+    await session.execute(delete(DailyWord).where(DailyWord.tournament_id == tournament_id, DailyWord.entry_id == entry_id))
+    await session.execute(delete(TournamentEntry).where(TournamentEntry.id == entry_id))
+    await session.commit()
+    session.expire_all()
+    await reconcile_rounds(session, await crud.get_tournament(session, tournament_id))
+    await resolve_ready_rounds(session, await crud.get_tournament(session, tournament_id))

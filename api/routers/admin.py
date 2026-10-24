@@ -686,6 +686,20 @@ async def reset_entry_today(entry_id: int, session: AsyncSession = Depends(get_s
     return {"ok": True}
 
 
+@router.delete("/entries/{entry_id}")
+async def delete_tiebreak_entry(entry_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    """Удалить игрока из тай-брейка совсем (в отличие от «Отключить» — его результаты стираются, он
+    пропадает из таблицы и распределения мест). Только для розыгрышей типа «тай-брейк»; необратимо."""
+    entry = await session.get(TournamentEntry, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Участие не найдено")
+    tournament = await crud.get_tournament(session, entry.tournament_id)
+    if tournament is None or tournament.type != TournamentType.tiebreak:
+        raise HTTPException(status_code=400, detail="Удалять игрока из розыгрыша можно только в тай-брейке")
+    await tiebreak.remove_entry(session, tournament, entry_id)
+    return {"ok": True}
+
+
 @router.patch("/entries/{entry_id}/hidden", response_model=EntryOut)
 async def set_entry_hidden(
     entry_id: int, payload: EntryHiddenRequest, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
