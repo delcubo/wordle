@@ -1196,8 +1196,8 @@ async def _tie_groups_view(session: AsyncSession, tournament: Tournament) -> Tie
         data = await marathon.compute_standings(session, tournament, apply_tie_resolutions=False)
         rows = [
             _TieRow(
-                r["entry_id"], r["callsign"], r["place"], r["total_attempts"],
-                f"{r['words_done']}/{data['words_count']} слов · {r['total_attempts']} попыток",
+                r["entry_id"], r["callsign"], r["place"], r["score"],
+                f"{r['words_done']}/{data['words_count']} слов · {r['score']} попыток",
             )
             for r in data["rows"]
         ]

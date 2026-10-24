@@ -2462,12 +2462,12 @@ function MarathonStandingsPanel({ tournament }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tournament.id, tournament.words_count]);
 
-  const RULE_NOTE = (d) => `Неугаданное слово = ${d.unsolved_attempts} попыток`;
+  const RULE_NOTE = (d) => `Неугаданное слово = ${d.unsolved_attempts} попыток, пропущенное (не пройденное) = ${d.skipped_attempts}`;
 
   function handleCopy() {
     const tags = [data.hashtag, "#таблица"].filter(Boolean).join(" ");
     // "·", а не "N. " — иначе Telegram склеивает строки в нумерованный список
-    const lines = data.rows.map((r) => `${placeLabel(r)} · ${r.callsign} — ${r.total_attempts} (${r.words_done}/${data.words_count})`);
+    const lines = data.rows.map((r) => `${placeLabel(r)} · ${r.callsign} — ${r.score} (${r.words_done}/${data.words_count})`);
     const text = `${tags}\n\n${lines.join("\n")}\n\nпопыток всего (слов пройдено/всего). ${RULE_NOTE(data)}${hasTieResolved() ? `\n${TIE_FOOTNOTE}` : ""}`;
     navigator.clipboard.writeText(text).then(
       () => {
@@ -2546,7 +2546,7 @@ function MarathonStandingsPanel({ tournament }) {
       ctx.fillStyle = "#1a1a1b";
       ctx.fillText(`${r.words_done}/${data.words_count}`, xDone + doneCol / 2, y + rowHeight / 2);
       ctx.font = "bold " + font;
-      ctx.fillText(String(r.total_attempts), xTotal + totalCol / 2, y + rowHeight / 2);
+      ctx.fillText(String(r.score), xTotal + totalCol / 2, y + rowHeight / 2);
     });
 
     ctx.strokeStyle = "#ddd";
@@ -2594,7 +2594,8 @@ function MarathonStandingsPanel({ tournament }) {
         </div>
       </div>
       <p style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>
-        Выше тот, кто прошёл больше слов; при равенстве — у кого меньше попыток в сумме ({RULE_NOTE(data).toLowerCase()}).
+        Место — по сумме попыток: угадал — число попыток, не угадал — {data.unsolved_attempts}, не пройденное слово — {data.skipped_attempts}.
+        При равенстве выше тот, у кого меньше пропущенных слов, затем меньше неугаданных.
         В ячейках: число попыток, X — не угадано, … — слово начато, · — ещё не дошёл.
       </p>
       {tie.open && <TieResolutionPanel tie={tie} />}
@@ -2634,7 +2635,7 @@ function MarathonStandingsPanel({ tournament }) {
                     </td>
                   ))}
                   <td style={{ ...tdStyle, textAlign: "center" }}>{r.words_done}/{data.words_count}</td>
-                  <td style={{ ...tdStyle, textAlign: "center", fontWeight: 700 }}>{r.total_attempts}</td>
+                  <td style={{ ...tdStyle, textAlign: "center", fontWeight: 700 }}>{r.score}</td>
                 </tr>
               ))}
             </tbody>

@@ -586,6 +586,9 @@ class MarathonRowOut(BaseModel):
     cells: list[MarathonCellOut | None]  # по слову на ячейку; None — ещё не дошёл
     words_done: int
     total_attempts: int  # сумма попыток по пройденным словам (неугаданное = unsolved_attempts)
+    failed_words: int = 0  # неугаданных слов (все попытки израсходованы) — по unsolved_attempts
+    skipped_words: int = 0  # не пройденных слов (не начаты или не завершены) — по skipped_attempts
+    score: int = 0  # сумма очков по единой лестнице: по ней места
     finished_all: bool
     place: str
     tie_resolved: bool = False  # место определено тай-брейком (со звёздочкой), а не числом попыток
@@ -595,6 +598,7 @@ class MarathonStandingsOut(BaseModel):
     words_count: int
     words: list[dict]
     unsolved_attempts: int
+    skipped_attempts: int = 8
     hashtag: str | None = None
     rows: list[MarathonRowOut]
 

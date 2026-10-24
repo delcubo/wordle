@@ -161,12 +161,14 @@ async def compute_team_standings(
         member_rows = []
         attempts_sum = 0
         words_done = 0
+        failed_total = 0
         for entry in members:
             row = rows_by_entry.get(entry.id)
             done = row["words_done"] if row else 0
             attempts = row["total_attempts"] if row else 0
             attempts_sum += attempts
             words_done += done
+            failed_total += row["failed_words"] if row else 0
             # среднее игрока по той же формуле, что у команды: среднее команды = среднее по её игрокам
             own = Fraction(attempts + marathon.SKIPPED_ATTEMPTS * (count - done), count) if count else Fraction(0)
             # результаты слов без самих слов и попыток — подробная таблица не раскрывает ответы
@@ -193,9 +195,12 @@ async def compute_team_standings(
         item["attempts_sum"] = attempts_sum
         item["unplayed_words"] = unplayed
         item["score"] = Fraction(attempts_sum + marathon.SKIPPED_ATTEMPTS * unplayed, size * count)
+        # при равном среднем выше команда, у которой в среднем на игрока меньше пропущенных слов,
+        # затем меньше неугаданных (как у игроков в личном зачёте)
+        item["rank_key"] = (item["score"], Fraction(unplayed, size), Fraction(failed_total, size))
         ranked.append(item)
 
-    ranked.sort(key=lambda t: (t["score"], t["name"].lower()))
+    ranked.sort(key=lambda t: (*t["rank_key"], t["name"].lower()))
     for item, text in zip(ranked, format_averages([t["score"] for t in ranked])):
         item["average"] = text
         item["average_value"] = float(item["score"])
@@ -207,7 +212,7 @@ async def compute_team_standings(
     i = 0
     while i < len(ranked):
         j = i
-        while j + 1 < len(ranked) and ranked[j + 1]["score"] == ranked[i]["score"]:
+        while j + 1 < len(ranked) and ranked[j + 1]["rank_key"] == ranked[i]["rank_key"]:
             j += 1
         place = str(i + 1) if i == j else f"{i + 1}-{j + 1}"
         group = ranked[i:j + 1]
@@ -222,7 +227,7 @@ async def compute_team_standings(
         i = j + 1
 
     for item in ranked:
-        del item["score"]  # Fraction не сериализуется; для API есть average / average_value
+        del item["score"], item["rank_key"]  # Fraction не сериализуется; для API есть average / average_value
     return {
         "words_count": count, "unsolved_attempts": marathon.UNSOLVED_ATTEMPTS, "skipped_attempts": marathon.SKIPPED_ATTEMPTS,
         "hashtag": tournament.hashtag, "rows": ranked, "excluded": excluded,

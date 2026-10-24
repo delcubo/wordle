@@ -201,6 +201,7 @@ async def compute_standings(
         cells = []
         words_done = 0
         total = 0
+        failed = 0  # слов, по которым израсходованы все попытки и слово не угадано (по 7)
         for number in range(1, count + 1):
             dw = next((w for w in words if w.day_number == number), None)
             attempt = entry_attempts.get(dw.id) if dw is not None else None
@@ -208,6 +209,8 @@ async def compute_standings(
             if attempt_finished(attempt):
                 words_done += 1
                 total += counted_attempts(attempt)
+                if not attempt.solved:
+                    failed += 1
                 cells.append({
                     "attempts_used": attempt.attempts_used, "solved": bool(attempt.solved), "finished": True,
                     "word": word, "guesses": list(attempt.guesses),
@@ -219,24 +222,31 @@ async def compute_standings(
                 })
             else:
                 cells.append(None)
+        skipped = count - words_done  # не пройденные слова (не начаты или не завершены) — по 8
         rows.append({
             "entry_id": entry.id, "callsign": entry.callsign, "cells": cells,
             "words_done": words_done, "total_attempts": total,
+            "failed_words": failed, "skipped_words": skipped, "score": total + SKIPPED_ATTEMPTS * skipped,
             "finished_all": words_done == count and count > 0,
         })
 
-    rows.sort(key=lambda r: (-r["words_done"], r["total_attempts"], r["callsign"].lower()))
+    # Место — по сумме очков единой лестницы (угадал N, не угадал 7, пропустил 8); при равенстве
+    # выше тот, у кого меньше пропущенных слов, затем меньше неугаданных (см. api/attempt_scores.py)
+    def rank_key(r: dict) -> tuple:
+        return (r["score"], r["skipped_words"], r["failed_words"])
+
+    rows.sort(key=lambda r: (*rank_key(r), r["callsign"].lower()))
     resolution_by_set = (
         {frozenset(item["entry_ids"]): list(item["entry_ids"]) for item in (tournament.tie_resolutions or [])}
         if apply_tie_resolutions else {}
     )
-    # места: по (пройдено слов, сумма попыток); полное совпадение — общее место "2-3",
-    # если для группы не сохранён порядок по итогам тай-брейка (тогда места 2 и 3, со звёздочкой)
+    # места: по rank_key; полное совпадение — общее место "2-3", если для группы не сохранён
+    # порядок по итогам тай-брейка (тогда места 2 и 3, со звёздочкой)
     i = 0
     while i < len(rows):
         j = i
-        key = (rows[i]["words_done"], rows[i]["total_attempts"])
-        while j + 1 < len(rows) and (rows[j + 1]["words_done"], rows[j + 1]["total_attempts"]) == key:
+        key = rank_key(rows[i])
+        while j + 1 < len(rows) and rank_key(rows[j + 1]) == key:
             j += 1
         place = str(i + 1) if i == j else f"{i + 1}-{j + 1}"
         group = rows[i:j + 1]
@@ -256,6 +266,7 @@ async def compute_standings(
         "words": [{"day_number": w.day_number, "word": w.word} for w in shared_words]
         if not individual else [{"day_number": n, "word": None} for n in range(1, count + 1)],
         "unsolved_attempts": UNSOLVED_ATTEMPTS,
+        "skipped_attempts": SKIPPED_ATTEMPTS,
         "hashtag": tournament.hashtag,
         "rows": rows,
     }
