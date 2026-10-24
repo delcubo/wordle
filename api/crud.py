@@ -122,6 +122,16 @@ async def list_tournaments(session: AsyncSession) -> list[Tournament]:
     return list(result.scalars().all())
 
 
+async def count_connected_entries(session: AsyncSession) -> dict[int, int]:
+    """tournament_id -> сколько игроков сейчас подключено (активные участия) — одним запросом."""
+    result = await session.execute(
+        select(TournamentEntry.tournament_id, func.count(TournamentEntry.id))
+        .where(TournamentEntry.active.is_(True))
+        .group_by(TournamentEntry.tournament_id)
+    )
+    return {tournament_id: count for tournament_id, count in result.all()}
+
+
 async def get_other_active_tournament_of_type(
     session: AsyncSession, tournament_type, exclude_id: int | None = None
 ) -> Tournament | None:

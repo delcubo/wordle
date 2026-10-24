@@ -380,7 +380,11 @@ async def put_word_plan(
 
 @router.get("/tournaments", response_model=list[TournamentOut])
 async def get_tournaments(session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
-    return [_tournament_out(t) for t in await crud.list_tournaments(session)]
+    connected = await crud.count_connected_entries(session)
+    return [
+        _tournament_out(t).model_copy(update={"players_connected": connected.get(t.id, 0)})
+        for t in await crud.list_tournaments(session)
+    ]
 
 
 @router.patch("/tournaments/{tournament_id}", response_model=TournamentOut)

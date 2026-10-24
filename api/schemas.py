@@ -125,6 +125,7 @@ class TournamentOut(BaseModel):
     word_length: int = 5
     word_plan: dict | None = None  # длины слов по позициям (см. api/word_plan.py)
     teams_enabled: bool = False  # только marathon: командный зачёт
+    players_connected: int = 0  # сколько игроков сейчас подключено (заполняется в списке розыгрышей)
 
     class Config:
         from_attributes = True

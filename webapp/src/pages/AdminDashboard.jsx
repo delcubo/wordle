@@ -993,6 +993,14 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
       >
         <div style={{ fontWeight: 600 }}>
           {t.title}
+          {t.archived && t.players_connected > 0 && (
+            <span
+              title="В этом архивном розыгрыше ещё есть подключённые игроки: они видят его в «Моих играх»"
+              style={{ marginLeft: 6, fontSize: 11, color: "#e5a94c", border: "1px solid #e5a94c", borderRadius: 4, padding: "1px 5px" }}
+            >
+              👥 {t.players_connected}
+            </span>
+          )}
           {t.paused && (
             <span style={{ marginLeft: 6, fontSize: 11, color: "#e5a94c", border: "1px solid #e5a94c", borderRadius: 4, padding: "1px 5px" }}>
               приостановлен
@@ -1218,8 +1226,10 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
 
   const liveTournaments = tournaments.filter((t) => !t.archived);
   const archivedTournaments = tournaments.filter((t) => t.archived);
+  // архивные розыгрыши, где ещё есть подключённые игроки, — отдельным блоком наверху архива
+  const archivedWithPlayers = archivedTournaments.filter((t) => t.players_connected > 0);
   const archivedByYear = {};
-  for (const t of archivedTournaments) {
+  for (const t of archivedTournaments.filter((x) => !(x.players_connected > 0))) {
     const year = t.start_date ? t.start_date.slice(0, 4) : "—";
     (archivedByYear[year] ||= []).push(t);
   }
@@ -1237,7 +1247,16 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
             style={{ ...ghostButtonStyle, fontSize: 13, width: "100%" }}
           >
             {showArchive ? "▾" : "▸"} Архив ({archivedTournaments.length})
+            {archivedWithPlayers.length > 0 && (
+              <span style={{ color: "#e5a94c" }}> · с игроками: {archivedWithPlayers.length}</span>
+            )}
           </button>
+          {showArchive && archivedWithPlayers.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 12, color: "#e5a94c", marginBottom: 4 }}>С подключёнными игроками</div>
+              {archivedWithPlayers.map(renderCard)}
+            </div>
+          )}
           {showArchive && archivedYears.map((year) => (
             <div key={year} style={{ marginTop: 8 }}>
               <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 4 }}>{year}</div>
