@@ -11,14 +11,17 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_session
-from api.schemas import TodayWordStatus, GuessRequest, GuessResponse, LetterState, MyTournamentOut, BracketTodayStatus, ThemeOut
+from api.schemas import (
+    TodayWordStatus, GuessRequest, GuessResponse, LetterState, MyTournamentOut, BracketTodayStatus, ThemeOut,
+    BonusStateOut, BonusTodayStatus, BonusGuessRequest,
+)
 from api.wordle_logic import check_guess, is_solved
 from api.scoring import calculate_points
 from api.dictionary import is_valid_word
 from api.tournament_time import today, day_number_for_date, next_publish_at, effective_status, TOURNAMENT_TZ
 from api.models import TournamentType, TournamentStatus, PlayoffMatchStatus
 from api.tournament_title import render_tournament_title, THIRD_PLACE_STAGE
-from api import crud, tiebreak, bracket_game, notify, marathon
+from api import crud, tiebreak, bracket_game, notify, marathon, bonus
 from api.report import build_report_text, build_marathon_summary_text
 from api import teams
 from api.word_plan import base_length
@@ -416,6 +419,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
     )
 
     team_name = await teams.team_name_for_entry(session, tournament, entry) if is_tiebreak else None
+    bonus_fields = await _bonus_fields(session, tournament, entry)
     tiebreak_started = False
     tiebreak_place = None
     if is_tiebreak:
@@ -456,7 +460,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             base_title=tournament.title, is_endless=is_endless, hashtag=tournament.hashtag, paused=tournament.paused,
             is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=shown_tiebreak_place,
             team_name=team_name, is_standard_report=is_standard_report, word_length=base_length(tournament),
-            **last_attempt_fields,
+            **last_attempt_fields, **bonus_fields,
             **(
                 _unavailable_info(tournament, day_number_for_date(tournament.start_date, today()))
                 if not is_tiebreak and not tournament.paused and tournament.status not in (TournamentStatus.tiebreak, TournamentStatus.playoff) else {}
@@ -477,6 +481,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
             is_endless=is_endless, hashtag=tournament.hashtag,
             is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=shown_tiebreak_place,
             team_name=team_name, is_standard_report=is_standard_report, word_length=len(daily_word.word),
+            **bonus_fields,
         )
 
     already_played = attempt.solved or attempt.attempts_used >= MAX_ATTEMPTS
@@ -508,7 +513,7 @@ async def get_today_status(token: str, tournament_id: int, session: AsyncSession
         next_word_at=next_publish_at().isoformat() if already_played and not is_tiebreak else None,
         is_tiebreak=is_tiebreak, tiebreak_started=tiebreak_started, tiebreak_place=shown_tiebreak_place,
         team_name=team_name, is_standard_report=is_standard_report, streak_days=streak_days,
-        word_length=len(daily_word.word),
+        word_length=len(daily_word.word), **bonus_fields,
     )
 
 
@@ -564,6 +569,120 @@ async def submit_guess(payload: GuessRequest, session: AsyncSession = Depends(ge
         game_over=game_over,
         points=points,
         **marathon_fields,
+    )
+
+
+# ---------- Бонусные слова (standard и основной этап championship, см. api/bonus.py) ----------
+
+async def _bonus_fields(session: AsyncSession, tournament, entry) -> dict:
+    """Поля статуса со сводкой бонусов игрока; пусто, если у розыгрыша бонусов нет."""
+    if tournament.type not in (TournamentType.standard, TournamentType.championship) or not bonus.active_for_players(tournament):
+        return {}
+    states = (await bonus.compute_states(session, tournament, [entry])).get(entry.id, [])
+    return dict(
+        bonus=[
+            BonusStateOut(
+                number=s["number"], opening_day=s["opening_day"], block_start=s["block_start"], state=s["state"],
+                length=s["length"], points=s["points"], attempts_used=s["attempts_used"],
+            )
+            for s in states
+        ],
+        bonus_open_number=next((s["number"] for s in states if s["state"] == "open"), None),
+    )
+
+
+async def _bonus_context(session: AsyncSession, token: str, tournament_id: int):
+    user = await _authenticate_user(session, token)
+    entry = await crud.get_entry(session, tournament_id, user.id)
+    if entry is None:
+        raise HTTPException(status_code=403, detail="Вы не участвуете в этом розыгрыше")
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    if tournament.paused:
+        raise HTTPException(status_code=400, detail="Розыгрыш временно приостановлен админом")
+    if not bonus.active_for_players(tournament):
+        raise HTTPException(status_code=400, detail="В этом розыгрыше нет бонусных слов")
+    return entry, tournament
+
+
+def _bonus_report_text(tournament, entry, number: int, attempt, word: str) -> str:
+    return build_report_text(
+        kind="bonus", attempts_used=attempt.attempts_used, solved=attempt.solved,
+        grid=[check_guess(g, word) for g in attempt.guesses], callsign=entry.callsign, hashtag=tournament.hashtag,
+        base_title=tournament.title, stage_label=f"бонус {number}",
+    )
+
+
+async def _bonus_state_for(session: AsyncSession, tournament, entry, number: int) -> dict:
+    states = (await bonus.compute_states(session, tournament, [entry])).get(entry.id, [])
+    state = next((s for s in states if s["number"] == number), None)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Бонусного слова с таким номером нет")
+    return state
+
+
+@router.get("/bonus/today", response_model=BonusTodayStatus)
+async def get_bonus_status(token: str, tournament_id: int, number: int, session: AsyncSession = Depends(get_session)):
+    """Бонусное слово игрока: состояние, уже сделанные попытки, при завершении — результат и отчёт."""
+    entry, tournament = await _bonus_context(session, token, tournament_id)
+    state = await _bonus_state_for(session, tournament, entry, number)
+    dw = await bonus.get_bonus_word(session, tournament.id, number)
+    attempt = await crud.get_attempt(session, entry.id, dw.id) if dw is not None else None
+    finished = bonus.attempt_finished(attempt)
+    return BonusTodayStatus(
+        number=number, state=state["state"], length=state["length"], opening_day=state["opening_day"],
+        tournament_title=tournament.title, callsign=entry.callsign, hashtag=tournament.hashtag,
+        attempts_used=attempt.attempts_used if attempt else 0, solved=attempt.solved if attempt else None,
+        finished=finished, points=attempt.points if finished else None,
+        previous_guesses=list(attempt.guesses) if attempt else [],
+        previous_results=[check_guess(g, dw.word) for g in attempt.guesses] if attempt else [],
+        answer_word=dw.word if finished and not attempt.solved else None,
+        report_text=_bonus_report_text(tournament, entry, number, attempt, dw.word) if finished else None,
+    )
+
+
+@router.post("/bonus/guess", response_model=GuessResponse)
+async def submit_bonus_guess(payload: BonusGuessRequest, session: AsyncSession = Depends(get_session)):
+    """Догадка по бонусному слову. Играть можно только пока бонус открыт: в день его открытия, после
+    завершения слова этого дня и без пропусков в блоке."""
+    entry, tournament = await _bonus_context(session, payload.token, payload.tournament_id)
+    state = await _bonus_state_for(session, tournament, entry, payload.number)
+    if state["state"] != "open":
+        raise HTTPException(status_code=400, detail="Бонусное слово сейчас недоступно")
+    dw = await bonus.get_bonus_word(session, tournament.id, payload.number)
+
+    guess = payload.guess.strip().lower()
+    length = len(dw.word)
+    if len(guess) != length:
+        raise HTTPException(status_code=400, detail=f"Слово должно быть из {length} букв")
+    if not is_valid_word(guess, length):
+        raise HTTPException(status_code=400, detail="Такого слова нет в словаре")
+
+    attempt = await crud.get_or_create_attempt(session, entry.id, dw.id)
+    if attempt.solved or attempt.attempts_used >= MAX_ATTEMPTS:
+        raise HTTPException(status_code=400, detail="Попытки по бонусному слову исчерпаны")
+
+    statuses = check_guess(guess, dw.word)
+    solved = is_solved(statuses)
+    attempts_used = attempt.attempts_used + 1
+    game_over = solved or attempts_used >= MAX_ATTEMPTS
+    points = calculate_points(attempts_used, solved, tournament.scoring_rules or {}) if game_over else None
+    saved = await crud.save_guess(session, attempt, guess, solved, game_over, points)
+
+    report_text = None
+    if game_over:
+        report_text = _bonus_report_text(tournament, entry, payload.number, saved, dw.word)
+        if tournament.notify_admin and notify.is_configured():
+            try:
+                notify.notify_admin_in_background(f"{report_text}\n\n{_notification_footer(datetime.utcnow(), None, None)}")
+            except Exception:
+                logger.exception("Не удалось подготовить уведомление админу (бонус)")
+    return GuessResponse(
+        result=[LetterState(letter=g, state=s) for g, s in zip(guess, statuses)],
+        solved=solved, attempts_used=attempts_used, attempts_remaining=MAX_ATTEMPTS - attempts_used,
+        game_over=game_over, points=points,
+        answer_word=dw.word if game_over and not solved else None, report_text=report_text,
     )
 
 

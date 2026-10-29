@@ -146,6 +146,12 @@ class Tournament(Base):
     teams_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # Порядок команд с общим местом: [{"team_ids": [лучшая, ..., худшая], "source": "название"}]
     team_tie_resolutions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Бонусные слова (standard и основной этап championship, см. api/bonus.py): за каждые N дней
+    # без пропуска игрок может в день открытия отгадать дополнительное слово за очки по шкале
+    # розыгрыша. bonus_default_length — длина новых бонусных слов (у каждого слова её можно сменить).
+    bonus_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    bonus_every_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bonus_default_length: Mapped[int] = mapped_column(Integer, default=6)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -237,6 +243,9 @@ class DailyWord(Base):
     word: Mapped[str] = mapped_column(String(16))
     calendar_date: Mapped[date] = mapped_column(Date)
     status: Mapped[DailyWordStatus] = mapped_column(SAEnum(DailyWordStatus), default=DailyWordStatus.suggested)
+    # Номер бонусного слова (api/bonus.py); NULL — обычное слово дня. Бонусное слово хранится с
+    # «служебным» day_number (BONUS_DAY_BASE + номер), а calendar_date — день его открытия.
+    bonus_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     tournament: Mapped["Tournament"] = relationship(back_populates="daily_words")
     attempts: Mapped[list["Attempt"]] = relationship(back_populates="daily_word")

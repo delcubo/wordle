@@ -620,10 +620,13 @@ async def list_marathon_words(session: AsyncSession, tournament_id: int, entry_i
     return list(result.scalars().all())
 
 
-async def list_daily_words(session: AsyncSession, tournament_id: int) -> list[DailyWord]:
-    result = await session.execute(
-        select(DailyWord).where(DailyWord.tournament_id == tournament_id).order_by(DailyWord.day_number)
-    )
+async def list_daily_words(session: AsyncSession, tournament_id: int, include_bonus: bool = False) -> list[DailyWord]:
+    """Слова розыгрыша по порядку. Бонусные слова (api/bonus.py) по умолчанию не включаются — это не
+    слова дней и в таблицах по дням и истории слов их быть не должно."""
+    query = select(DailyWord).where(DailyWord.tournament_id == tournament_id)
+    if not include_bonus:
+        query = query.where(DailyWord.bonus_number.is_(None))
+    result = await session.execute(query.order_by(DailyWord.day_number))
     return list(result.scalars().all())
 
 
@@ -789,7 +792,9 @@ async def save_guess(
 
 async def _next_free_day_number(session: AsyncSession, tournament_id: int) -> int:
     result = await session.execute(
-        select(func.max(DailyWord.day_number)).where(DailyWord.tournament_id == tournament_id)
+        select(func.max(DailyWord.day_number)).where(
+            DailyWord.tournament_id == tournament_id, DailyWord.bonus_number.is_(None)
+        )
     )
     return (result.scalar_one_or_none() or 0) + 1
 

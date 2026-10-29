@@ -31,7 +31,7 @@ from api.schemas import (
     MarathonWordOut, MarathonStandingsOut, MarathonPlayerWordsOut, SlotLengthRequest, WordPlanRequest,
     TeamCreateRequest, TeamOut, EntryTeamRequest, TeamStandingsOut,
     TeamTieGroupsResponse, TeamTieGroupOut, TeamTieMember, TeamTieResolutionsRequest, TeamTiebreakCreateRequest,
-    TeamWordDayOut, TiebreakTeamResultsOut,
+    TeamWordDayOut, TiebreakTeamResultsOut, BonusCellOut, BonusWordOut,
 )
 from api.models import Tournament, TournamentStatus, TournamentType, User, TournamentEntry, PlayoffMatch, TiebreakRound, Team
 from api.admin_auth import (
@@ -43,7 +43,7 @@ from api.dictionary import (
 )
 from api.scoring import calculate_points
 from api.tournament_time import today, day_number_for_date, effective_status
-from api import crud, tiebreak, bracket, bracket_game, notify, marathon, teams
+from api import crud, tiebreak, bracket, bracket_game, notify, marathon, teams, bonus
 from api import word_plan as wp
 from api.standings_view import compute_standings
 
@@ -290,6 +290,13 @@ async def create_tournament(
 
     if payload.word_length not in SUPPORTED_LENGTHS:
         raise HTTPException(status_code=400, detail="Длина слов должна быть 5, 6 или 7 букв")
+    if payload.bonus_default_length not in SUPPORTED_LENGTHS:
+        raise HTTPException(status_code=400, detail="Длина бонусных слов должна быть 5, 6 или 7 букв")
+    if payload.bonus_enabled:
+        if t_type not in (TournamentType.standard, TournamentType.championship):
+            raise HTTPException(status_code=400, detail="Бонусные слова есть только у Стандартного режима и Чемпионата")
+        if not payload.bonus_every_days or not (1 <= payload.bonus_every_days <= (payload.duration_days or 0)):
+            raise HTTPException(status_code=400, detail="N (бонус за каждые N дней) — от 1 до длительности розыгрыша")
 
     if t_type == TournamentType.marathon:
         if payload.words_count is None or not (marathon.MIN_WORDS <= payload.words_count <= marathon.MAX_WORDS):
@@ -327,6 +334,9 @@ async def create_tournament(
         end_date=payload.end_date if t_type in (TournamentType.marathon, TournamentType.tiebreak) else None,
         individual_words=bool(payload.individual_words) and t_type == TournamentType.marathon,
         word_length=payload.word_length,
+        bonus_enabled=bool(payload.bonus_enabled),
+        bonus_every_days=payload.bonus_every_days if payload.bonus_enabled else None,
+        bonus_default_length=payload.bonus_default_length,
         skip_flag_symbol=payload.skip_flag_symbol,
         bracket_size=payload.bracket_size,
         rounds_per_match=payload.rounds_per_match,
@@ -339,6 +349,8 @@ async def create_tournament(
     await session.refresh(tournament)
     if t_type == TournamentType.marathon and not tournament.individual_words:
         await marathon.ensure_words(session, tournament)  # общие слова видны админу сразу
+    if tournament.bonus_enabled:
+        await _sync_bonus_words(session, tournament)
     return _tournament_out(tournament)
 
 
@@ -376,6 +388,16 @@ async def put_word_plan(
         await marathon.apply_lengths(session, tournament)
     await session.refresh(tournament)
     return _tournament_out(tournament)
+
+
+async def _sync_bonus_words(session: AsyncSession, tournament: Tournament) -> None:
+    """Создать/убрать бонусные слова по настройкам розыгрыша; ошибки словаря и «уже начато» — как 400."""
+    try:
+        await bonus.sync_words(session, tournament)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError:
+        raise HTTPException(status_code=400, detail="В словаре не хватает слов нужной длины для бонусов")
 
 
 @router.get("/tournaments", response_model=list[TournamentOut])
@@ -497,9 +519,35 @@ async def update_tournament_settings(
             )
         tournament.duration_days = payload.duration_days
 
+    bonus_changed = (
+        payload.bonus_enabled is not None or payload.bonus_every_days is not None
+        or payload.bonus_default_length is not None
+    )
+    if bonus_changed:
+        if not bonus.supports_bonus(tournament):
+            raise HTTPException(status_code=400, detail="Бонусные слова есть только у Стандартного режима и Чемпионата")
+        new_enabled = tournament.bonus_enabled if payload.bonus_enabled is None else payload.bonus_enabled
+        new_every = tournament.bonus_every_days if payload.bonus_every_days is None else payload.bonus_every_days
+        new_length = tournament.bonus_default_length if payload.bonus_default_length is None else payload.bonus_default_length
+        if new_length not in SUPPORTED_LENGTHS:
+            raise HTTPException(status_code=400, detail="Длина бонусных слов должна быть 5, 6 или 7 букв")
+        if new_enabled and (not new_every or not (1 <= new_every <= tournament.duration_days)):
+            raise HTTPException(status_code=400, detail="N (бонус за каждые N дней) — от 1 до длительности розыгрыша")
+        if (
+            (new_enabled != bool(tournament.bonus_enabled) or (new_enabled and new_every != tournament.bonus_every_days))
+            and await bonus.any_bonus_attempts(session, tournament.id)
+        ):
+            raise HTTPException(status_code=400, detail="Бонусные слова уже начаты — включать, выключать и менять N поздно")
+        tournament.bonus_enabled = new_enabled
+        tournament.bonus_every_days = new_every if new_enabled else None
+        tournament.bonus_default_length = new_length
+
     session.add(tournament)
     await session.commit()
     await session.refresh(tournament)
+    if bonus_changed or (payload.duration_days is not None and tournament.bonus_enabled):
+        await _sync_bonus_words(session, tournament)
+        await session.refresh(tournament)
     return _tournament_out(tournament)
 
 
@@ -950,6 +998,93 @@ async def regenerate_entry_individual_words(
     return {"replaced": await marathon.regenerate_entry_words(session, tournament, entry_id)}
 
 
+# ---------- Бонусные слова (api/bonus.py) ----------
+
+async def _require_bonus_tournament(session: AsyncSession, tournament_id: int) -> Tournament:
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    if not bonus.supports_bonus(tournament):
+        raise HTTPException(status_code=400, detail="Бонусные слова есть только у Стандартного режима и Чемпионата")
+    if not tournament.bonus_enabled:
+        raise HTTPException(status_code=400, detail="В этом розыгрыше бонусные слова не включены")
+    return tournament
+
+
+async def _bonus_words_out(session: AsyncSession, tournament: Tournament) -> list[BonusWordOut]:
+    entries = [e for e in await crud.list_entries(session, tournament.id) if not e.hidden_from_standings]
+    states = await bonus.compute_states(session, tournament, entries)
+    out = []
+    for dw in await bonus.list_bonus_words(session, tournament.id):
+        cells = [next(s for s in rows if s["number"] == dw.bonus_number) for rows in states.values()]
+        out.append(BonusWordOut(
+            number=dw.bonus_number, opening_day=bonus.opening_day(tournament, dw.bonus_number),
+            block_start=(dw.bonus_number - 1) * tournament.bonus_every_days + 1,
+            calendar_date=dw.calendar_date, word=dw.word, length=len(dw.word), status=dw.status.value,
+            editable=not await crud.daily_word_has_attempts(session, dw.id),
+            eligible=sum(1 for c in cells if c["state"] in ("played", "open", "expired")),
+            played=sum(1 for c in cells if c["state"] == "played"),
+        ))
+    return out
+
+
+@router.get("/tournaments/{tournament_id}/bonus-words", response_model=list[BonusWordOut])
+async def get_bonus_words(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    tournament = await _require_bonus_tournament(session, tournament_id)
+    return await _bonus_words_out(session, tournament)
+
+
+@router.post("/tournaments/{tournament_id}/bonus-words/{number}", response_model=list[BonusWordOut])
+async def set_bonus_word(
+    tournament_id: int, number: int, payload: SetTiebreakWordRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """Своё бонусное слово (пока никто не начал); длина — по самому слову."""
+    tournament = await _require_bonus_tournament(session, tournament_id)
+    already_used = {w.word for w in await crud.list_daily_words(session, tournament_id, include_bonus=True)
+                    if w.bonus_number != number}
+    error = validate_manual_word(payload.word, already_used)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    try:
+        await bonus.set_word(session, tournament, number, canonical_word(payload.word))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await _bonus_words_out(session, tournament)
+
+
+@router.post("/tournaments/{tournament_id}/bonus-words/{number}/reroll", response_model=list[BonusWordOut])
+async def reroll_bonus_word(
+    tournament_id: int, number: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    tournament = await _require_bonus_tournament(session, tournament_id)
+    try:
+        await bonus.reroll_word(session, tournament, number)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError:
+        raise HTTPException(status_code=400, detail="В словаре не хватает слов для замены")
+    return await _bonus_words_out(session, tournament)
+
+
+@router.post("/tournaments/{tournament_id}/bonus-words/{number}/length", response_model=list[BonusWordOut])
+async def set_bonus_word_length(
+    tournament_id: int, number: int, payload: SlotLengthRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """Сменить длину бонусного слова: система подбирает новое слово нужной длины."""
+    if payload.length not in SUPPORTED_LENGTHS:
+        raise HTTPException(status_code=400, detail="Длина слова должна быть 5, 6 или 7 букв")
+    tournament = await _require_bonus_tournament(session, tournament_id)
+    try:
+        await bonus.reroll_word(session, tournament, number, length=payload.length)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError:
+        raise HTTPException(status_code=400, detail="В словаре не хватает слов такой длины")
+    return await _bonus_words_out(session, tournament)
+
+
 # ---------- Подтверждение слова дня ----------
 
 @router.get("/tournaments/{tournament_id}/words", response_model=list[DailyWordOut])
@@ -1047,7 +1182,7 @@ async def confirm_word(
     if payload.override_word:
         # в личных наборах марафона повтор слова ДРУГОГО участника допустим — запрещён только повтор внутри набора
         already_used = {
-            w.word for w in await crud.list_daily_words(session, daily_word.tournament_id)
+            w.word for w in await crud.list_daily_words(session, daily_word.tournament_id, include_bonus=True)
             if w.id != daily_word.id and w.entry_id == daily_word.entry_id
         }
         error = validate_manual_word(payload.override_word, already_used)
@@ -1132,6 +1267,13 @@ async def get_standings(
                         not_played_yet=d.not_played_yet, guesses=d.guesses,
                     )
                     for d in r.daily
+                ],
+                bonus=[
+                    BonusCellOut(
+                        number=c["number"], opening_day=c["opening_day"], state=c["state"], points=c["points"],
+                        guesses=c["guesses"],
+                    )
+                    for c in r.bonus
                 ],
             )
             for r in rows

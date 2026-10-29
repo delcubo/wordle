@@ -24,6 +24,7 @@ BORDER = {
     "bracket": "⚔️",  # ⚔️
     "tiebreak": "\U0001f3b2",  # 🎲
     "marathon": "\U0001f3c1",  # 🏁
+    "bonus": "\U0001f381",  # 🎁 бонусное слово Стандартного режима
 }
 STREAK_EMOJI = "\U0001f525"  # 🔥
 
@@ -59,7 +60,7 @@ def build_report_text(
         border = BORDER[kind]
         lines = [f"{border} {base_title.upper()} {border}"]
         result_emoji = RESULT_EMOJI.get(attempts_used, FAILED_EMOJI) if solved else FAILED_EMOJI
-        if kind in ("bracket", "marathon"):
+        if kind in ("bracket", "marathon", "bonus"):
             day_label = stage_label or None
         elif kind == "tiebreak":
             day_label = f"раунд {day_number}" if day_number is not None else None

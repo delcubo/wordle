@@ -5,7 +5,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models import Tournament, Attempt
-from api import crud
+from api import crud, bonus
 from api.scoring import build_standings, ParticipantDayResult, StandingsRow
 from api.tournament_time import today, day_number_for_date
 
@@ -88,4 +88,13 @@ async def compute_standings(
     resolutions = None
     if apply_tie_resolutions and max_day is None and tournament.tie_resolutions:
         resolutions = [r["entry_ids"] for r in tournament.tie_resolutions]
-    return build_standings(entry_dicts, daily_results, last_day, tie_resolutions=resolutions)
+    # бонусные слова: очки сыгранных входят в итог; в снимке «по итогам дня» — только бонусы,
+    # день открытия которых уже вошёл в таблицу
+    bonus_cells: dict[int, list[dict]] = {}
+    if bonus.bonus_slots(tournament):
+        for entry_id, cells in (await bonus.compute_states(session, tournament, entries)).items():
+            bonus_cells[entry_id] = [
+                c if c["opening_day"] <= last_day else {**c, "state": "future", "points": None, "guesses": []}
+                for c in cells
+            ]
+    return build_standings(entry_dicts, daily_results, last_day, tie_resolutions=resolutions, bonus_cells=bonus_cells)

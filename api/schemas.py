@@ -99,6 +99,9 @@ class TournamentConfigRequest(BaseModel):
     end_date: date | None = None  # только marathon: последний день игры (необязательно)
     individual_words: bool = False  # только marathon: у каждого участника свой набор слов
     word_length: int = 5  # базовая длина слов: 5, 6 или 7 (выбирается при создании)
+    bonus_enabled: bool = False  # standard/championship: бонусные слова
+    bonus_every_days: int | None = None  # бонус за каждые N дней без пропуска
+    bonus_default_length: int = 6  # длина новых бонусных слов
 
 
 class TournamentOut(BaseModel):
@@ -125,6 +128,9 @@ class TournamentOut(BaseModel):
     word_length: int = 5
     word_plan: dict | None = None  # длины слов по позициям (см. api/word_plan.py)
     teams_enabled: bool = False  # только marathon: командный зачёт
+    bonus_enabled: bool = False
+    bonus_every_days: int | None = None
+    bonus_default_length: int = 6
     players_connected: int = 0  # сколько игроков сейчас подключено (заполняется в списке розыгрышей)
 
     class Config:
@@ -145,6 +151,9 @@ class TournamentSettingsUpdateRequest(BaseModel):
     clear_end_date: bool | None = None  # только marathon: убрать дату окончания
     individual_words: bool | None = None  # только marathon: личные наборы слов (менять можно, пока никто не начал)
     teams_enabled: bool | None = None  # только marathon: командный зачёт
+    bonus_enabled: bool | None = None  # standard/championship: бонусные слова
+    bonus_every_days: int | None = None
+    bonus_default_length: int | None = None
 
 
 class TournamentPauseRequest(BaseModel):
@@ -309,6 +318,8 @@ class TodayWordStatus(BaseModel):
     next_word_at: str | None = None  # ISO-момент публикации следующего слова — для попапа-обратного отсчёта
     paused: bool = False
     team_name: str | None = None  # название команды игрока (командный тай-брейк) — для текста места
+    bonus: list["BonusStateOut"] | None = None  # бонусные слова игрока (standard/championship с включённой опцией)
+    bonus_open_number: int | None = None  # номер бонуса, который открыт прямо сейчас
     is_tiebreak: bool = False  # только для розыгрыша типа tiebreak — переключает текст ожидания/финала на фронте
     tiebreak_started: bool = False  # розыгрыш типа tiebreak уже стартовал (хотя бы корневой раунд создан)
     tiebreak_place: str | None = None  # текущее/итоговое место — "2" или диапазон "2-4", пока группа ещё играет
@@ -394,13 +405,22 @@ class DailyCell(BaseModel):
     guesses: list[str] = []
 
 
+class BonusCellOut(BaseModel):
+    number: int
+    opening_day: int
+    state: str  # played | lost | expired | upcoming | pending | open | future (см. api/bonus.py)
+    points: int | None = None
+    guesses: list[str] = []
+
+
 class StandingsRowOut(BaseModel):
     participant_id: int  # id соответствующего TournamentEntry
     callsign: str
-    total_points: int
+    total_points: int  # включая очки сыгранных бонусных слов
     place: str
     tie_resolved: bool = False  # место определено тай-брейком (показывается со звёздочкой)
     daily: list[DailyCell]
+    bonus: list[BonusCellOut] = []
 
 
 class TieGroupMember(BaseModel):
@@ -771,3 +791,59 @@ class TiebreakTeamResultsOut(BaseModel):
     rows: list[TiebreakTeamRowOut]
     first_place: int = 1
     last_place: int | None = None
+
+
+# ---------- Бонусные слова (api/bonus.py) ----------
+
+class BonusStateOut(BaseModel):
+    number: int
+    opening_day: int  # день, в который бонус открывается (и единственный, когда его можно играть)
+    block_start: int  # первый день блока
+    state: str  # played | open | pending | upcoming | lost | expired
+    length: int
+    points: int | None = None
+    attempts_used: int = 0
+
+
+class BonusTodayStatus(BaseModel):
+    """Состояние одного бонусного слова игрока: попытки, результат, отчёт для копирования."""
+    number: int
+    state: str
+    length: int
+    opening_day: int
+    tournament_title: str
+    callsign: str
+    hashtag: str | None = None
+    max_attempts: int = 6
+    attempts_used: int = 0
+    solved: bool | None = None
+    finished: bool = False
+    points: int | None = None
+    previous_guesses: list[str] = []
+    previous_results: list[list[str]] = []
+    answer_word: str | None = None
+    report_text: str | None = None
+
+
+class BonusGuessRequest(BaseModel):
+    token: str
+    tournament_id: int
+    number: int
+    guess: str
+
+
+class BonusWordOut(BaseModel):
+    """Бонусное слово для админки."""
+    number: int
+    opening_day: int
+    block_start: int
+    calendar_date: date
+    word: str
+    length: int
+    status: str
+    editable: bool  # слово ещё никто не начал
+    eligible: int  # сколько игроков имеют право на этот бонус (открыт/сыгран/упущен)
+    played: int  # сколько игроков его сыграли
+
+
+TodayWordStatus.model_rebuild()  # TodayWordStatus ссылается на BonusStateOut, объявленный ниже

@@ -39,6 +39,9 @@ class StandingsRow:
     # Место определено тай-брейком, а не очками (см. tie_resolutions в
     # build_standings) — в таблице помечается звёздочкой.
     tie_resolved: bool = False
+    # Бонусные слова (api/bonus.py): по ячейке на бонус — {number, opening_day, state, points, guesses};
+    # очки сыгранных бонусов уже входят в total_points.
+    bonus: list[dict] = field(default_factory=list)
 
 
 def build_standings(
@@ -47,6 +50,7 @@ def build_standings(
     # daily_results[day_number][participant_id] = ParticipantDayResult
     total_days: int,
     tie_resolutions: list[list[int]] | None = None,
+    bonus_cells: dict[int, list[dict]] | None = None,   # bonus_cells[participant_id] = ячейки бонусов
 ) -> list[StandingsRow]:
     """
     Строит итоговую таблицу: сумма очков по всем дням + список по дням (с флагами
@@ -79,6 +83,9 @@ def build_standings(
                 total += result.points
             elif not (result and result.not_played_yet):
                 skip_count += 1
+        for cell in (bonus_cells or {}).get(pid, []):
+            if cell["state"] == "played" and cell["points"] is not None:
+                total += cell["points"]  # бонусные очки идут в общую сумму, на пропуски не влияют
         totals[pid] = total
         skips[pid] = skip_count
 
@@ -129,6 +136,7 @@ def build_standings(
                     place=str(i + 1 + offset) if resolved_order is not None else place_label,
                     daily=daily_list,
                     tie_resolved=resolved_order is not None,
+                    bonus=list((bonus_cells or {}).get(pid, [])),
                 )
             )
         i = j + 1
