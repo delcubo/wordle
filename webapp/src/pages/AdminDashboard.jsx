@@ -28,6 +28,34 @@ function useLatest(value) {
 const DEFAULT_SCORING = { "1": 10, "2": 5, "3": 4, "4": 3, "5": 2, "6": 1 };
 const TYPE_LABEL = { standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат", endless: "Бессрочная игра", tiebreak: "Тай-брейк", marathon: "Марафон" };
 const LENGTHS = [5, 6, 7];
+
+// Бонусные слова: после каких дней открываются бонусы при длительности D и N (для подсказок в настройках)
+const bonusDays = (duration, every) => {
+  const d = Number(duration);
+  const n = Number(every);
+  if (!d || !n || n < 1) return [];
+  return Array.from({ length: Math.floor(d / n) }, (_, i) => (i + 1) * n);
+};
+// Янтарная подсветка бонусных очков (таблица на экране и в картинке)
+const BONUS_BG = "rgba(229, 169, 76, 0.22)";
+const BONUS_BG_PNG = "#fbe3b0";
+// Подпись ячейки бонуса: сыгран — очки; доступен, но не сыгран — «·»; потерян/упущен — «—»; впереди — пусто
+function bonusCellLabel(c) {
+  if (!c) return "";
+  if (c.state === "played") return String(c.points ?? 0);
+  if (c.state === "open" || c.state === "pending") return "·";
+  if (c.state === "lost" || c.state === "expired") return "—";
+  return "";
+}
+const BONUS_STATE_TITLE = {
+  played: "бонус сыгран",
+  open: "бонус открыт, ещё не сыгран",
+  pending: "бонус откроется после слова этого дня",
+  upcoming: "бонус ещё впереди",
+  future: "бонус ещё не вошёл в этот снимок",
+  lost: "бонус потерян: в его блоке был пропуск",
+  expired: "бонус не сыгран в день открытия",
+};
 const isWordLength = (w) => LENGTHS.includes((w || "").trim().length);
 
 // Выбор длины слова (5/6/7); пустое значение — «как базовая» (если задан allowEmpty).
@@ -274,6 +302,9 @@ export default function AdminDashboard() {
                 {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <TodayWordPanel tournament={selected} />}
                 {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordConfirmPanel tournament={selected} />}
                 {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordHistoryPanel tournament={selected} />}
+                {(selected.type === "standard" || selected.type === "championship") && selected.bonus_enabled && (
+                  <BonusWordsPanel tournament={selected} />
+                )}
                 {selected.type === "tiebreak" && (
                   selected.teams_enabled
                     ? <TiebreakTeamResultsPanel tournament={selected} refreshKey={entriesVersion} />
@@ -862,6 +893,9 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   const [endDate, setEndDate] = useState("");
   const [individualWords, setIndividualWords] = useState(false);
   const [wordLength, setWordLength] = useState(5);
+  const [bonusEnabled, setBonusEnabled] = useState(false);
+  const [bonusEvery, setBonusEvery] = useState(5);
+  const [bonusLength, setBonusLength] = useState(6);
   const [hashtag, setHashtag] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
@@ -869,6 +903,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   const [settingsForm, setSettingsForm] = useState({
     title: "", duration_days: "", hashtag: "", note: "", start_date: "", notify_admin: false, first_place: 1,
     third_place_match: false, words_count: "", end_date: "", individual_words: false, teams_enabled: false,
+    bonus_enabled: false, bonus_every_days: "", bonus_default_length: 6,
   });
   const [telegramTest, setTelegramTest] = useState(null); // { ok, detail } | null
   const [showArchive, setShowArchive] = useState(false);
@@ -884,6 +919,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
       first_place: t.first_place ?? 1, third_place_match: !!t.third_place_match,
       words_count: t.words_count ?? "", end_date: t.end_date || "", individual_words: !!t.individual_words,
       teams_enabled: !!t.teams_enabled,
+      bonus_enabled: !!t.bonus_enabled, bonus_every_days: t.bonus_every_days ?? "", bonus_default_length: t.bonus_default_length || 6,
     });
     setTelegramTest(null);
   }
@@ -919,6 +955,11 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
         else if (t.end_date) body.clear_end_date = true;
       }
       if (t.duration_days != null) body.duration_days = Number(settingsForm.duration_days);
+      if (t.type === "standard" || t.type === "championship") {
+        body.bonus_enabled = settingsForm.bonus_enabled;
+        if (settingsForm.bonus_enabled) body.bonus_every_days = Number(settingsForm.bonus_every_days);
+        body.bonus_default_length = Number(settingsForm.bonus_default_length);
+      }
       if (t.start_date >= todayIso && settingsForm.start_date !== t.start_date) {
         body.start_date = settingsForm.start_date;
       }
@@ -960,6 +1001,9 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           words_count: type === "marathon" ? Number(wordsCount) : null,
           individual_words: type === "marathon" ? individualWords : false,
           word_length: wordLength,
+          bonus_enabled: needsDuration && bonusEnabled,
+          bonus_every_days: needsDuration && bonusEnabled ? Number(bonusEvery) : null,
+          bonus_default_length: Number(bonusLength),
           end_date: (type === "marathon" || type === "tiebreak") && endDate ? endDate : null,
           rounds_per_match: 1,
           hashtag: hashtag.trim() || null,
@@ -1011,7 +1055,7 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           {TYPE_LABEL[t.type] || t.type} · {t.start_date}
           {t.duration_days != null ? ` · ${t.duration_days} дн.` : ""}
           {t.word_length && t.word_length !== 5 ? ` · ${t.word_length} букв` : ""}
-          {t.type === "marathon" && t.words_count != null ? ` · ${t.words_count} сл.${t.individual_words ? " (личные)" : ""}${t.teams_enabled ? " · команды" : ""}` : ""}{t.type === "tiebreak" && t.teams_enabled ? " · команды" : ""}{t.type === "tiebreak" && t.end_date ? ` · до ${t.end_date}` : ""} · {STATUS_LABEL[t.status] || t.status}
+          {t.type === "marathon" && t.words_count != null ? ` · ${t.words_count} сл.${t.individual_words ? " (личные)" : ""}${t.teams_enabled ? " · команды" : ""}` : ""}{t.type === "tiebreak" && t.teams_enabled ? " · команды" : ""}{t.type === "tiebreak" && t.end_date ? ` · до ${t.end_date}` : ""}{t.bonus_enabled ? ` · бонусы каждые ${t.bonus_every_days} дн.` : ""} · {STATUS_LABEL[t.status] || t.status}
         </div>
         {t.note && editingSettings !== t.id && (
           <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4, whiteSpace: "pre-wrap" }}>{t.note}</div>
@@ -1127,6 +1171,47 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
                 placeholder="Длительность (дней)"
                 style={{ ...inputStyle, fontSize: 12, padding: "4px 6px" }}
               />
+            )}
+            {(t.type === "standard" || t.type === "championship") && (
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                  <input
+                    type="checkbox" checked={settingsForm.bonus_enabled}
+                    onChange={(e) => setSettingsForm((f) => ({ ...f, bonus_enabled: e.target.checked }))}
+                  />
+                  Бонусные слова
+                </label>
+                {settingsForm.bonus_enabled && (
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 4, fontSize: 11 }}>
+                    <label>
+                      за каждые{" "}
+                      <input
+                        type="number" min={1} value={settingsForm.bonus_every_days}
+                        onChange={(e) => setSettingsForm((f) => ({ ...f, bonus_every_days: e.target.value }))}
+                        style={{ ...inputStyle, fontSize: 12, padding: "2px 6px", width: 60, display: "inline-block" }}
+                      />{" "}
+                      дн. без пропуска
+                    </label>
+                    <label>
+                      длина новых слов{" "}
+                      <select
+                        value={settingsForm.bonus_default_length}
+                        onChange={(e) => setSettingsForm((f) => ({ ...f, bonus_default_length: Number(e.target.value) }))}
+                        style={{ ...inputStyle, fontSize: 12, padding: "2px 4px", width: "auto", display: "inline-block" }}
+                      >
+                        {LENGTHS.map((n) => <option key={n} value={n}>{n} букв</option>)}
+                      </select>
+                    </label>
+                  </div>
+                )}
+                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
+                  Игрок, не пропустивший ни одного дня блока из N дней, получает право в последний день блока (после слова дня)
+                  отгадать бонусное слово за очки по шкале розыгрыша — только в этот день.
+                  {settingsForm.bonus_enabled && bonusDays(settingsForm.duration_days, settingsForm.bonus_every_days).length > 0
+                    && ` Бонусы откроются в дни: ${bonusDays(settingsForm.duration_days, settingsForm.bonus_every_days).join(", ")}.`}
+                  {t.bonus_enabled && " Менять N и выключать бонусы можно, пока их никто не сыграл."}
+                </div>
+              </div>
             )}
             <input
               value={settingsForm.hashtag}
@@ -1291,6 +1376,37 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           </label>
           {needsDuration && (
             <input type="number" placeholder="Длительность (дней)" value={duration} onChange={(e) => setDuration(e.target.value)} style={inputStyle} required min={1} />
+          )}
+          {needsDuration && (
+            <div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                <input type="checkbox" checked={bonusEnabled} onChange={(e) => setBonusEnabled(e.target.checked)} />
+                Бонусные слова
+              </label>
+              {bonusEnabled && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 4, fontSize: 12 }}>
+                  <label>
+                    за каждые{" "}
+                    <input
+                      type="number" min={1} max={Number(duration) || undefined} value={bonusEvery}
+                      onChange={(e) => setBonusEvery(e.target.value)} style={{ ...inputStyle, width: 70, display: "inline-block" }}
+                    />{" "}
+                    дн. без пропуска
+                  </label>
+                  <label>
+                    длина слов{" "}
+                    <select value={bonusLength} onChange={(e) => setBonusLength(Number(e.target.value))} style={{ ...inputStyle, width: "auto", display: "inline-block" }}>
+                      {LENGTHS.map((n) => <option key={n} value={n}>{n} букв</option>)}
+                    </select>
+                  </label>
+                  <div style={{ opacity: 0.6, width: "100%" }}>
+                    {bonusDays(duration, bonusEvery).length > 0
+                      ? `Бонусные слова откроются в дни: ${bonusDays(duration, bonusEvery).join(", ")}. Длину каждого слова можно будет изменить отдельно.`
+                      : "При такой длительности бонусных слов не будет — уменьшите N."}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
           {type === "marathon" && (
             <>
@@ -3309,6 +3425,137 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
   );
 }
 
+// Бонусные слова Стандартного режима и основного этапа Чемпионата (api/bonus.py): слово на каждый блок
+// из N дней; открывается игроку без пропусков в блоке после слова последнего дня блока — на этот день.
+function BonusWordsPanel({ tournament }) {
+  const tournamentIdRef = useLatest(tournament.id);
+  const [words, setWords] = useState(null);
+  const [custom, setCustom] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function refresh() {
+    const id = tournament.id;
+    try {
+      const data = await api(`/api/admin/tournaments/${id}/bonus-words`);
+      if (tournamentIdRef.current === id) {
+        setWords(data);
+        setError("");
+      }
+    } catch (e) {
+      if (tournamentIdRef.current === id) setError(e.message);
+    }
+  }
+
+  useEffect(() => {
+    setWords(null);
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament.id, tournament.bonus_enabled, tournament.bonus_every_days, tournament.duration_days]);
+
+  async function call(path, body) {
+    const id = tournament.id;
+    setError("");
+    setBusy(true);
+    try {
+      const res = await api(`/api/admin/tournaments/${id}/bonus-words/${path}`, {
+        method: "POST", body: body ? JSON.stringify(body) : undefined,
+      });
+      if (tournamentIdRef.current === id) setWords(res);
+    } catch (e) {
+      setError(e.message);
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!words) return error ? <div style={{ ...panelStyle, marginTop: 20, color: "#e5484d" }}>{error}</div> : null;
+
+  return (
+    <div style={{ ...panelStyle, marginTop: 20, border: "1px solid #e5a94c" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ margin: 0 }}>Бонусные слова</h3>
+        <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
+      </div>
+      <p style={{ fontSize: 13, opacity: 0.7 }}>
+        Бонус открывается игроку, у которого нет пропусков в блоке из {tournament.bonus_every_days} дн., сразу после слова
+        последнего дня блока и доступен только в этот день; очки — по шкале розыгрыша. Слово и его длину можно менять, пока
+        его никто не начал.
+      </p>
+      {words.length === 0 ? (
+        <div style={{ fontSize: 13, opacity: 0.7 }}>При такой длительности и N бонусных слов нет.</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
+            <thead>
+              <tr style={{ textAlign: "left", opacity: 0.7 }}>
+                <th style={thStyle}>Бонус</th>
+                <th style={thStyle}>Дни блока</th>
+                <th style={thStyle}>Открывается</th>
+                <th style={thStyle}>Слово</th>
+                <th style={thStyle}>Игроки</th>
+                <th style={thStyle}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {words.map((w) => (
+                <tr key={w.number} style={{ borderTop: "1px solid #2a2a2c" }}>
+                  <td style={{ ...tdStyle, fontWeight: 700 }}>Б{w.number}</td>
+                  <td style={tdStyle}>{w.block_start}–{w.opening_day}</td>
+                  <td style={tdStyle}>день {w.opening_day} · {w.calendar_date}</td>
+                  <td style={{ ...tdStyle, textTransform: "uppercase", letterSpacing: 1, fontWeight: 700 }}>
+                    {w.word}
+                    <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, letterSpacing: 0, textTransform: "none", opacity: 0.6 }}>
+                      {w.status === "confirmed" ? "подтверждено" : "предложено системой"}
+                    </span>
+                  </td>
+                  <td style={{ ...tdStyle, opacity: 0.8 }}>право: {w.eligible} · сыграли: {w.played}</td>
+                  <td style={tdStyle}>
+                    {w.editable ? (
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+                        <LengthSelect
+                          value={w.length} disabled={busy}
+                          onChange={(n) => { if (n != null && n !== w.length) call(`${w.number}/length`, { length: n }); }}
+                          title="Сменить длину слова: система подберёт новое слово"
+                        />
+                        <button
+                          disabled={busy} onClick={() => call(`${w.number}/reroll`)}
+                          style={{ ...ghostButtonStyle, fontSize: 11, padding: "2px 8px" }}
+                        >
+                          Предложить другое
+                        </button>
+                        <input
+                          placeholder="Своё слово" maxLength={7} value={custom[w.number] || ""}
+                          onChange={(e) => setCustom((prev) => ({ ...prev, [w.number]: e.target.value }))}
+                          style={{ ...inputStyle, padding: "2px 6px", fontSize: 12, width: 90 }}
+                        />
+                        <button
+                          disabled={busy || !isWordLength(custom[w.number])}
+                          onClick={async () => {
+                            await call(`${w.number}`, { word: (custom[w.number] || "").trim().toLowerCase() });
+                            setCustom((prev) => ({ ...prev, [w.number]: "" }));
+                          }}
+                          style={{ ...ghostButtonStyle, fontSize: 11, padding: "2px 8px" }}
+                        >
+                          Заменить
+                        </button>
+                      </div>
+                    ) : (
+                      <span style={{ fontSize: 12, opacity: 0.6 }}>уже начато — менять поздно</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {error && <div style={{ color: "#e5484d", marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
 function TodayWordPanel({ tournament }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [word, setWord] = useState(null);
@@ -4396,6 +4643,7 @@ function StandingsPanel({ tournament }) {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [hoveredCell, setHoveredCell] = useState(null); // {participantId, day} | null
+  const [hoveredBonus, setHoveredBonus] = useState(null); // {participantId, number} | null
   const tie = useTieResolution(tournament.id, () => refresh());
 
   const placeLabel = (r) => `${r.place}${r.tie_resolved ? "*" : ""}`;
@@ -4434,10 +4682,15 @@ function StandingsPanel({ tournament }) {
     const padding = 16;
     const rowHeight = 28;
     const headerHeight = 28;
-    const tableWidth = placeCol + callsignCol + totalCol + dayCol * standings.total_days;
-    const footnoteHeight = hasTieResolved() ? 26 : 0;
+    const bonusCount = Math.max(0, ...standings.rows.map((r) => (r.bonus || []).length));
+    const bonusCol = 34;
+    const tableWidth = placeCol + callsignCol + totalCol + dayCol * standings.total_days + bonusCol * bonusCount;
+    const footnotes = [];
+    if (bonusCount > 0) footnotes.push("Бонусные слова (Б) выделены цветом");
+    if (hasTieResolved()) footnotes.push(TIE_FOOTNOTE);
+    const footnoteHeight = footnotes.length ? 8 + footnotes.length * 18 : 0;
     mctx.font = "12px system-ui, sans-serif";
-    const footnoteWidth = footnoteHeight ? mctx.measureText(TIE_FOOTNOTE).width : 0;
+    const footnoteWidth = footnotes.length ? Math.max(...footnotes.map((f) => mctx.measureText(f).width)) : 0;
     const width = Math.max(tableWidth, footnoteWidth) + padding * 2;
     const height = headerHeight + rowHeight * standings.rows.length + padding * 2 + footnoteHeight;
 
@@ -4464,6 +4717,11 @@ function StandingsPanel({ tournament }) {
       dayX.push(x);
       x += dayCol;
     }
+    const bonusX = [];
+    for (let i = 0; i < bonusCount; i++) {
+      bonusX.push(x);
+      x += bonusCol;
+    }
 
     ctx.fillStyle = "#f2f2f2";
     ctx.fillRect(padding, tableTop, tableWidth, headerHeight);
@@ -4477,6 +4735,12 @@ function StandingsPanel({ tournament }) {
     ctx.fillText("Σ", colX.total + totalCol / 2, tableTop + headerHeight / 2);
     for (let i = 0; i < standings.total_days; i++) {
       ctx.fillText(`${i + 1}`, dayX[i] + dayCol / 2, tableTop + headerHeight / 2);
+    }
+    for (let i = 0; i < bonusCount; i++) {
+      ctx.fillStyle = BONUS_BG_PNG;
+      ctx.fillRect(bonusX[i], tableTop, bonusCol, headerHeight);
+      ctx.fillStyle = "#8a5a00";
+      ctx.fillText(`Б${i + 1}`, bonusX[i] + bonusCol / 2, tableTop + headerHeight / 2);
     }
 
     standings.rows.forEach((r, ri) => {
@@ -4500,6 +4764,17 @@ function StandingsPanel({ tournament }) {
         ctx.fillStyle = d.played ? "#1a1a1b" : "#999";
         ctx.fillText(label, dayX[di] + dayCol / 2, rowY + rowHeight / 2);
       });
+      (r.bonus || []).forEach((b, bi) => {
+        const played = b.state === "played";
+        if (played) {
+          ctx.fillStyle = BONUS_BG_PNG;
+          ctx.fillRect(bonusX[bi], rowY, bonusCol, rowHeight);
+        }
+        ctx.fillStyle = played ? "#5c3b00" : "#999";
+        ctx.font = played ? "bold " + font : font;
+        ctx.fillText(bonusCellLabel(b), bonusX[bi] + bonusCol / 2, rowY + rowHeight / 2);
+        ctx.font = font;
+      });
     });
 
     ctx.strokeStyle = "#ddd";
@@ -4516,7 +4791,9 @@ function StandingsPanel({ tournament }) {
       ctx.fillStyle = "#666";
       ctx.font = "12px system-ui, sans-serif";
       ctx.textAlign = "left";
-      ctx.fillText(TIE_FOOTNOTE, padding, tableTop + headerHeight + rowHeight * standings.rows.length + 16);
+      footnotes.forEach((f, fi) => {
+        ctx.fillText(f, padding, tableTop + headerHeight + rowHeight * standings.rows.length + 16 + fi * 18);
+      });
     }
 
     canvas.toBlob((blob) => {
@@ -4561,6 +4838,7 @@ function StandingsPanel({ tournament }) {
   }, [tournament.id]);
 
   if (!standings) return null;
+  const bonusCount = Math.max(0, ...standings.rows.map((r) => (r.bonus || []).length));
 
   function startEdit(participantId, day, cell) {
     setError("");
@@ -4615,6 +4893,7 @@ function StandingsPanel({ tournament }) {
       <p style={{ fontSize: 12, opacity: 0.6, marginTop: -4 }}>
         {selectedDay !== "current" && `Показан снимок таблицы по состоянию на конец дня ${selectedDay}. `}
         Клик по ячейке дня — ручная корректировка результата (исключительные случаи). Наведите на цифру — покажутся попытки этого дня.
+        {bonusCount > 0 && " Столбцы Б — бонусные слова (янтарным выделены сыгранные, их очки входят в Σ): · — доступен, но не сыгран, — — потерян или упущен."}
       </p>
       {error && <div style={{ color: "#e5484d", marginBottom: 8 }}>{error}</div>}
       {tie.open && <TieResolutionPanel tie={tie} />}
@@ -4626,6 +4905,9 @@ function StandingsPanel({ tournament }) {
             <th style={thStyle}>Σ</th>
             {Array.from({ length: standings.total_days }, (_, i) => (
               <th key={i} style={thStyle}>#{i + 1}</th>
+            ))}
+            {Array.from({ length: bonusCount }, (_, i) => (
+              <th key={`b${i}`} style={{ ...thStyle, background: BONUS_BG }} title={`Бонусное слово ${i + 1}`}>Б{i + 1}</th>
             ))}
           </tr>
         </thead>
@@ -4695,6 +4977,26 @@ function StandingsPanel({ tournament }) {
                         ))}
                       </div>
                     )}
+                  </td>
+                );
+              })}
+              {(r.bonus || []).map((b) => {
+                const hovered = hoveredBonus?.participantId === r.participant_id && hoveredBonus?.number === b.number;
+                return (
+                  <td
+                    key={`b${b.number}`}
+                    title={`Б${b.number} (день ${b.opening_day}): ${BONUS_STATE_TITLE[b.state] || b.state}`}
+                    onMouseEnter={() => { if (b.guesses?.length > 0) setHoveredBonus({ participantId: r.participant_id, number: b.number }); }}
+                    onMouseLeave={() => setHoveredBonus(null)}
+                    style={{
+                      ...tdStyle, textAlign: "center", position: "relative",
+                      background: b.state === "played" ? BONUS_BG : "transparent",
+                      fontWeight: b.state === "played" ? 700 : 400,
+                      opacity: b.state === "played" || b.state === "open" || b.state === "pending" ? 1 : 0.5,
+                    }}
+                  >
+                    {bonusCellLabel(b)}
+                    {hovered && <GuessesPopup guesses={b.guesses} heading={`Бонус ${b.number}`} />}
                   </td>
                 );
               })}
