@@ -327,9 +327,12 @@ export default function PlayerGame() {
     const opponentNote = data.opponent_callsign ? ` Соперник: ${data.opponent_callsign}.` : "";
 
     if (data.match_finished) {
-      const oppResult = data.opponent_attempts_used == null
-        ? ""
-        : ` Соперник ${data.opponent_solved ? "угадал" : "не угадал"} за ${data.opponent_attempts_used}/6.`;
+      const multi = (data.games || []).length > 1;
+      const oppResult = multi
+        ? "\n" + bracketGamesSummary(data)
+        : data.opponent_attempts_used == null
+          ? ""
+          : ` Соперник ${data.opponent_solved ? "угадал" : "не угадал"} за ${data.opponent_attempts_used}/6.`;
       const stageText = data.is_third_place ? "игре за 3 место" : `раунде ${data.round_number}`;
       setMessage((data.won ? `Победа в ${stageText}!` : `Поражение в ${stageText}.`) + opponentNote);
       if (!announceTie) {
@@ -342,6 +345,7 @@ export default function PlayerGame() {
           grid: data.previous_results,
           answerWord: data.answer_word,
           message: (data.won ? "Победа!" : "Поражение.") + oppResult,
+          attemptsText: multi ? `Последняя игра: ${data.solved ? `${data.attempts_used}/6` : "X/6"}` : undefined,
           countdownTarget: data.won ? data.next_word_at : null,
           gameEnded: !data.won || !!data.is_third_place,
           reportText: data.report_text,
@@ -351,9 +355,11 @@ export default function PlayerGame() {
     }
 
     if (data.already_played) {
+      const multiWait = (data.games_required || 1) > 1 || data.is_sudden_death;
       setMessage(
-        (data.solved ? "Вы угадали слово этой игры." : "Попытки в этой игре исчерпаны.") +
-          " Ждём соперника." + opponentNote
+        multiWait
+          ? `Вы сыграли все игры пары (сумма попыток: ${data.my_total_attempts}). Ждём соперника.` + opponentNote
+          : (data.solved ? "Вы угадали слово этой игры." : "Попытки в этой игре исчерпаны.") + " Ждём соперника." + opponentNote
       );
       if (!announceTie) {
         setModal({
@@ -363,13 +369,20 @@ export default function PlayerGame() {
           attemptsUsed: data.attempts_used,
           solved: data.solved,
           grid: data.previous_results,
-          message: "Вы сыграли, ждём соперника." + opponentNote,
+          message: multiWait
+            ? `Вы сыграли все игры пары. Сумма попыток: ${data.my_total_attempts}. Результаты соперника станут видны, когда он закончит.`
+            : "Вы сыграли, ждём соперника." + opponentNote,
           reportText: data.report_text,
         });
       }
     } else {
+      const gamesNote = data.is_sudden_death
+        ? " (доп. игра после ничьей — решает она одна)"
+        : (data.games_required || 1) > 1
+          ? ` · игра ${data.game_number} из ${data.games_required}${data.game_number > 1 ? `, сумма попыток: ${data.my_total_attempts}` : ""}`
+          : "";
       setMessage(
-        `${data.is_third_place ? "Игра за 3 место" : `Матч сетки, раунд ${data.round_number}`}${data.is_sudden_death ? " (доп. раунд после ничьей)" : ""}.${opponentNote}`
+        `${data.is_third_place ? "Игра за 3 место" : `Матч сетки, раунд ${data.round_number}`}${gamesNote}.${opponentNote}`
       );
       if (!announceTie) setModal(null);
     }
@@ -439,6 +452,10 @@ export default function PlayerGame() {
     setModal(null);
     setPendingNext(false);
     setCurrentGuess("");
+    if (mode === "bracket") {
+      applyBracketStatus(await fetchBracketStatus());  // следующая обязательная игра пары
+      return;
+    }
     const fresh = await fetchStandardStatus();
     if (fresh) applyStandardStatus(fresh);
   }
@@ -527,7 +544,10 @@ export default function PlayerGame() {
 
       if (mode === "bracket") {
         const fresh = await fetchBracketStatus();
-        const isTie = !fresh.match_finished && !fresh.already_played;
+        const open = !fresh.match_finished && !fresh.already_played;
+        // у игрока есть ещё игра: либо следующая обязательная, либо (если sudden_death) дополнительная после ничьей
+        const isTie = open && fresh.is_sudden_death;
+        const isNextGame = open && !fresh.is_sudden_death;
         setTimeout(() => {
           if (isTie) {
             setModal({
@@ -537,10 +557,30 @@ export default function PlayerGame() {
               attemptsUsed: data.attempts_used,
               solved: data.solved,
               grid: roundGrid,
-              message: "Ничья! У соперника такой же результат — начинается дополнительный раунд (sudden death).",
+              message: (fresh.games_required || 1) > 1
+                ? "Ничья! Итог обязательных игр равный — одна дополнительная игра решит исход пары."
+                : "Ничья! У соперника такой же результат — начинается дополнительный раунд (sudden death).",
+              reportText: data.report_text,
             });
+            applyBracketStatus(fresh, { announceTie: true });
+          } else if (isNextGame) {
+            // обязательные игры пары идут подряд: после итога этой — кнопка следующей
+            setModal({
+              title: `${fresh.tournament_title} · игра ${data.game_number} из ${data.games_required}`,
+              callsign: fresh.callsign,
+              hashtag: fresh.hashtag,
+              attemptsUsed: data.attempts_used,
+              solved: data.solved,
+              grid: roundGrid,
+              message: `Игра ${data.game_number} из ${data.games_required} сыграна. Сумма попыток: ${fresh.my_total_attempts}. Результаты соперника станут видны после конца матча.`,
+              reportText: data.report_text,
+              nextButton: { label: "Следующая игра →", onClick: handleNextWord },
+            });
+            setMessage("Игра сыграна.");
+            setPendingNext(true);
+          } else {
+            applyBracketStatus(fresh, { announceTie: false });
           }
-          applyBracketStatus(fresh, { announceTie: isTie });
         }, flipMs);
         return;
       }
@@ -648,7 +688,7 @@ export default function PlayerGame() {
             background: "var(--correct)", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
           }}
         >
-          Следующее слово →
+          {mode === "bracket" ? "Следующая игра →" : "Следующее слово →"}
         </button>
       )}
       <WordGrid rows={rows} currentGuess={currentGuess} activeRowIndex={activeRowIndex} animateRowIndex={animateRowIndex} invalidShake={invalidShake} keyboardRef={keyboardWrapRef} wordLength={wordLength} />
@@ -692,6 +732,20 @@ export default function PlayerGame() {
       )}
     </Centered>
   );
+}
+
+// Итог матча по играм (видно, только когда матч решён): моя и соперника сумма и результат каждой игры.
+function bracketGamesSummary(data) {
+  const cell = (used, solved, skipped) => (skipped ? "пропуск" : used == null ? "–" : solved ? `${used}/6` : "X/6");
+  const lines = [`Сумма попыток: вы ${data.my_total_attempts} — соперник ${data.opponent_total_attempts}`];
+  (data.games || []).forEach((g) => {
+    const label = g.is_sudden_death ? "Доп. игра" : `Игра ${g.game_number}`;
+    lines.push(
+      `${label}: вы ${cell(g.my_attempts_used, g.my_solved, g.my_technical_loss)}, ` +
+      `соперник ${cell(g.opponent_attempts_used, g.opponent_solved, g.opponent_technical_loss)}`
+    );
+  });
+  return lines.join("\n");
 }
 
 // Прогресс бонусных слов одной строкой: ✅ сыгран (+очки) · 🎁 открыт · ⏳ впереди · ✖ потерян/упущен

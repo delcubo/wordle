@@ -780,13 +780,19 @@ async def submit_bracket_guess(payload: GuessRequest, session: AsyncSession = De
         await _notify_bracket_finished(session, tournament, entry, played_game_number)
 
     next_game = await bracket_game.current_game_for_entry(session, active_matches[0], entry.id) if game_over else None
+    report_text = None
+    if game_over:
+        # копируемый отчёт именно об этой игре (у пары из нескольких игр у игрока потом уже другая)
+        view = await bracket_game.get_player_view(session, tournament, entry, played_game_number)
+        if view.get("has_match") and view.get("attempts_used") is not None:
+            report_text = _bracket_report_text(tournament, entry, view, await _bracket_stage_label(session, tournament, entry))
     return GuessResponse(
         result=[LetterState(letter=g, state=s) for g, s in zip(guess, statuses)],
         solved=solved,
         attempts_used=attempts_used,
         attempts_remaining=MAX_ATTEMPTS - attempts_used,
         game_over=game_over,
-        points=None,
+        points=None, report_text=report_text,
         game_number=played_game_number, games_required=active_matches[0].games_required or 1,
         has_next_game=(next_game is not None) if game_over else None,
     )

@@ -106,7 +106,7 @@ export default function ResultModal({
 
         {callsign && <div style={{ marginTop: 4, fontSize: 13, opacity: 0.7 }}>Игрок: {callsign}</div>}
         <div style={{ marginTop: 4, fontSize: 13, opacity: 0.7 }}>{attemptsText || `Попытки: ${attemptsLabel}`}</div>
-        {message && <div style={{ marginTop: 10, fontSize: 14, opacity: 0.9 }}>{message}</div>}
+        {message && <div style={{ marginTop: 10, fontSize: 14, opacity: 0.9, whiteSpace: "pre-line" }}>{message}</div>}
 
         {gameEnded ? (
           <div style={{ marginTop: 12, fontSize: 15, fontWeight: 600 }}>Игра окончена</div>
