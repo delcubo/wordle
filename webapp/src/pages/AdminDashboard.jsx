@@ -83,6 +83,85 @@ function saveWordPlanPart(tournament, key, value) {
 // Таблица «строка × номер слота» с выбором длины в каждой клетке. Пустая клетка — базовая длина
 // розыгрыша. plan: { ключ_строки: [длины...] }; onSave получает такой же объект (или null, если
 // везде пусто). Ключи плана, которых нет среди строк, сохраняются как были.
+// Число обязательных игр в паре по стадиям (1-5). Остальные игры пары — дополнительные, при ничьей.
+// Сохраняется в плане слов (word_plan.playoff_games); ещё не начатые пары подстраиваются сразу.
+function PlayoffGamesPlan({ tournament, rows, onSaved }) {
+  const stored = tournament.word_plan?.playoff_games || {};
+  const planKey = JSON.stringify(stored) + "|" + rows.map((r) => r.key).join(",");
+  const [open, setOpen] = useState(false);
+  const [counts, setCounts] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const next = {};
+    rows.forEach((r) => { next[r.key] = stored[r.key] || 1; });
+    setCounts(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planKey]);
+
+  async function handleSave() {
+    setBusy(true);
+    setError("");
+    try {
+      const shown = new Set(rows.map((r) => r.key));
+      const value = {};
+      Object.entries(stored).forEach(([k, n]) => { if (!shown.has(k)) value[k] = n; });
+      rows.forEach((r) => { if (counts[r.key] > 1) value[r.key] = counts[r.key]; });
+      await saveWordPlanPart(tournament, "playoff_games", Object.keys(value).length ? value : null);
+      if (onSaved) await onSaved();
+      setSaved(true);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const summary = rows.map((r) => counts[r.key] || 1);
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <button onClick={() => setOpen((v) => !v)} style={{ ...ghostButtonStyle, fontSize: 13 }}>
+        {open ? "▾" : "▸"} Число игр в паре по стадиям{!open && summary.some((n) => n > 1) ? ` (${summary.join(" / ")})` : ""}
+      </button>
+      {open && (
+        <div style={{ marginTop: 8, padding: 10, border: "1px solid #3a3a3c", borderRadius: 6 }}>
+          <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>
+            Сколько обязательных игр играют в паре, все подряд в день раунда. Побеждает тот, у кого меньше сумма попыток
+            (неугаданное слово — 7); при равной сумме проигрывает тот, у кого больше неугаданных слов. Пропуск хотя бы
+            одной обязательной игры — поражение в паре. Если равенство сохраняется — одна дополнительная игра решает
+            пару (повторяется до победителя). Ещё не начатые пары подстраиваются сразу, начатые не меняются.
+          </div>
+          <table style={{ borderCollapse: "collapse", fontSize: 13 }}>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.key} style={{ borderTop: "1px solid #2a2a2c" }}>
+                  <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>{r.label}</td>
+                  <td style={tdStyle}>
+                    <select
+                      value={counts[r.key] || 1}
+                      onChange={(e) => { setSaved(false); setCounts((prev) => ({ ...prev, [r.key]: Number(e.target.value) })); }}
+                      style={{ ...inputStyle, padding: "2px 6px", fontSize: 13 }}
+                    >
+                      {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n === 1 ? "1 игра" : n < 5 ? `${n} игры` : `${n} игр`}</option>)}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+            <button onClick={handleSave} disabled={busy} style={{ ...buttonStyle, padding: "4px 12px", fontSize: 12 }}>Сохранить</button>
+            {saved && <span style={{ fontSize: 12, color: "#538d4e" }}>Сохранено</span>}
+            {error && <span style={{ fontSize: 12, color: "#e5484d" }}>{error}</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LengthPlanGrid({ title, hint, colLabel, rows, slots, plan, base, onSave }) {
   const toCells = (list) => Array.from({ length: slots }, (_, i) => (list && list.length ? list[Math.min(i, list.length - 1)] : null));
   const planKey = JSON.stringify(plan || {}) + "|" + rows.map((r) => r.key).join(",");
@@ -5171,7 +5250,7 @@ function formatAttempts(attemptsUsed, solved) {
 // после ничьей — по порядку "(3 · 4 · X/6)", "–" там, где сторона не сыграла.
 // Игра, по которой ещё нет ни одного результата (только что созданный доп.
 // раунд), не показывается.
-function formatMatchResults(m, side) {
+function formatMatchResults(m, side, detailed = false) {
   const other = side === "a" ? "b" : "a";
   const played = (m?.games || []).filter(
     (g) => g[`entry_${side}_attempts_used`] != null || g[`entry_${other}_attempts_used`] != null
@@ -5183,12 +5262,18 @@ function formatMatchResults(m, side) {
   }
   const parts = played.map((g) => {
     const used = g[`entry_${side}_attempts_used`];
-    return used == null ? "–" : g[`entry_${side}_solved`] ? used : "X";
+    if (used == null) return detailed && g[`entry_${side}_technical_loss`] ? "пропуск" : "–";
+    return g[`entry_${side}_solved`] ? used : "X";
   });
-  return `(${parts.join(" · ")}/6)`;
+  // пара из нескольких обязательных игр: итог по ним (неугаданное = 7) и число неугаданных
+  const required = m?.games_required || 1;
+  const total = m?.[`entry_${side}_total_attempts`];
+  const unsolved = m?.[`entry_${side}_unsolved`] || 0;
+  const sum = detailed && required > 1 && total != null ? ` Σ${total}${unsolved ? ` (неугад. ${unsolved})` : ""}` : "";
+  return `(${parts.join(" · ")}/6)${sum}`;
 }
 
-function MatchWordQueue({ matchId }) {
+function MatchWordQueue({ matchId, gamesRequired = 1 }) {
   const matchIdRef = useLatest(matchId);
   const [queue, setQueue] = useState(null);
   const [editingNum, setEditingNum] = useState(null);
@@ -5256,7 +5341,10 @@ function MatchWordQueue({ matchId }) {
   return (
     <div style={{ padding: 8, background: "#232325", borderRadius: 6 }}>
       <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 4 }}>
-        Очередь слов — 1: текущее, 2-5: превью на случай ничьей (каждое слово задаётся независимо). С 6-й игры слова генерируются автоматически.
+        {gamesRequired > 1
+          ? `Очередь слов — игры 1-${gamesRequired}: обязательные (играются подряд), `
+          : "Очередь слов — 1: текущее, "}
+        {gamesRequired >= 5 ? "" : `${gamesRequired + 1}-5: превью на случай ничьей `}(каждое слово задаётся независимо). С 6-й игры слова генерируются автоматически.
       </div>
       {error && <div style={{ color: "#e5484d", fontSize: 11, marginBottom: 4 }}>{error}</div>}
       {queue.map((q) => (
@@ -5402,6 +5490,11 @@ function BracketPanel({ tournament, onTournamentChanged }) {
         }));
         if (tournament.third_place_match) rows.push({ key: "third", label: "Игра за 3 место" });
         return (
+          <>
+          <PlayoffGamesPlan
+            tournament={tournament} rows={rows}
+            onSaved={async () => { if (onTournamentChanged) await onTournamentChanged(); await refresh(); }}
+          />
           <LengthPlanGrid
             title="Длины слов по стадиям" colLabel="Игра" slots={5} base={tournament.word_length || 5} rows={rows}
             hint="Длина слова для каждой игры пары на каждой стадии (игра 2+ нужна только при ничьей). Действует на ещё не созданные слова; уже заданные слова пар меняются в «очереди слов» пары."
@@ -5411,6 +5504,7 @@ function BracketPanel({ tournament, onTournamentChanged }) {
               if (onTournamentChanged) await onTournamentChanged();
             }}
           />
+          </>
         );
       })()}
 
@@ -5454,6 +5548,9 @@ function BracketPanel({ tournament, onTournamentChanged }) {
                   <td style={tdStyle}>
                     {m.is_third_place ? "Игра за 3 место" : `Р${m.round_number} · пара ${m.position + 1}`}
                     {m.is_sudden_death && <span style={{ opacity: 0.6 }}> (доп. раунд)</span>}
+                    {(m.games_required || 1) > 1 && (
+                      <span style={{ opacity: 0.6 }}> · {m.games_required} {m.games_required < 5 ? "игры" : "игр"}</span>
+                    )}
                     {(() => {
                       // слова ВСЕХ игр пары по порядку (после ничьей игр несколько)
                       const words = (m.games || []).map((g) => g.word).filter(Boolean);
@@ -5466,9 +5563,9 @@ function BracketPanel({ tournament, onTournamentChanged }) {
                       );
                     })()}
                   </td>
-                  <td style={tdStyle}>{m.entry_a_callsign || "— пусто —"} {formatMatchResults(m, "a")}</td>
+                  <td style={tdStyle}>{m.entry_a_callsign || "— пусто —"} {formatMatchResults(m, "a", true)}</td>
                   <td style={tdStyle}>—</td>
-                  <td style={tdStyle}>{m.entry_b_callsign || "— пусто —"} {formatMatchResults(m, "b")}</td>
+                  <td style={tdStyle}>{m.entry_b_callsign || "— пусто —"} {formatMatchResults(m, "b", true)}</td>
                   <td style={{ ...tdStyle, opacity: 0.7 }}>
                     {m.winner_entry_id
                       ? <>победил: {m.winner_entry_id === m.entry_a_id ? m.entry_a_callsign : m.entry_b_callsign}
@@ -5523,7 +5620,7 @@ function BracketPanel({ tournament, onTournamentChanged }) {
                 {wordQueueOpenId === m.id && (
                   <tr>
                     <td colSpan={6} style={{ padding: "0 8px 8px" }}>
-                      <MatchWordQueue matchId={m.id} />
+                      <MatchWordQueue matchId={m.id} gamesRequired={m.games_required || 1} />
                     </td>
                   </tr>
                 )}
