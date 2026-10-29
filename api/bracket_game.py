@@ -6,9 +6,13 @@ sudden death при ничье и продвижение победителя в
 (entry_a_*/entry_b_*), а не через DailyWord/Attempt — пара всегда ровно из
 двух участников, это не нужно.
 
-Победитель пары определяется по ключу (техническое поражение, не угадал,
-число попыток) — меньше ключ, лучше результат. Полное совпадение ключей —
-ничья, сразу (в тот же день) заводится ещё одна игра (sudden death). Если
+В паре может быть несколько ОБЯЗАТЕЛЬНЫХ игр (PlayoffMatch.games_required, задаётся планом стадии,
+word_plan["playoff_games"]): они создаются сразу и играются подряд в день раунда. Победитель — по
+сумме попыток обязательных игр (неугаданное слово = FAILED_ATTEMPTS), при равной сумме — у кого
+меньше неугаданных слов. Пропуск (не сыграл или не доиграл до конца дня) хотя бы одной обязательной
+игры — поражение в паре; пропустили оба — никто не проходит. Полное равенство — ничья, сразу заводится
+дополнительная игра (sudden death), которую решает один её результат — по ключу (техническое
+поражение, не угадал, число попыток). Для пары с одной обязательной игрой всё работает как раньше. Если
 участник не сыграл текущую игру до начала следующего дня — ему проставляется
 техническое поражение; если не сыграли оба — пара считается решённой без
 победителя (дальше по сетке из неё никто не проходит, ровно как из пустой
@@ -26,7 +30,8 @@ from api.tournament_time import today
 from api.wordle_logic import check_guess, is_solved
 from api.dictionary import pick_word_for_match, pick_alternative_word
 from api import crud
-from api.word_plan import playoff_length
+from api.word_plan import playoff_length, playoff_games_required
+from api.attempt_scores import FAILED_ATTEMPTS
 
 MAX_ATTEMPTS = 6
 # Сколько первых игр пары админ может задать заранее (текущая + превью на случай
@@ -162,14 +167,53 @@ async def get_current_game(session: AsyncSession, match: PlayoffMatch) -> Playof
     return games[-1] if games else None
 
 
+def game_done(game: PlayoffGame, side: str) -> bool:
+    """Сторона закончила эту игру (угадала/исчерпала попытки) либо ей засчитано техническое поражение."""
+    return bool(getattr(game, f"entry_{side}_technical_loss")) or getattr(game, f"entry_{side}_attempts_used") is not None
+
+
+def current_game_for_side(games: list[PlayoffGame], side: str) -> PlayoffGame | None:
+    """Игра, которую эта сторона играет сейчас: первая по порядку, которую она ещё не закончила
+    (обязательные игры идут подряд, дополнительная появляется только после ничьей)."""
+    return next((g for g in games if not game_done(g, side)), None)
+
+
+async def current_game_for_entry(session: AsyncSession, match: PlayoffMatch, entry_id: int) -> PlayoffGame | None:
+    return current_game_for_side(await crud.list_playoff_games(session, match.id), _side_for_entry(match, entry_id))
+
+
+def mandatory_games(match: PlayoffMatch, games: list[PlayoffGame]) -> list[PlayoffGame]:
+    return [g for g in games if g.game_number <= (match.games_required or 1)]
+
+
+def side_score(games: list[PlayoffGame], side: str) -> tuple[int, int]:
+    """(сумма попыток, число неугаданных слов) по сыгранным играм стороны; неугаданное — FAILED_ATTEMPTS."""
+    total = unsolved = 0
+    for g in games:
+        if getattr(g, f"entry_{side}_technical_loss") or getattr(g, f"entry_{side}_attempts_used") is None:
+            continue
+        if getattr(g, f"entry_{side}_solved"):
+            total += getattr(g, f"entry_{side}_attempts_used")
+        else:
+            total += FAILED_ATTEMPTS
+            unsolved += 1
+    return total, unsolved
+
+
 async def submit_guess(
     session: AsyncSession, tournament: Tournament, match: PlayoffMatch, entry_id: int, guess: str
 ) -> tuple[list[str], bool, int, bool]:
     side = _side_for_entry(match, entry_id)
+    games = await crud.list_playoff_games(session, match.id)
+    if not games:
+        raise ValueError("Игра в этой паре ещё не началась")
+    current = current_game_for_side(games, side)
+    if current is None:
+        raise ValueError("Попытки в этой паре исчерпаны")
     # Строка игры блокируется до коммита в save_playoff_guess — все проверки
     # ниже и запись попытки идут по актуальному состоянию, а параллельные
     # запросы того же игрока выстраиваются в очередь.
-    game = await crud.get_current_playoff_game_for_update(session, match.id)
+    game = await crud.lock_playoff_game(session, current.id)
     if game is None:
         raise ValueError("Игра в этой паре ещё не началась")
     if today() < game.calendar_date:
@@ -196,13 +240,66 @@ async def submit_guess(
     return statuses, solved, attempts_used, game_over
 
 
+async def _finish_match(
+    session: AsyncSession, tournament: Tournament, match: PlayoffMatch, winner_entry_id: int | None
+) -> None:
+    match.winner_entry_id = winner_entry_id
+    match.status = PlayoffMatchStatus.finished
+    session.add(match)
+    await session.commit()
+    await advance_winner(session, tournament, match)
+
+
 async def resolve_match_if_ready(session: AsyncSession, tournament: Tournament, match: PlayoffMatch) -> None:
     if match.status == PlayoffMatchStatus.finished:
         return
-    game = await get_current_game(session, match)
-    if game is None:
+    games = await crud.list_playoff_games(session, match.id)
+    if not games:
+        return
+    required = match.games_required or 1
+    if len(games) > required:
+        # идёт дополнительная игра (после ничьей) — её один результат решает пару, как раньше
+        await _resolve_by_single_game(session, tournament, match, games[-1])
         return
 
+    # обязательные игры: решаем, когда обе стороны закончили их все либо вышел срок дня раунда
+    mandatory = mandatory_games(match, games)
+    deadline_passed = mandatory[0].calendar_date < today()
+    done_a = all(game_done(g, "a") for g in mandatory)
+    done_b = all(game_done(g, "b") for g in mandatory)
+    if not (done_a and done_b):
+        if not deadline_passed:
+            return  # ждём, пока доиграют обе стороны
+        # срок вышел: не сыгранные (не начатые или не законченные) игры — пропуск, то есть техническое поражение
+        for g in mandatory:
+            for side in ("a", "b"):
+                if not game_done(g, side):
+                    setattr(g, f"entry_{side}_technical_loss", True)
+            session.add(g)
+        await session.commit()
+
+    forfeit_a = any(g.entry_a_technical_loss for g in mandatory)
+    forfeit_b = any(g.entry_b_technical_loss for g in mandatory)
+    if forfeit_a and forfeit_b:
+        # пропустили оба — пара решена без победителя, дальше по сетке не проходит никто
+        await _finish_match(session, tournament, match, None)
+        return
+    if forfeit_a or forfeit_b:
+        await _finish_match(session, tournament, match, match.entry_b_id if forfeit_a else match.entry_a_id)
+        return
+
+    score_a, score_b = side_score(mandatory, "a"), side_score(mandatory, "b")  # (сумма попыток, неугаданных)
+    if score_a == score_b:
+        await crud.create_playoff_game(
+            session, tournament.id, match.id, games[-1].game_number + 1, today(), is_sudden_death=True
+        )
+        return
+    await _finish_match(session, tournament, match, match.entry_a_id if score_a < score_b else match.entry_b_id)
+
+
+async def _resolve_by_single_game(
+    session: AsyncSession, tournament: Tournament, match: PlayoffMatch, game: PlayoffGame
+) -> None:
     deadline_passed = game.calendar_date < today()
     key_a = _result_key(game, "a")
     key_b = _result_key(game, "b")
@@ -210,14 +307,7 @@ async def resolve_match_if_ready(session: AsyncSession, tournament: Tournament, 
     if key_a is None and key_b is None:
         if not deadline_passed:
             return  # ждём хотя бы одного участника
-        # Ни один участник не сыграл вовремя — пара считается решённой без
-        # победителя, дальше по сетке из неё никто не проходит (см. пункт
-        # бэклога), без ручной доигровки через админку.
-        match.winner_entry_id = None
-        match.status = PlayoffMatchStatus.finished
-        session.add(match)
-        await session.commit()
-        await advance_winner(session, tournament, match)
+        await _finish_match(session, tournament, match, None)
         return
     if (key_a is None or key_b is None) and not deadline_passed:
         return  # ждём вторую сторону
@@ -232,14 +322,7 @@ async def resolve_match_if_ready(session: AsyncSession, tournament: Tournament, 
     await session.commit()
 
     if key_a[0] and key_b[0]:
-        # Оба технически проиграли (например, единственный реальный участник
-        # неполной пары — см. resolve_bye_if_needed — тоже не явился на свою
-        # игру) — как и выше, пара решена без победителя, никто не проходит.
-        match.winner_entry_id = None
-        match.status = PlayoffMatchStatus.finished
-        session.add(match)
-        await session.commit()
-        await advance_winner(session, tournament, match)
+        await _finish_match(session, tournament, match, None)  # оба технически проиграли — никто не проходит
         return
 
     if key_a == key_b:
@@ -248,12 +331,7 @@ async def resolve_match_if_ready(session: AsyncSession, tournament: Tournament, 
         )
         return
 
-    match.winner_entry_id = match.entry_a_id if key_a < key_b else match.entry_b_id
-    match.status = PlayoffMatchStatus.finished
-    session.add(match)
-    await session.commit()
-
-    await advance_winner(session, tournament, match)
+    await _finish_match(session, tournament, match, match.entry_a_id if key_a < key_b else match.entry_b_id)
 
 
 async def resolve_bye_if_needed(
@@ -285,7 +363,8 @@ async def resolve_bye_if_needed(
     False — игра создана, ждём её результата как обычно.
     """
     if match.entry_a_id is not None and match.entry_b_id is not None:
-        await crud.create_playoff_game(session, match.tournament_id, match.id, 1, scheduled_date or today())
+        for number in range(1, (match.games_required or 1) + 1):  # все обязательные игры — сразу
+            await crud.create_playoff_game(session, match.tournament_id, match.id, number, scheduled_date or today())
         return False
 
     if match.entry_a_id is None and match.entry_b_id is None:
@@ -296,9 +375,10 @@ async def resolve_bye_if_needed(
         return True
 
     if require_play:
-        game = await crud.create_playoff_game(session, match.tournament_id, match.id, 1, scheduled_date or today())
         missing_side = "a" if match.entry_a_id is None else "b"
-        await crud.set_technical_loss(session, game, missing_side)
+        for number in range(1, (match.games_required or 1) + 1):
+            game = await crud.create_playoff_game(session, match.tournament_id, match.id, number, scheduled_date or today())
+            await crud.set_technical_loss(session, game, missing_side)
         return False
 
     match.winner_entry_id = match.entry_a_id if match.entry_a_id is not None else match.entry_b_id
@@ -415,7 +495,7 @@ async def override_winner(
     return match
 
 
-async def get_player_view(session: AsyncSession, tournament: Tournament, entry) -> dict:
+async def get_player_view(session: AsyncSession, tournament: Tournament, entry, game_number: int | None = None) -> dict:
     """
     Статус текущего матча сетки для конкретного участника — для игровой страницы.
     "Текущий" — самый дальний раунд, который УЖЕ НАСТУПИЛ (scheduled_date не в
@@ -424,6 +504,11 @@ async def get_player_view(session: AsyncSession, tournament: Tournament, entry) 
     заслонять собой ещё не остывший результат только что завершённого раунда —
     иначе игрок-победитель вместо своего попапа с результатом видел бы "матч
     недоступен" вплоть до начала следующего раунда (см. пункт бэклога).
+
+    В паре с несколькими обязательными играми игрок проходит их подряд: показывается его текущая
+    (первая не законченная им) игра; когда все закончены — последняя. Результаты соперника по играм
+    видны только когда матч решён. game_number — показать результат именно этой игры (для отчёта
+    о только что законченной игре, когда у игрока уже есть следующая).
     """
     matches = await crud.list_playoff_matches_for_entry(session, tournament.id, entry.id)
     started = [m for m in matches if (m.scheduled_date or today()) <= today()]
@@ -436,54 +521,106 @@ async def get_player_view(session: AsyncSession, tournament: Tournament, entry) 
     opponent_entry_id = match.entry_b_id if side == "a" else match.entry_a_id
     opponent = await session.get(TournamentEntry, opponent_entry_id) if opponent_entry_id else None
 
-    game = await get_current_game(session, match)
-    if game is None:
+    games = await crud.list_playoff_games(session, match.id)
+    if not games:
         return {"has_match": False}
+    required = match.games_required or 1
+    mine_current = current_game_for_side(games, side)
+    game = next((g for g in games if g.game_number == game_number), None) if game_number else None
+    game = game or mine_current or games[-1]
+    mandatory = mandatory_games(match, games)
 
     my_guesses = getattr(game, f"entry_{side}_guesses")
     my_attempts_used = getattr(game, f"entry_{side}_attempts_used")
     my_solved = getattr(game, f"entry_{side}_solved")
     my_previous_results = [check_guess(g, game.word) for g in my_guesses]
-
-    if match.status == PlayoffMatchStatus.finished:
-        # матч решён этой (последней сыгранной) игрой — здесь уже можно показать
-        # и мой, и соперника результат целиком, включая слово, если я не угадал
-        return {
-            "has_match": True,
-            "match_finished": True,
-            "won": match.winner_entry_id == entry.id,
-            "opponent_callsign": opponent.callsign if opponent else None,
-            "opponent_attempts_used": getattr(game, f"entry_{opponent_side}_attempts_used"),
-            "opponent_solved": getattr(game, f"entry_{opponent_side}_solved"),
-            "round_number": match.round_number,
-            "is_third_place": match.is_third_place,
-            "word_length": len(game.word),
-            "game_number": game.game_number,
-            "is_sudden_death": game.is_sudden_death,
-            "already_played": True,
-            "attempts_used": my_attempts_used,
-            "solved": my_solved,
-            "previous_guesses": my_guesses,
-            "previous_results": my_previous_results,
-            "answer_word": None if my_solved else game.word,
-        }
-
-    return {
+    my_total, my_unsolved = side_score(mandatory, side)
+    common = {
         "has_match": True,
-        "match_finished": False,
         "opponent_callsign": opponent.callsign if opponent else None,
         "round_number": match.round_number,
         "is_third_place": match.is_third_place,
         "word_length": len(game.word),
         "game_number": game.game_number,
         "is_sudden_death": game.is_sudden_death,
-        "already_played": my_attempts_used is not None,
+        "games_required": required,
+        "my_total_attempts": my_total,
+        "my_unsolved": my_unsolved,
         "attempts_used": my_attempts_used,
         "solved": my_solved,
         "previous_guesses": my_guesses,
         "previous_results": my_previous_results,
-        "waiting_for_opponent": my_attempts_used is not None and _result_key(game, opponent_side) is None,
     }
+
+    if match.status == PlayoffMatchStatus.finished:
+        # матч решён — можно показать и мои, и соперника результаты по всем играм, включая слово,
+        # если я не угадал
+        opp_total, opp_unsolved = side_score(mandatory, opponent_side)
+        return {
+            **common,
+            "match_finished": True,
+            "won": match.winner_entry_id == entry.id,
+            "opponent_attempts_used": getattr(game, f"entry_{opponent_side}_attempts_used"),
+            "opponent_solved": getattr(game, f"entry_{opponent_side}_solved"),
+            "opponent_total_attempts": opp_total,
+            "opponent_unsolved": opp_unsolved,
+            "already_played": True,
+            "answer_word": None if my_solved else game.word,
+            "games": [
+                {
+                    "game_number": g.game_number, "is_sudden_death": g.game_number > required,
+                    "my_attempts_used": getattr(g, f"entry_{side}_attempts_used"), "my_solved": getattr(g, f"entry_{side}_solved"),
+                    "my_technical_loss": bool(getattr(g, f"entry_{side}_technical_loss")),
+                    "opponent_attempts_used": getattr(g, f"entry_{opponent_side}_attempts_used"),
+                    "opponent_solved": getattr(g, f"entry_{opponent_side}_solved"),
+                    "opponent_technical_loss": bool(getattr(g, f"entry_{opponent_side}_technical_loss")),
+                }
+                for g in games
+            ],
+        }
+
+    already_played = mine_current is None  # все доступные мне игры закончены
+    return {
+        **common,
+        "match_finished": False,
+        "already_played": already_played,
+        "waiting_for_opponent": already_played and current_game_for_side(games, opponent_side) is not None,
+    }
+
+
+async def sync_games_required(session: AsyncSession, tournament: Tournament) -> int:
+    """Приводит число обязательных игр ещё НЕ начатых пар к плану стадий (word_plan["playoff_games"]):
+    недостающие игры создаются, лишние (никем не сыгранные) удаляются. Начатые, решённые и пары с
+    уже заведённой дополнительной игрой не трогаются. Возвращает, у скольких пар число игр изменилось."""
+    changed = 0
+    for match in await crud.list_playoff_matches(session, tournament.id):
+        if match.status == PlayoffMatchStatus.finished or match.entry_a_id is None or match.entry_b_id is None:
+            continue
+        target = playoff_games_required(tournament, match.round_number, match.is_third_place)
+        required = match.games_required or 1
+        if target == required:
+            continue
+        games = await crud.list_playoff_games(session, match.id)
+        if not games or len(games) > required or games[0].calendar_date < today():
+            continue
+        if any(
+            g.entry_a_guesses or g.entry_b_guesses or g.entry_a_attempts_used is not None
+            or g.entry_b_attempts_used is not None or g.entry_a_technical_loss or g.entry_b_technical_loss
+            for g in games
+        ):
+            continue  # пара уже началась
+        if target > required:
+            for number in range(required + 1, target + 1):
+                await crud.create_playoff_game(session, tournament.id, match.id, number, games[0].calendar_date)
+        else:
+            for g in games:
+                if g.game_number > target:
+                    await session.delete(g)
+        match.games_required = target
+        session.add(match)
+        await session.commit()
+        changed += 1
+    return changed
 
 
 def game_word_editable(game: PlayoffGame, match: PlayoffMatch) -> bool:

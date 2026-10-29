@@ -379,6 +379,8 @@ async def put_word_plan(
                 raise HTTPException(status_code=400, detail="В плане больше длин, чем слов в марафоне")
         if "playoff" in plan and tournament.type not in (TournamentType.championship, TournamentType.knockout):
             raise HTTPException(status_code=400, detail="План по стадиям — только для розыгрышей с сеткой плей-офф")
+        if "playoff_games" in plan and tournament.type not in (TournamentType.championship, TournamentType.knockout):
+            raise HTTPException(status_code=400, detail="Число игр по стадиям — только для розыгрышей с сеткой плей-офф")
         if "tiebreak" in plan and tournament.type not in (TournamentType.tiebreak, TournamentType.championship):
             raise HTTPException(status_code=400, detail="План по раундам — только для тай-брейка")
     tournament.word_plan = plan
@@ -386,6 +388,8 @@ async def put_word_plan(
     await session.commit()
     if tournament.type == TournamentType.marathon:
         await marathon.apply_lengths(session, tournament)
+    if tournament.type in (TournamentType.championship, TournamentType.knockout):
+        await bracket_game.sync_games_required(session, tournament)  # ещё не начатые пары — под новый план
     await session.refresh(tournament)
     return _tournament_out(tournament)
 

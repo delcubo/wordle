@@ -9,7 +9,8 @@
                                                        # стадия сетки (номер раунда или "third" —
                                                        # игра за 3 место) -> длины игр 1, 2, 3...;
                                                        # дальше повторяется последнее значение
-    "tiebreak": [5, 6, 7]                              # раунд тай-брейка по глубине (1, 2, 3...)
+    "tiebreak": [5, 6, 7],                             # раунд тай-брейка по глубине (1, 2, 3...)
+    "playoff_games": {"1": 1, "2": 3, "third": 1}      # сколько ОБЯЗАТЕЛЬНЫХ игр в паре стадии (1-5, по умолчанию 1)
   }
 
 Позиция без записи в плане получает базовую длину. План влияет только на ещё не
@@ -48,6 +49,13 @@ def playoff_length(tournament, round_number: int, game_number: int, third_place:
     return base_length(tournament)
 
 
+def playoff_games_required(tournament, round_number: int, third_place: bool = False) -> int:
+    """Сколько обязательных игр в паре этой стадии (раунд сетки или игра за 3 место); игры сверх
+    этого числа — дополнительные, только при ничьей (см. api/bracket_game.py)."""
+    games = _plan(tournament).get("playoff_games", {})
+    return int(games.get(THIRD_PLACE_KEY if third_place else str(round_number), 1))
+
+
 def tiebreak_length(tournament, depth: int) -> int:
     """Длина слова раунда тай-брейка по глубине в цепочке (1 — первый раунд)."""
     lengths = _plan(tournament).get("tiebreak")
@@ -73,7 +81,7 @@ def validate_plan(raw: dict | None) -> dict | None:
         return None
     if not isinstance(raw, dict):
         raise ValueError("План длин должен быть объектом")
-    unknown = set(raw) - {"marathon", "playoff", "tiebreak"}
+    unknown = set(raw) - {"marathon", "playoff", "tiebreak", "playoff_games"}
     if unknown:
         raise ValueError(f"Неизвестные разделы плана: {', '.join(sorted(unknown))}")
     plan: dict = {}
@@ -92,4 +100,15 @@ def validate_plan(raw: dict | None) -> dict | None:
                 stages[str(key)] = _clean_lengths(lengths, PLAYOFF_SLOTS, f"Плей-офф, стадия {key}")
         if stages:
             plan["playoff"] = stages
+    if raw.get("playoff_games"):
+        if not isinstance(raw["playoff_games"], dict):
+            raise ValueError("Число игр в плей-офф: нужен объект «стадия -> число игр»")
+        games = {}
+        for key, count in raw["playoff_games"].items():
+            if key != THIRD_PLACE_KEY and not (isinstance(key, str) and key.isdigit() and int(key) >= 1):
+                raise ValueError("Число игр в плей-офф: стадия — номер раунда или «third»")
+            if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= PLAYOFF_SLOTS:
+                raise ValueError(f"Число обязательных игр в паре — от 1 до {PLAYOFF_SLOTS}")
+            games[str(key)] = count
+        plan["playoff_games"] = games
     return plan or None

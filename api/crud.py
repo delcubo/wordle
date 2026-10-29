@@ -17,7 +17,7 @@ from api.dictionary import (
     pick_word_for_day, pick_word_for_label, pick_alternative_word, pick_word_for_match, load_file_excluded_words,
 )
 from api.tournament_time import today, day_number_for_date, date_for_day_number
-from api.word_plan import base_length, playoff_length, tiebreak_length
+from api.word_plan import base_length, playoff_length, tiebreak_length, playoff_games_required
 
 
 # ---------- Users (глобальная личность) ----------
@@ -446,7 +446,8 @@ async def get_knockout_today_status(
                 continue
             has_game.add(entry_id)
             attempts_used = getattr(game, f"entry_{side}_attempts_used")
-            if attempts_used is not None:
+            # в паре из нескольких игр «сыграл» — закончил все сегодняшние
+            if attempts_used is not None and all(getattr(g, f"entry_{side}_attempts_used") is not None for g in games):
                 played[entry_id] = {
                     "attempts_used": attempts_used,
                     "started_at": getattr(game, f"entry_{side}_started_at"),
@@ -1117,7 +1118,8 @@ async def count_bracket_stage_progress(
         games = await list_playoff_games(session, match.id)
         for side in ("a", "b"):
             total += 1
-            if any(getattr(g, f"entry_{side}_attempts_used") is not None for g in games):
+            mandatory = [g for g in games if g.game_number <= (match.games_required or 1)]
+            if mandatory and all(getattr(g, f"entry_{side}_attempts_used") is not None for g in mandatory):
                 played += 1
     return played, total
 
@@ -1163,6 +1165,7 @@ async def create_playoff_match(
     scheduled_date: date | None,
     is_third_place: bool = False,
 ) -> PlayoffMatch:
+    tournament = await session.get(Tournament, tournament_id)
     match = PlayoffMatch(
         tournament_id=tournament_id,
         round_number=round_number,
@@ -1171,6 +1174,7 @@ async def create_playoff_match(
         entry_b_id=entry_b_id,
         scheduled_date=scheduled_date,
         is_third_place=is_third_place,
+        games_required=playoff_games_required(tournament, round_number, is_third_place) if tournament else 1,
     )
     session.add(match)
     await session.commit()
@@ -1233,6 +1237,15 @@ async def get_current_playoff_game_for_update(session: AsyncSession, match_id: i
         .limit(1)
         .with_for_update()
         .execution_options(populate_existing=True)
+    )
+    return result.scalar_one_or_none()
+
+
+async def lock_playoff_game(session: AsyncSession, game_id: int) -> PlayoffGame | None:
+    """Игра пары по id с блокировкой строки (SELECT ... FOR UPDATE) до конца транзакции — для приёма
+    догадки: параллельные запросы одного игрока выстраиваются в очередь."""
+    result = await session.execute(
+        select(PlayoffGame).where(PlayoffGame.id == game_id).with_for_update().execution_options(populate_existing=True)
     )
     return result.scalar_one_or_none()
 

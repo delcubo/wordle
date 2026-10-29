@@ -365,6 +365,12 @@ class BracketTodayStatus(BaseModel):
     start_date: str | None = None
     base_title: str | None = None  # название розыгрыша без стадии — для копируемого отчёта
     stage_label: str | None = None  # "1/4 финала" / "финал" и т.п. — метка стадии сетки для копируемого отчёта
+    games_required: int = 1  # обязательных игр в паре; game_number — номер текущей игры игрока
+    my_total_attempts: int = 0  # моя сумма попыток по сыгранным обязательным играм (неугаданное = 7)
+    my_unsolved: int = 0
+    opponent_total_attempts: int | None = None  # только когда матч решён
+    opponent_unsolved: int | None = None
+    games: list[dict] = []  # только когда матч решён: результаты обеих сторон по каждой игре
     report_text: str | None = None  # готовый текст отчёта для копирования из попапа (api/report.py) — когда игра закончена
 
 
@@ -394,6 +400,11 @@ class GuessResponse(BaseModel):
     word_index: int | None = None
     words_total: int | None = None
     marathon_total_attempts: int | None = None
+    # Плей-офф с несколькими обязательными играми: номер сыгранной игры, число обязательных и
+    # есть ли у игрока ещё одна игра прямо сейчас
+    game_number: int | None = None
+    games_required: int | None = None
+    has_next_game: bool | None = None
 
 
 # ---------- Standings ----------
@@ -505,8 +516,10 @@ class PlayoffGameResultOut(BaseModel):
     is_sudden_death: bool = False
     entry_a_attempts_used: int | None = None
     entry_a_solved: bool | None = None
+    entry_a_technical_loss: bool = False
     entry_b_attempts_used: int | None = None
     entry_b_solved: bool | None = None
+    entry_b_technical_loss: bool = False
 
 
 class PlayoffMatchOut(BaseModel):
@@ -529,6 +542,12 @@ class PlayoffMatchOut(BaseModel):
     scheduled_date: date | None
     admin_note: str | None = None
     is_third_place: bool = False
+    games_required: int = 1  # обязательных игр в паре (остальные — дополнительные, при ничьей)
+    # суммы по обязательным играм: попытки (неугаданное = 7) и число неугаданных слов
+    entry_a_total_attempts: int = 0
+    entry_a_unsolved: int = 0
+    entry_b_total_attempts: int = 0
+    entry_b_unsolved: int = 0
     # все игры пары по порядку — чтобы в таблице были видны и результаты раундов,
     # закончившихся ничьей, а не только текущей игры
     games: list[PlayoffGameResultOut] = []

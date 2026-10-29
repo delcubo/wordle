@@ -184,6 +184,12 @@ async def _bracket_stage_label(session: AsyncSession, tournament, entry, tournam
 
 
 def _bracket_report_text(tournament, entry, view: dict, stage_label: str | None) -> str:
+    # пара из нескольких игр: в отчёте видно, какая это игра («игра 2/3»; дополнительная — «доп. игра»)
+    if view.get("is_sudden_death"):
+        stage_label = f"{stage_label} · доп. игра" if stage_label else "доп. игра"
+    elif (view.get("games_required") or 1) > 1:
+        suffix = f"игра {view['game_number']}/{view['games_required']}"
+        stage_label = f"{stage_label} · {suffix}" if stage_label else suffix
     return build_report_text(
         kind="bracket",
         attempts_used=view["attempts_used"],
@@ -235,11 +241,11 @@ async def _notify_daily_finished(session: AsyncSession, tournament, entry, daily
         logger.exception("Не удалось подготовить уведомление админу")
 
 
-async def _notify_bracket_finished(session: AsyncSession, tournament, entry) -> None:
+async def _notify_bracket_finished(session: AsyncSession, tournament, entry, game_number: int | None = None) -> None:
     if not tournament.notify_admin or not notify.is_configured():
         return
     try:
-        view = await bracket_game.get_player_view(session, tournament, entry)
+        view = await bracket_game.get_player_view(session, tournament, entry, game_number)
         if not view.get("has_match") or view.get("attempts_used") is None:
             return
         stage_label = await _bracket_stage_label(session, tournament, entry)
@@ -753,9 +759,11 @@ async def submit_bracket_guess(payload: GuessRequest, session: AsyncSession = De
     if not active_matches:
         raise HTTPException(status_code=400, detail="У вас сейчас нет активного матча сетки")
 
-    # длина догадки — длина слова текущей игры пары (её задаёт план длин стадии)
-    current_game = await bracket_game.get_current_game(session, active_matches[0])
+    # длина догадки — длина слова текущей игры ИМЕННО этого игрока (обязательные игры пары идут подряд;
+    # длину задаёт план длин стадии)
+    current_game = await bracket_game.current_game_for_entry(session, active_matches[0], entry.id)
     length = len(current_game.word) if current_game is not None else base_length(tournament)
+    played_game_number = current_game.game_number if current_game is not None else None
     if len(guess) != length:
         raise HTTPException(status_code=400, detail=f"Слово должно быть из {length} букв")
     if not is_valid_word(guess, length):
@@ -769,8 +777,9 @@ async def submit_bracket_guess(payload: GuessRequest, session: AsyncSession = De
         raise HTTPException(status_code=400, detail=str(e))
 
     if game_over:
-        await _notify_bracket_finished(session, tournament, entry)
+        await _notify_bracket_finished(session, tournament, entry, played_game_number)
 
+    next_game = await bracket_game.current_game_for_entry(session, active_matches[0], entry.id) if game_over else None
     return GuessResponse(
         result=[LetterState(letter=g, state=s) for g, s in zip(guess, statuses)],
         solved=solved,
@@ -778,4 +787,6 @@ async def submit_bracket_guess(payload: GuessRequest, session: AsyncSession = De
         attempts_remaining=MAX_ATTEMPTS - attempts_used,
         game_over=game_over,
         points=None,
+        game_number=played_game_number, games_required=active_matches[0].games_required or 1,
+        has_next_game=(next_game is not None) if game_over else None,
     )

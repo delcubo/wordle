@@ -140,7 +140,13 @@ async def get_bracket_view(session: AsyncSession, tournament_id: int) -> list[di
     for m in matches:
         game = await bracket_game.get_current_game(session, m)
         all_games = await crud.list_playoff_games(session, m.id)
+        mandatory = bracket_game.mandatory_games(m, all_games)
+        total_a, unsolved_a = bracket_game.side_score(mandatory, "a")
+        total_b, unsolved_b = bracket_game.side_score(mandatory, "b")
         result.append({
+            "games_required": m.games_required or 1,
+            "entry_a_total_attempts": total_a, "entry_a_unsolved": unsolved_a,
+            "entry_b_total_attempts": total_b, "entry_b_unsolved": unsolved_b,
             "id": m.id,
             "round_number": m.round_number,
             "position": m.position,
@@ -167,8 +173,10 @@ async def get_bracket_view(session: AsyncSession, tournament_id: int) -> list[di
                     "is_sudden_death": g.is_sudden_death,
                     "entry_a_attempts_used": g.entry_a_attempts_used,
                     "entry_a_solved": g.entry_a_solved,
+                    "entry_a_technical_loss": bool(g.entry_a_technical_loss),
                     "entry_b_attempts_used": g.entry_b_attempts_used,
                     "entry_b_solved": g.entry_b_solved,
+                    "entry_b_technical_loss": bool(g.entry_b_technical_loss),
                 }
                 for g in all_games
             ],
