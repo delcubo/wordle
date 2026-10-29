@@ -296,6 +296,7 @@ class MyTournamentOut(BaseModel):
     type: str
     callsign: str
     status: str
+    bonus_available: bool = False  # открыто бонусное слово, которое можно сыграть сегодня
 
 
 class TodayWordStatus(BaseModel):

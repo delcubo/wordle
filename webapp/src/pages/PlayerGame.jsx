@@ -66,6 +66,10 @@ export default function PlayerGame() {
   // закончено, следующее открывается по кнопке (попап можно закрыть, кнопка остаётся)
   const [marathon, setMarathon] = useState(null);
   const [pendingNext, setPendingNext] = useState(false);
+  // Бонусные слова (api/bonus.py): bonusInfo — сводка из статуса игры ({ list, openNumber } | null);
+  // bonusNumber — номер бонусного слова, которое игрок играет сейчас (null — обычное слово дня)
+  const [bonusInfo, setBonusInfo] = useState(null);
+  const [bonusNumber, setBonusNumber] = useState(null);
   const errorTimeoutRef = useRef(null);
   const shakeTimeoutRef = useRef(null);
   const keyboardWrapRef = useRef(null);
@@ -120,6 +124,8 @@ export default function PlayerGame() {
     setHashtag(data.hashtag || null);
     setMarathon(data.is_marathon && data.words_total ? { index: data.word_index, total: data.words_total } : null);
     setPendingNext(false);
+    setBonusNumber(null);
+    setBonusInfo(data.bonus && data.bonus.length > 0 ? { list: data.bonus, openNumber: data.bonus_open_number ?? null } : null);
 
     if (!data.has_word_today) {
       setGameOver(true);
@@ -202,13 +208,99 @@ export default function PlayerGame() {
         grid: data.previous_results,
         answerWord: data.answer_word,
         countdownTarget: data.next_word_at,
-        message: data.is_tiebreak ? "Как только все доиграют раунд, места распределятся или откроется следующий раунд." : null,
+        message: data.bonus_open_number != null
+          ? "🎁 Открыто бонусное слово — его можно сыграть только сегодня."
+          : data.is_tiebreak ? "Как только все доиграют раунд, места распределятся или откроется следующий раунд." : null,
         reportText: data.report_text,
+        // открыт бонус — прямо из попапа результата можно перейти к бонусному слову
+        nextButton: data.bonus_open_number != null
+          ? {
+              label: `🎁 Бонусное слово (${(data.bonus.find((b) => b.number === data.bonus_open_number) || {}).length} букв) →`,
+              onClick: () => startBonus(data.bonus_open_number),
+            }
+          : undefined,
       });
     } else {
       setMessage("");
       setModal(null);
     }
+  }
+
+  // ---------- бонусное слово ----------
+
+  const BONUS_NOT_OPEN_TEXT = {
+    lost: "Бонус потерян: в его блоке дней был пропуск.",
+    expired: "Бонус можно было сыграть только в день его открытия.",
+    pending: "Бонус откроется после того, как вы сыграете слово дня.",
+    upcoming: "Бонус ещё не открылся.",
+  };
+
+  async function fetchBonusStatus(number) {
+    const res = await fetch(
+      `/api/game/bonus/today?token=${encodeURIComponent(token)}&tournament_id=${tournamentId}&number=${number}`
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showTransientError(err.detail || "Не удалось загрузить бонусное слово.");
+      return null;
+    }
+    return res.json();
+  }
+
+  function applyBonusStatus(data) {
+    setBonusNumber(data.number);
+    setCallsign(data.callsign || "");
+    setTournamentTitle(data.tournament_title || "");
+    setHashtag(data.hashtag || null);
+    setMarathon(null);
+    setPendingNext(false);
+    setWordLength(data.previous_guesses && data.previous_guesses.length > 0 ? data.previous_guesses[0].length : data.length);
+    setRows(buildRows(data.previous_guesses, data.previous_results));
+    setLetterStates(buildLetterStates(data.previous_guesses, data.previous_results));
+    setCurrentGuess("");
+    setActiveRowIndex(data.finished ? -1 : (data.previous_guesses || []).length);
+    setGameOver(data.finished || data.state !== "open");
+    setIsError(false);
+    if (data.finished) {
+      setMessage(data.solved ? `Бонус разгадан! +${data.points} очков.` : "Бонус не разгадан — очков нет.");
+      setModal({
+        title: `${data.tournament_title} · бонус ${data.number}`,
+        callsign: data.callsign,
+        hashtag: data.hashtag,
+        attemptsUsed: data.attempts_used,
+        solved: data.solved,
+        grid: data.previous_results,
+        answerWord: data.answer_word,
+        message: data.solved ? `Бонусные очки: +${data.points}` : "Бонусное слово не угадано — штрафа нет.",
+        reportText: data.report_text,
+        nextButton: { label: "← К слову дня", onClick: backToDay },
+      });
+    } else if (data.state !== "open") {
+      setMessage(BONUS_NOT_OPEN_TEXT[data.state] || "Бонусное слово недоступно.");
+      setModal(null);
+    } else {
+      setMessage(`Бонусное слово: ${data.length} букв, 6 попыток. Играть его можно только сегодня.`);
+      setModal(null);
+    }
+  }
+
+  async function startBonus(number) {
+    setModal(null);
+    const data = await fetchBonusStatus(number);
+    if (data) applyBonusStatus(data);
+  }
+
+  async function backToDay() {
+    setModal(null);
+    setCurrentGuess("");
+    const fresh = await fetchStandardStatus();
+    if (fresh) applyStandardStatus(fresh);
+  }
+
+  // после бонуса обновляем только сводку бонусов (кружки прогресса), не трогая поле игры
+  async function refreshBonusInfo() {
+    const fresh = await fetchStandardStatus();
+    if (fresh) setBonusInfo(fresh.bonus && fresh.bonus.length > 0 ? { list: fresh.bonus, openNumber: fresh.bonus_open_number ?? null } : null);
   }
 
   function applyBracketStatus(data, { announceTie } = {}) {
@@ -361,11 +453,16 @@ export default function PlayerGame() {
 
     setSubmitting(true);
     try {
-      const endpoint = mode === "bracket" ? "/api/game/bracket/guess" : "/api/game/guess";
+      const endpoint = bonusNumber != null
+        ? "/api/game/bonus/guess"
+        : mode === "bracket" ? "/api/game/bracket/guess" : "/api/game/guess";
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, tournament_id: Number(tournamentId), guess: currentGuess }),
+        body: JSON.stringify({
+          token, tournament_id: Number(tournamentId), guess: currentGuess,
+          ...(bonusNumber != null ? { number: bonusNumber } : {}),
+        }),
       });
 
       if (!res.ok) {
@@ -419,6 +516,15 @@ export default function PlayerGame() {
       // Итоговую модалку и любые UI-обновления, перекрывающие грид, откладываем
       // до конца анимации переворота последней строки — иначе она перекроет
       // грид раньше, чем игрок увидит цвет своей последней попытки.
+      if (bonusNumber != null) {
+        setTimeout(async () => {
+          const fresh = await fetchBonusStatus(bonusNumber);
+          if (fresh) applyBonusStatus(fresh);
+          refreshBonusInfo();
+        }, flipMs);
+        return;
+      }
+
       if (mode === "bracket") {
         const fresh = await fetchBracketStatus();
         const isTie = !fresh.match_finished && !fresh.already_played;
@@ -493,6 +599,37 @@ export default function PlayerGame() {
       </Link>
       {tournamentTitle && <h2 style={{ margin: "0 0 4px" }}>{tournamentTitle}</h2>}
       {callsign && <div style={{ opacity: 0.6, marginBottom: 8 }}>Игрок: {callsign}</div>}
+      {bonusNumber != null && (
+        <div style={{ marginBottom: 8, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "center" }}>
+          <span style={{ fontWeight: 600, color: "#e5a94c" }}>🎁 Бонусное слово {bonusNumber}</span>
+          <button
+            onClick={backToDay}
+            style={{ background: "transparent", color: "var(--muted)", border: "1px solid var(--border)", borderRadius: 6, padding: "3px 10px", fontSize: 12, cursor: "pointer" }}
+          >
+            ← К слову дня
+          </button>
+        </div>
+      )}
+      {bonusNumber == null && bonusInfo && <BonusProgress list={bonusInfo.list} />}
+      {bonusNumber == null && bonusInfo && bonusInfo.openNumber != null && (
+        <div
+          style={{
+            margin: "0 0 10px", padding: "8px 12px", borderRadius: 8, border: "1px solid #e5a94c",
+            background: "rgba(229,169,76,0.12)", textAlign: "center", fontSize: 14,
+          }}
+        >
+          🎁 Бонусное слово открыто
+          ({(bonusInfo.list.find((b) => b.number === bonusInfo.openNumber) || {}).length} букв) — играть можно только сегодня
+          <div style={{ marginTop: 6 }}>
+            <button
+              onClick={() => startBonus(bonusInfo.openNumber)}
+              style={{ padding: "6px 16px", borderRadius: 6, border: "none", background: "#e5a94c", color: "#1a1a1b", fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+            >
+              Играть
+            </button>
+          </div>
+        </div>
+      )}
       {marathon && marathon.total > 1 && ( // при одном слове «Слово 1 из 1» не показываем
         <div style={{ opacity: 0.8, marginBottom: 8, fontWeight: 600 }}>
           Слово {marathon.index} из {marathon.total}
@@ -554,6 +691,33 @@ export default function PlayerGame() {
         />
       )}
     </Centered>
+  );
+}
+
+// Прогресс бонусных слов одной строкой: ✅ сыгран (+очки) · 🎁 открыт · ⏳ впереди · ✖ потерян/упущен
+const BONUS_CHIP = {
+  played: { icon: "✅", title: "Бонус сыгран" },
+  open: { icon: "🎁", title: "Бонус открыт — его можно сыграть сегодня" },
+  pending: { icon: "⏳", title: "Бонус откроется после слова дня" },
+  upcoming: { icon: "⏳", title: "Бонус ещё впереди" },
+  lost: { icon: "✖", title: "Бонус потерян: в его блоке дней был пропуск" },
+  expired: { icon: "✖", title: "Бонус можно было сыграть только в день открытия" },
+};
+
+function BonusProgress({ list }) {
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center", marginBottom: 8, fontSize: 12, opacity: 0.85 }}>
+      <span style={{ opacity: 0.7 }}>Бонусы:</span>
+      {list.map((b) => {
+        const chip = BONUS_CHIP[b.state] || BONUS_CHIP.upcoming;
+        const detail = b.state === "played" ? ` +${b.points ?? 0}` : b.state === "upcoming" || b.state === "pending" ? ` день ${b.opening_day}` : "";
+        return (
+          <span key={b.number} title={`${chip.title} (день ${b.opening_day})`} style={{ whiteSpace: "nowrap" }}>
+            {chip.icon} Б{b.number}{detail}
+          </span>
+        );
+      })}
+    </div>
   );
 }
 

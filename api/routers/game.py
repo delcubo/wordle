@@ -98,6 +98,7 @@ async def my_tournaments(token: str, session: AsyncSession = Depends(get_session
         # сетке в целом — иначе в списке розыгрышей могла показаться стадия,
         # которая для этого игрока ещё не началась (см. пункт бэклога).
         round_number = await _entry_round_number(session, tournament, entry.id)
+        bonus_fields = await _bonus_fields(session, tournament, entry)
         result.append(
             MyTournamentOut(
                 tournament_id=tournament.id,
@@ -105,6 +106,7 @@ async def my_tournaments(token: str, session: AsyncSession = Depends(get_session
                 type=tournament.type,
                 callsign=entry.callsign,
                 status=effective_status(tournament),
+                bonus_available=bonus_fields.get("bonus_open_number") is not None,
             )
         )
     return result

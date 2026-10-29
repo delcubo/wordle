@@ -47,7 +47,17 @@ export default function MyTournaments() {
               to={`/play/${token}/${t.tournament_id}`}
               style={cardStyle}
             >
-              <div style={{ fontWeight: 600 }}>{t.title}</div>
+              <div style={{ fontWeight: 600 }}>
+                {t.title}
+                {t.bonus_available && (
+                  <span
+                    title="Открыто бонусное слово — его можно сыграть только сегодня"
+                    style={{ marginLeft: 8, fontSize: 12, fontWeight: 600, color: "#e5a94c", border: "1px solid #e5a94c", borderRadius: 4, padding: "1px 6px" }}
+                  >
+                    🎁 бонус
+                  </span>
+                )}
+              </div>
               <div style={{ fontSize: 13, opacity: 0.7 }}>
                 {TYPE_LABEL[t.type] || t.type} · {STATUS_LABEL[t.status] || t.status} · ваш позывной: {t.callsign}
               </div>
