@@ -3,7 +3,10 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { ADMIN_BASE } from "../adminBase.js";
 import HallView from "../components/HallView.jsx";
 import TodayPanel from "./TodayPanel.jsx";
-import { api, TYPE_LABEL, useIsMobile, panelStyle, inputStyle, buttonStyle, ghostButtonStyle, thStyle, tdStyle } from "./adminShared.js";
+import { api, TYPE_LABEL, LENGTHS, LengthSelect, useIsMobile, panelStyle, inputStyle, buttonStyle, ghostButtonStyle, thStyle, tdStyle } from "./adminShared.jsx";
+import WordActions from "./WordActions.jsx";
+import { askConfirm, ConfirmHost } from "./confirmDialog.jsx";
+import { CopyButton, downloadCanvas } from "./exportUtils.jsx";
 
 // Всегда актуальное значение для отбрасывания устаревших ответов — если
 // админ успел переключиться на другой розыгрыш/матч, пока запрос летал,
@@ -16,7 +19,6 @@ function useLatest(value) {
 }
 
 const DEFAULT_SCORING = { "1": 10, "2": 5, "3": 4, "4": 3, "5": 2, "6": 1 };
-const LENGTHS = [5, 6, 7];
 
 // Бонусные слова: после каких дней открываются бонусы при длительности D и N (для подсказок в настройках)
 const bonusDays = (duration, every) => {
@@ -45,21 +47,6 @@ const BONUS_STATE_TITLE = {
   lost: "бонус потерян: в его блоке был пропуск",
   expired: "бонус не сыгран в день открытия",
 };
-const isWordLength = (w) => LENGTHS.includes((w || "").trim().length);
-
-// Выбор длины слова (5/6/7); пустое значение — «как базовая» (если задан allowEmpty).
-function LengthSelect({ value, onChange, disabled, allowEmpty, emptyLabel = "—", title, style }) {
-  return (
-    <select
-      value={value ?? ""} disabled={disabled} title={title}
-      onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
-      style={{ ...inputStyle, padding: "2px 4px", fontSize: 12, width: "auto", ...style }}
-    >
-      {allowEmpty && <option value="">{emptyLabel}</option>}
-      {LENGTHS.map((n) => <option key={n} value={n}>{n} букв</option>)}
-    </select>
-  );
-}
 
 // Сохраняет один раздел плана длин (marathon / playoff / tiebreak), не трогая остальные.
 function saveWordPlanPart(tournament, key, value) {
@@ -342,6 +329,7 @@ export default function AdminDashboard() {
   return (
     <div className="admin-root" style={{ minHeight: "100vh", background: "#121213", color: "#fff", fontFamily: "system-ui, sans-serif" }}>
       {isMobile && <style>{MOBILE_CSS}</style>}
+      <ConfirmHost />
       <div
         ref={headerRef}
         style={{ position: "sticky", top: 0, zIndex: 10, background: "#121213", padding: isMobile ? "10px 12px 0" : "20px 20px 0", borderBottom: "1px solid #2a2a2c" }}
@@ -538,7 +526,7 @@ function UsersPanel({ users, onChanged }) {
   }
 
   async function handleDisconnect(u) {
-    if (!window.confirm(
+    if (!await askConfirm(
       `Отключить «${u.admin_note || `Игрок #${u.id}`}» от всех розыгрышей? ` +
       `Личная ссылка продолжит работать, статистика сохранится.`
     )) {
@@ -549,7 +537,7 @@ function UsersPanel({ users, onChanged }) {
   }
 
   async function handleArchive(u) {
-    if (!window.confirm(
+    if (!await askConfirm(
       `Переместить «${u.admin_note || `Игрок #${u.id}`}» в архив? Личная ссылка перестанет работать, ` +
       `игрок отключится от всех розыгрышей, но набранная статистика сохранится.`
     )) {
@@ -565,7 +553,7 @@ function UsersPanel({ users, onChanged }) {
   }
 
   async function handleRegenerateLink(u) {
-    if (!window.confirm(
+    if (!await askConfirm(
       `Выдать новую ссылку «${u.admin_note || `Игрок #${u.id}`}»? Старая ссылка сразу перестанет работать.`
     )) {
       return;
@@ -1773,7 +1761,7 @@ function EntriesPanel({ tournament, users, allTournaments, onEntriesChanged }) {
   async function handleTransfer() {
     const target = transferTargets.find((t) => t.id === Number(transferTo));
     if (!target) return;
-    if (!window.confirm(`Перебросить выбранных игроков (${selectedIds.size}) в «${target.title}»? В «${tournament.title}» они будут отключены (статистика останется).`)) {
+    if (!await askConfirm(`Перебросить выбранных игроков (${selectedIds.size}) в «${target.title}»? В «${tournament.title}» они будут отключены (статистика останется).`)) {
       return;
     }
     setTransferring(true);
@@ -1822,7 +1810,7 @@ function EntriesPanel({ tournament, users, allTournaments, onEntriesChanged }) {
   }
 
   async function toggleActive(entry) {
-    if (entry.active && !window.confirm(`Отключить «${entry.callsign}» от розыгрыша? Набранная статистика останется в таблице.`)) {
+    if (entry.active && !await askConfirm(`Отключить «${entry.callsign}» от розыгрыша? Набранная статистика останется в таблице.`)) {
       return;
     }
     await api(`/api/admin/entries/${entry.id}/active`, {
@@ -1868,7 +1856,7 @@ function EntriesPanel({ tournament, users, allTournaments, onEntriesChanged }) {
   // распределения мест он пропадает). Необратимо, поэтому с подтверждением.
   async function handleDeleteEntry(entry) {
     const teamNote = tournament.teams_enabled ? " Средние команд и места пересчитаются без него." : "";
-    if (!window.confirm(
+    if (!await askConfirm(
       `Удалить «${entry.callsign}» из тай-брейка «${tournament.title}»?\n\nЕго результаты и слова будут стёрты, он исчезнет из таблицы и из распределения мест.${teamNote}\n\nЭто нельзя отменить: подключить игрока заново можно, но его результаты не вернутся.`
     )) {
       return;
@@ -1889,7 +1877,7 @@ function EntriesPanel({ tournament, users, allTournaments, onEntriesChanged }) {
   }
 
   async function handleResetToday(entry) {
-    if (!window.confirm(`Сбросить попытку «${entry.callsign}» за сегодня? Игрок сможет сыграть сегодняшнее слово заново с нуля — введённые буквы и результат за сегодня будут стёрты без возможности отмены.`)) {
+    if (!await askConfirm(`Сбросить попытку «${entry.callsign}» за сегодня? Игрок сможет сыграть сегодняшнее слово заново с нуля — введённые буквы и результат за сегодня будут стёрты без возможности отмены.`)) {
       return;
     }
     setError("");
@@ -1902,7 +1890,7 @@ function EntriesPanel({ tournament, users, allTournaments, onEntriesChanged }) {
   }
 
   async function handleDisconnectAll() {
-    if (!window.confirm(`Отключить всех подключённых участников (${activeCount}) от «${tournament.title}»? Набранная статистика останется в таблице, подключить обратно можно по одному.`)) {
+    if (!await askConfirm(`Отключить всех подключённых участников (${activeCount}) от «${tournament.title}»? Набранная статистика останется в таблице, подключить обратно можно по одному.`)) {
       return;
     }
     await api(`/api/admin/tournaments/${tournament.id}/entries/disconnect-all`, { method: "POST" });
@@ -1910,7 +1898,7 @@ function EntriesPanel({ tournament, users, allTournaments, onEntriesChanged }) {
   }
 
   async function handleAddAll() {
-    if (!window.confirm(`Подключить сразу всех зарегистрированных игроков (${availableUsers.length}) к «${tournament.title}»? Позывные подставятся по умолчанию (заметка админа или «#игрокN») — их можно будет переименовать позже.`)) {
+    if (!await askConfirm(`Подключить сразу всех зарегистрированных игроков (${availableUsers.length}) к «${tournament.title}»? Позывные подставятся по умолчанию (заметка админа или «#игрокN») — их можно будет переименовать позже.`)) {
       return;
     }
     await api(`/api/admin/tournaments/${tournament.id}/entries/add-all`, { method: "POST" });
@@ -2329,7 +2317,6 @@ function marathonCellLabel(c) {
 function MarathonWordsPanel({ tournament, onTournamentChanged }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [words, setWords] = useState(null);
-  const [custom, setCustom] = useState({}); // id слова -> введённое своё слово
   const [error, setError] = useState("");
 
   async function refresh() {
@@ -2377,26 +2364,10 @@ function MarathonWordsPanel({ tournament, onTournamentChanged }) {
     }
   }
 
-  async function handleReplace(w) {
+  async function handleReplace(w, text) {
     setError("");
     try {
-      await api(`/api/admin/words/${w.id}/confirm`, {
-        method: "POST",
-        body: JSON.stringify({ override_word: (custom[w.id] || "").trim().toLowerCase() }),
-      });
-      setCustom((prev) => ({ ...prev, [w.id]: "" }));
-      await refresh();
-    } catch (e) {
-      setError(e.message);
-      await refresh();
-    }
-  }
-
-  async function handleExcludeAndReroll(w) {
-    setError("");
-    try {
-      await api("/api/admin/dictionary/excluded", { method: "POST", body: JSON.stringify({ word: w.word }) });
-      await api(`/api/admin/words/${w.id}/reroll`, { method: "POST" });
+      await api(`/api/admin/words/${w.id}/confirm`, { method: "POST", body: JSON.stringify({ override_word: text }) });
       await refresh();
     } catch (e) {
       setError(e.message);
@@ -2436,37 +2407,14 @@ function MarathonWordsPanel({ tournament, onTournamentChanged }) {
                   {w.status === "confirmed" ? "подтверждено" : "предложено системой"}
                 </span>
               </td>
-              <td style={tdStyle}>
-                {w.editable
-                  ? <LengthSelect value={w.length} onChange={(n) => handleLength(w, n)} title="Сменить длину слова: система подберёт новое слово" />
-                  : `${w.length} букв`}
-              </td>
+              <td style={tdStyle}>{w.length} букв</td>
               <td style={{ ...tdStyle, opacity: 0.8 }}>начали {w.started} · прошли {w.finished}</td>
               <td style={tdStyle}>
                 {w.editable ? (
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                    <button onClick={() => handleReroll(w)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>
-                      Предложить другое
-                    </button>
-                    <button
-                      onClick={() => handleExcludeAndReroll(w)}
-                      title="Исключить это слово из будущих предложений и сразу показать другое"
-                      style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}
-                    >
-                      🚫 Исключить и другое
-                    </button>
-                    <input
-                      placeholder="Своё слово" maxLength={7} value={custom[w.id] || ""}
-                      onChange={(e) => setCustom((prev) => ({ ...prev, [w.id]: e.target.value }))}
-                      style={{ ...inputStyle, padding: "2px 6px", fontSize: 12, width: 90 }}
-                    />
-                    <button
-                      onClick={() => handleReplace(w)} disabled={!isWordLength(custom[w.id] || "")}
-                      style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}
-                    >
-                      Заменить
-                    </button>
-                  </div>
+                  <WordActions
+                    compact word={w.word} length={w.length} onLength={(n) => handleLength(w, n)}
+                    onReroll={() => handleReroll(w)} onReplace={(text) => handleReplace(w, text)}
+                  />
                 ) : (
                   <span style={{ fontSize: 12, opacity: 0.6 }}>уже начато — менять поздно</span>
                 )}
@@ -2487,7 +2435,6 @@ function MarathonIndividualWordsPanel({ tournament, onTournamentChanged }) {
   const [showWords, setShowWords] = useState(false); // по умолчанию слова скрыты
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(null); // { entryId, wordId } | null
-  const [custom, setCustom] = useState("");
   const [busy, setBusy] = useState(false);
   const [hoveredWordId, setHoveredWordId] = useState(null); // слово, над которым курсор (показ попыток)
 
@@ -2542,25 +2489,14 @@ function MarathonIndividualWordsPanel({ tournament, onTournamentChanged }) {
     });
   }
 
-  function handleExcludeAndReroll(w) {
+  function handleReplace(w, text) {
     return run(async () => {
-      await api("/api/admin/dictionary/excluded", { method: "POST", body: JSON.stringify({ word: w.word }) });
-      await api(`/api/admin/words/${w.id}/reroll`, { method: "POST" });
+      await api(`/api/admin/words/${w.id}/confirm`, { method: "POST", body: JSON.stringify({ override_word: text }) });
     });
   }
 
-  function handleReplace(w) {
-    return run(async () => {
-      await api(`/api/admin/words/${w.id}/confirm`, {
-        method: "POST",
-        body: JSON.stringify({ override_word: custom.trim().toLowerCase() }),
-      });
-      setCustom("");
-    });
-  }
-
-  function handleRegeneratePlayer(p) {
-    if (!window.confirm(`Заново подобрать все ещё не начатые слова игрока ${p.callsign}?`)) return;
+  async function handleRegeneratePlayer(p) {
+    if (!await askConfirm(`Заново подобрать все ещё не начатые слова игрока ${p.callsign}?`)) return;
     return run(() => api(`/api/admin/tournaments/${tournament.id}/marathon/individual-words/${p.entry_id}/regenerate`, { method: "POST" }));
   }
 
@@ -2637,7 +2573,7 @@ function MarathonIndividualWordsPanel({ tournament, onTournamentChanged }) {
                           onMouseLeave={() => setHoveredWordId(null)}
                         >
                           <button
-                            onClick={() => { setSelected({ entryId: p.entry_id, wordId: w.id }); setCustom(""); }}
+                            onClick={() => setSelected({ entryId: p.entry_id, wordId: w.id })}
                             title={w.guesses && w.guesses.length > 0 ? undefined : STATE_TITLE[w.state]}
                             style={{
                               ...STATE_STYLE[w.state], borderRadius: 4, padding: "3px 8px", color: "inherit", cursor: "pointer",
@@ -2675,25 +2611,11 @@ function MarathonIndividualWordsPanel({ tournament, onTournamentChanged }) {
                 <span style={{ fontSize: 12, opacity: 0.6 }}>({STATE_TITLE[selectedWord.state]})</span>
               </div>
               {selectedWord.editable ? (
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                  <button onClick={() => handleReroll(selectedWord)} disabled={busy} style={{ ...ghostButtonStyle, fontSize: 12 }}>
-                    Предложить другое
-                  </button>
-                  <button onClick={() => handleExcludeAndReroll(selectedWord)} disabled={busy} style={{ ...ghostButtonStyle, fontSize: 12 }}>
-                    🚫 Исключить и другое
-                  </button>
-                  <input
-                    placeholder="Своё слово" maxLength={7} value={custom} onChange={(e) => setCustom(e.target.value)}
-                    style={{ ...inputStyle, padding: "3px 6px", fontSize: 12, width: 100 }}
-                  />
-                  <button
-                    onClick={() => handleReplace(selectedWord)} disabled={busy || !isWordLength(custom)}
-                    style={{ ...ghostButtonStyle, fontSize: 12 }}
-                  >
-                    Заменить
-                  </button>
+                <WordActions
+                  word={selectedWord.word} onReroll={() => handleReroll(selectedWord)} onReplace={(text) => handleReplace(selectedWord, text)}
+                >
                   <button onClick={() => setSelected(null)} style={{ ...ghostButtonStyle, fontSize: 12 }}>Закрыть</button>
-                </div>
+                </WordActions>
               ) : (
                 <div style={{ fontSize: 12, opacity: 0.7 }}>
                   Это слово уже начато этим игроком — менять поздно.{" "}
@@ -2713,7 +2635,6 @@ function MarathonStandingsPanel({ tournament }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
   const [hoveredCell, setHoveredCell] = useState(null); // {entryId, index} | null — показ попыток
   const tie = useTieResolution(tournament.id, () => refresh());
   const placeLabel = (r) => `${r.place}${r.tie_resolved ? "*" : ""}`;
@@ -2747,13 +2668,7 @@ function MarathonStandingsPanel({ tournament }) {
     // "·", а не "N. " — иначе Telegram склеивает строки в нумерованный список
     const lines = data.rows.map((r) => `${placeLabel(r)} · ${r.callsign} — ${r.score} (${r.words_done}/${data.words_count})`);
     const text = `${tags}\n\n${lines.join("\n")}\n\nпопыток всего (слов пройдено/всего). ${RULE_NOTE(data)}${hasTieResolved() ? `\n${TIE_FOOTNOTE}` : ""}`;
-    navigator.clipboard.writeText(text).then(
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      },
-      () => setCopied(false)
-    );
+    return text;
   }
 
   function handleDownload() {
@@ -2842,14 +2757,7 @@ function MarathonStandingsPanel({ tournament }) {
     ctx.fillText(RULE_NOTE(data), padding, top + headerHeight + rowHeight * data.rows.length + 16);
     if (hasTieResolved()) ctx.fillText(TIE_FOOTNOTE, padding, top + headerHeight + rowHeight * data.rows.length + 34);
 
-    canvas.toBlob((blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${tournament.title.replace(/[^\p{L}\p{N}]+/gu, "_")}.png`;
-      a.click();
-      URL.revokeObjectURL(url);
-    });
+    downloadCanvas(canvas, tournament.title, "");
   }
 
   if (!data) return error ? <div style={{ ...panelStyle, marginTop: 20, color: "#e5484d" }}>{error}</div> : null;
@@ -2861,7 +2769,7 @@ function MarathonStandingsPanel({ tournament }) {
         <div style={{ display: "flex", gap: 8 }}>
           {data.rows.length > 0 && (
             <>
-              <button onClick={handleCopy} style={ghostButtonStyle}>{copied ? "Скопировано!" : "Скопировать таблицу"}</button>
+              <CopyButton getText={handleCopy} />
               <button onClick={handleDownload} style={ghostButtonStyle}>Скачать таблицу</button>
               {data.rows.some((r) => r.place.includes("-") || r.tie_resolved) && (
                 <button onClick={tie.openTies} style={ghostButtonStyle}>Разобрать ничьи</button>
@@ -2986,8 +2894,8 @@ function MarathonTeamsPanel({ tournament, onChanged, refreshKey }) {
     });
   }
 
-  function handleDelete(team) {
-    if (!window.confirm(`Удалить команду «${team.name}»? Её участники останутся в розыгрыше без команды.`)) return;
+  async function handleDelete(team) {
+    if (!await askConfirm(`Удалить команду «${team.name}»? Её участники останутся в розыгрыше без команды.`)) return;
     run(() => api(`/api/admin/teams/${team.id}`, { method: "DELETE" }));
   }
 
@@ -3129,8 +3037,6 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
   const tournamentIdRef = useLatest(tournament.id);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
-  const [copiedDetailed, setCopiedDetailed] = useState(false);
   const [expanded, setExpanded] = useState(() => new Set());
   const [tbDate, setTbDate] = useState(""); // дата старта создаваемого тай-брейка; пусто — сегодня
   const [tbMessage, setTbMessage] = useState("");
@@ -3222,13 +3128,7 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
       ...sortedMembers(r).map((m) => `  ${m.callsign} — ${m.average} · ${m.cells.map(marathonCellLabel).join(" ")}`),
     ].join("\n"));
     const text = `${tags}\n\n${blocks.join("\n")}\n\nсреднее число попыток на слово; X — не угадано, · — ещё не дошёл; неугаданное слово = ${data.unsolved_attempts}, непройденное = ${data.skipped_attempts}${hasTie ? `\n${TIE_FOOTNOTE}` : ""}`;
-    navigator.clipboard.writeText(text).then(
-      () => {
-        setCopiedDetailed(true);
-        setTimeout(() => setCopiedDetailed(false), 2000);
-      },
-      () => setCopiedDetailed(false)
-    );
+    return text;
   }
 
   // Подробная картинка: по блоку на команду — строка команды (итоги и среднее) и под ней строки её
@@ -3358,14 +3258,7 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
     ctx.textAlign = "left";
     notes.forEach((n, i) => ctx.fillText(n, padding, top + headerHeight + rowHeight * items.length + 16 + i * 18));
 
-    canvas.toBlob((blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${tournament.title.replace(/[^\p{L}\p{N}]+/gu, "_")}_команды_подробно.png`;
-      a.click();
-      URL.revokeObjectURL(url);
-    });
+    downloadCanvas(canvas, tournament.title, "_команды_подробно");
   }
 
   function toggleExpanded(id) {
@@ -3383,13 +3276,7 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
     const lines = data.rows.map((r) => `${placeLabel(r)} · ${r.name} — ${r.average} (${r.words_done}/${r.words_total})`);
     const hasTie = data.rows.some((r) => r.tie_resolved);
     const text = `${tags}\n\n${lines.join("\n")}\n\nсреднее число попыток на слово (слов пройдено/всего). Неугаданное слово = ${data.unsolved_attempts}, непройденное = ${data.skipped_attempts}${hasTie ? `\n${TIE_FOOTNOTE}` : ""}`;
-    navigator.clipboard.writeText(text).then(
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      },
-      () => setCopied(false)
-    );
+    return text;
   }
 
   function handleDownload() {
@@ -3474,14 +3361,7 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
     ctx.fillText(RULE_NOTE(data), padding, top + headerHeight + rowHeight * data.rows.length + 16);
     if (hasTie) ctx.fillText(TIE_FOOTNOTE, padding, top + headerHeight + rowHeight * data.rows.length + 34);
 
-    canvas.toBlob((blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${tournament.title.replace(/[^\p{L}\p{N}]+/gu, "_")}_команды.png`;
-      a.click();
-      URL.revokeObjectURL(url);
-    });
+    downloadCanvas(canvas, tournament.title, "_команды");
   }
 
   if (!data) return error ? <div style={{ ...panelStyle, marginTop: 20, color: "#e5484d" }}>{error}</div> : null;
@@ -3493,9 +3373,9 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {data.rows.length > 0 && (
             <>
-              <button onClick={handleCopy} style={ghostButtonStyle}>{copied ? "Скопировано!" : "Скопировать таблицу"}</button>
+              <CopyButton getText={handleCopy} />
               <button onClick={handleDownload} style={ghostButtonStyle}>Скачать таблицу</button>
-              <button onClick={handleCopyDetailed} style={ghostButtonStyle}>{copiedDetailed ? "Скопировано!" : "Скопировать подробно"}</button>
+              <CopyButton getText={handleCopyDetailed} label="Скопировать подробно" />
               <button onClick={handleDownloadDetailed} style={ghostButtonStyle}>Скачать подробную</button>
               {data.rows.some((r) => r.place.includes("-") || r.tie_resolved) && (
                 <button onClick={tie.openTies} style={ghostButtonStyle}>Разобрать ничьи</button>
@@ -3573,7 +3453,6 @@ function MarathonTeamStandingsPanel({ tournament, refreshKey, tournaments = [], 
 function BonusWordsPanel({ tournament }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [words, setWords] = useState(null);
-  const [custom, setCustom] = useState({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -3656,34 +3535,12 @@ function BonusWordsPanel({ tournament }) {
                   <td style={{ ...tdStyle, opacity: 0.8 }}>право: {w.eligible} · сыграли: {w.played}</td>
                   <td style={tdStyle}>
                     {w.editable ? (
-                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
-                        <LengthSelect
-                          value={w.length} disabled={busy}
-                          onChange={(n) => { if (n != null && n !== w.length) call(`${w.number}/length`, { length: n }); }}
-                          title="Сменить длину слова: система подберёт новое слово"
-                        />
-                        <button
-                          disabled={busy} onClick={() => call(`${w.number}/reroll`)}
-                          style={{ ...ghostButtonStyle, fontSize: 11, padding: "2px 8px" }}
-                        >
-                          Предложить другое
-                        </button>
-                        <input
-                          placeholder="Своё слово" maxLength={7} value={custom[w.number] || ""}
-                          onChange={(e) => setCustom((prev) => ({ ...prev, [w.number]: e.target.value }))}
-                          style={{ ...inputStyle, padding: "2px 6px", fontSize: 12, width: 90 }}
-                        />
-                        <button
-                          disabled={busy || !isWordLength(custom[w.number])}
-                          onClick={async () => {
-                            await call(`${w.number}`, { word: (custom[w.number] || "").trim().toLowerCase() });
-                            setCustom((prev) => ({ ...prev, [w.number]: "" }));
-                          }}
-                          style={{ ...ghostButtonStyle, fontSize: 11, padding: "2px 8px" }}
-                        >
-                          Заменить
-                        </button>
-                      </div>
+                      <WordActions
+                        compact word={w.word} length={w.length} disabled={busy}
+                        onLength={(n) => call(`${w.number}/length`, { length: n })}
+                        onReroll={() => call(`${w.number}/reroll`)}
+                        onReplace={(text) => call(`${w.number}`, { word: text })}
+                      />
                     ) : (
                       <span style={{ fontSize: 12, opacity: 0.6 }}>уже начато — менять поздно</span>
                     )}
@@ -3705,7 +3562,6 @@ function TodayWordPanel({ tournament }) {
   const [notApplicable, setNotApplicable] = useState(false);
   const [excluded, setExcluded] = useState(false);
   const [yesterday, setYesterday] = useState(null);
-  const [override, setOverride] = useState("");
   const [error, setError] = useState("");
 
   async function refresh() {
@@ -3747,7 +3603,6 @@ function TodayWordPanel({ tournament }) {
     setError("");
     try {
       await api(path, { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) });
-      setOverride("");
       setExcluded(false);
       await refresh();
     } catch (e) {
@@ -3773,28 +3628,24 @@ function TodayWordPanel({ tournament }) {
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <span style={{ fontSize: 22, fontWeight: 700, textTransform: "uppercase", letterSpacing: 2 }}>{word.word}</span>
-        <button
-          onClick={handleExclude}
-          disabled={excluded}
-          title="Больше не предлагать это слово в будущем — на сегодняшнее слово не влияет"
-          style={{ ...ghostButtonStyle, fontSize: 12 }}
-        >
-          {excluded ? "Исключено из будущих слов" : "🚫 Исключить из словаря"}
-        </button>
+        {!word.editable && (
+          <button
+            onClick={handleExclude}
+            disabled={excluded}
+            title="Больше не предлагать это слово в будущем — на сегодняшнее слово не влияет"
+            style={{ ...ghostButtonStyle, fontSize: 12 }}
+          >
+            {excluded ? "Исключено из будущих слов" : "🚫 Исключить из словаря"}
+          </button>
+        )}
       </div>
       {word.editable && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-          <button onClick={() => handleChange(`/api/admin/words/${word.id}/reroll`)} style={ghostButtonStyle}>
-            Предложить другое слово
-          </button>
-          <input placeholder="Или ввести своё слово" value={override} onChange={(e) => setOverride(e.target.value)} style={inputStyle} maxLength={7} />
-          <button
-            onClick={() => handleChange(`/api/admin/words/${word.id}/confirm`, { override_word: override.trim().toLowerCase() })}
-            disabled={!isWordLength(override)}
-            style={ghostButtonStyle}
-          >
-            Заменить
-          </button>
+        <div style={{ marginTop: 10 }}>
+          <WordActions
+            word={word.word}
+            onReroll={() => handleChange(`/api/admin/words/${word.id}/reroll`)}
+            onReplace={(text) => handleChange(`/api/admin/words/${word.id}/confirm`, { override_word: text })}
+          />
         </div>
       )}
       {error && <div style={{ color: "#e5484d", marginTop: 8 }}>{error}</div>}
@@ -3805,7 +3656,6 @@ function TodayWordPanel({ tournament }) {
 function WordConfirmPanel({ tournament }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [word, setWord] = useState(null);
-  const [override, setOverride] = useState("");
   const [error, setError] = useState("");
   const [notApplicable, setNotApplicable] = useState(false);
 
@@ -3829,15 +3679,14 @@ function WordConfirmPanel({ tournament }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tournament.id]);
 
-  async function handleConfirm(useOverride) {
+  async function handleConfirm(useOverride, text) {
     setError("");
     try {
       const updated = await api(`/api/admin/words/${word.id}/confirm`, {
         method: "POST",
-        body: JSON.stringify({ override_word: useOverride ? override.trim().toLowerCase() : null }),
+        body: JSON.stringify({ override_word: useOverride ? text : null }),
       });
       setWord(updated);
-      setOverride("");
     } catch (e) {
       setError(e.message);
     }
@@ -3848,16 +3697,6 @@ function WordConfirmPanel({ tournament }) {
     try {
       const updated = await api(`/api/admin/words/${word.id}/reroll`, { method: "POST" });
       setWord(updated);
-    } catch (e) {
-      setError(e.message);
-    }
-  }
-
-  async function handleExcludeAndReroll() {
-    setError("");
-    try {
-      await api("/api/admin/dictionary/excluded", { method: "POST", body: JSON.stringify({ word: word.word }) });
-      await handleReroll();
     } catch (e) {
       setError(e.message);
     }
@@ -3879,19 +3718,10 @@ function WordConfirmPanel({ tournament }) {
           {word.status === "confirmed" ? "подтверждено" : "предложено системой"}
         </span>
       </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button onClick={() => handleConfirm(false)} style={buttonStyle}>Согласиться с этим словом</button>
-        <button onClick={handleReroll} style={ghostButtonStyle}>Предложить другое слово</button>
-        <button
-          onClick={handleExcludeAndReroll}
-          title="Исключить это слово из будущих предложений и сразу показать другое"
-          style={ghostButtonStyle}
-        >
-          🚫 Исключить и предложить другое
-        </button>
-        <input placeholder="Или ввести своё слово" value={override} onChange={(e) => setOverride(e.target.value)} style={inputStyle} maxLength={7} />
-        <button onClick={() => handleConfirm(true)} disabled={!isWordLength(override)} style={ghostButtonStyle}>Заменить</button>
-      </div>
+      <WordActions
+        word={word.word} onConfirm={() => handleConfirm(false)} onReroll={handleReroll}
+        onReplace={(text) => handleConfirm(true, text)}
+      />
       {error && <div style={{ color: "#e5484d", marginTop: 8 }}>{error}</div>}
     </div>
   );
@@ -3957,7 +3787,6 @@ function WordHistoryPanel({ tournament }) {
 function TiebreakWordsPanel({ tournament }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [queue, setQueue] = useState(null);
-  const [overrides, setOverrides] = useState({});
   const [error, setError] = useState("");
 
   async function refresh() {
@@ -3998,14 +3827,13 @@ function TiebreakWordsPanel({ tournament }) {
     }
   }
 
-  async function handleSetWord(dayNumber) {
+  async function handleSetWord(dayNumber, text) {
     setError("");
     try {
       await api(`/api/admin/tournaments/${tournament.id}/tiebreak-words/${dayNumber}`, {
         method: "POST",
-        body: JSON.stringify({ word: (overrides[dayNumber] || "").trim().toLowerCase() }),
+        body: JSON.stringify({ word: text }),
       });
-      setOverrides((prev) => ({ ...prev, [dayNumber]: "" }));
       refresh();
     } catch (e) {
       setError(e.message);
@@ -4031,26 +3859,10 @@ function TiebreakWordsPanel({ tournament }) {
             <span style={{ width: 70, opacity: 0.7, fontSize: 13 }}>Раунд {slot.day_number}</span>
             <span style={{ fontSize: 16, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, width: 110 }}>{slot.word}</span>
             {slot.editable ? (
-              <>
-                <LengthSelect value={slot.length} onChange={(n) => handleLength(slot, n)} title="Сменить длину слова: система подберёт новое слово" />
-                <button onClick={() => handleReroll(slot.day_number)} style={{ ...ghostButtonStyle, fontSize: 12 }}>
-                  Предложить другое
-                </button>
-                <input
-                  placeholder="Своё слово"
-                  value={overrides[slot.day_number] || ""}
-                  onChange={(e) => setOverrides((prev) => ({ ...prev, [slot.day_number]: e.target.value }))}
-                  style={{ ...inputStyle, fontSize: 12, width: 100 }}
-                  maxLength={7}
-                />
-                <button
-                  onClick={() => handleSetWord(slot.day_number)}
-                  disabled={!isWordLength(overrides[slot.day_number])}
-                  style={{ ...ghostButtonStyle, fontSize: 12 }}
-                >
-                  Заменить
-                </button>
-              </>
+              <WordActions
+                compact word={slot.word} length={slot.length} onLength={(n) => handleLength(slot, n)}
+                onReroll={() => handleReroll(slot.day_number)} onReplace={(text) => handleSetWord(slot.day_number, text)}
+              />
             ) : (
               <span style={{ fontSize: 12, opacity: 0.5 }}>уже наступил</span>
             )}
@@ -4067,7 +3879,6 @@ function TiebreakTeamWordsPanel({ tournament, refreshKey }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [days, setDays] = useState(null);
   const [openDay, setOpenDay] = useState(1);
-  const [custom, setCustom] = useState({}); // "день:entry_id" -> введённое слово
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -4165,7 +3976,6 @@ function TiebreakTeamWordsPanel({ tournament, refreshKey }) {
                       </thead>
                       <tbody>
                         {day.players.map((pl) => {
-                          const key = `${day.day_number}:${pl.entry_id}`;
                           return (
                             <tr key={pl.entry_id} style={{ borderTop: "1px solid #2a2a2c" }}>
                               <td style={tdStyle}>{pl.team_name}</td>
@@ -4174,34 +3984,12 @@ function TiebreakTeamWordsPanel({ tournament, refreshKey }) {
                               <td style={{ ...tdStyle, textTransform: "uppercase", letterSpacing: 1, fontWeight: 700 }}>{pl.word}</td>
                               <td style={tdStyle}>
                                 {pl.editable && (
-                                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
-                                    <LengthSelect
-                                      value={pl.length} disabled={busy}
-                                      onChange={(n) => { if (n != null && n !== pl.length) call(`${day.day_number}/${pl.entry_id}/length`, { length: n }); }}
-                                      title="Сменить длину слова: система подберёт новое слово"
-                                    />
-                                    <button
-                                      disabled={busy} onClick={() => call(`${day.day_number}/${pl.entry_id}/reroll`)}
-                                      style={{ ...ghostButtonStyle, fontSize: 11, padding: "2px 8px" }}
-                                    >
-                                      Предложить другое
-                                    </button>
-                                    <input
-                                      placeholder="Своё слово" maxLength={7} value={custom[key] || ""}
-                                      onChange={(e) => setCustom((prev) => ({ ...prev, [key]: e.target.value }))}
-                                      style={{ ...inputStyle, padding: "2px 6px", fontSize: 12, width: 90 }}
-                                    />
-                                    <button
-                                      disabled={busy || !isWordLength(custom[key])}
-                                      onClick={async () => {
-                                        await call(`${day.day_number}/${pl.entry_id}`, { word: (custom[key] || "").trim().toLowerCase() });
-                                        setCustom((prev) => ({ ...prev, [key]: "" }));
-                                      }}
-                                      style={{ ...ghostButtonStyle, fontSize: 11, padding: "2px 8px" }}
-                                    >
-                                      Заменить
-                                    </button>
-                                  </div>
+                                  <WordActions
+                                    compact word={pl.word} length={pl.length} disabled={busy}
+                                    onLength={(n) => call(`${day.day_number}/${pl.entry_id}/length`, { length: n })}
+                                    onReroll={() => call(`${day.day_number}/${pl.entry_id}/reroll`)}
+                                    onReplace={(text) => call(`${day.day_number}/${pl.entry_id}`, { word: text })}
+                                  />
                                 )}
                               </td>
                             </tr>
@@ -4226,7 +4014,6 @@ function TiebreakTeamResultsPanel({ tournament, refreshKey }) {
   const tournamentIdRef = useLatest(tournament.id);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(() => new Set());
 
   async function refresh() {
@@ -4342,14 +4129,7 @@ function TiebreakTeamResultsPanel({ tournament, refreshKey }) {
     ctx.textAlign = "left";
     ctx.fillText(NOTE, padding, top + headerHeight + rowHeight * rows.length + 16);
 
-    canvas.toBlob((blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${tournament.title.replace(/[^\p{L}\p{N}]+/gu, "_")}_тайбрейк_команд.png`;
-      a.click();
-      URL.revokeObjectURL(url);
-    });
+    downloadCanvas(canvas, tournament.title, "_тайбрейк_команд");
   }
 
   function handleCopy() {
@@ -4358,10 +4138,7 @@ function TiebreakTeamResultsPanel({ tournament, refreshKey }) {
       .filter((r) => r.place)
       .map((r) => `${r.place} · ${r.name}${r.cells.some(Boolean) ? ` — ${r.cells.filter(Boolean).map((c) => c.average).join(" · ")}` : ""}`);
     const text = `${tags}\n\n${lines.join("\n")}\n\nсреднее число попыток команды по раундам; не угадал — 7, не завершил или не играл — 8`;
-    navigator.clipboard.writeText(text).then(
-      () => { setCopied(true); setTimeout(() => setCopied(false), 2000); },
-      () => setCopied(false)
-    );
+    return text;
   }
 
   return (
@@ -4378,7 +4155,7 @@ function TiebreakTeamResultsPanel({ tournament, refreshKey }) {
         <div style={{ display: "flex", gap: 8 }}>
           {data.rounds.length > 0 && (
             <>
-              <button onClick={handleCopy} style={ghostButtonStyle}>{copied ? "Скопировано!" : "Скопировать таблицу"}</button>
+              <CopyButton getText={handleCopy} />
               <button onClick={handleDownload} style={ghostButtonStyle}>Скачать таблицу</button>
             </>
           )}
@@ -4461,6 +4238,14 @@ function TiebreakResultsPanel({ tournament, refreshKey }) {
   function cellText(cell) {
     if (!cell) return "-";
     return cell.solved ? `${cell.attempts_used}/6` : "X/6";
+  }
+
+  function handleCopyTiebreak() {
+    const tags = [tournament.hashtag, "#тайбрейк"].filter(Boolean).join(" ");
+    const lines = rows
+      .filter((r) => r.place)
+      .map((r) => `${r.place} · ${r.callsign}${r.cells.some(Boolean) ? ` — ${r.cells.map(cellText).join(" · ")}` : ""}`);
+    return `${tags}\n\n${lines.join("\n")}\n\nрезультаты по раундам; X — не угадал`;
   }
 
   // Картинка таблицы тай-брейка с раскладкой по раундам — тот же стиль
@@ -4556,14 +4341,7 @@ function TiebreakResultsPanel({ tournament, refreshKey }) {
       ctx.stroke();
     }
 
-    canvas.toBlob((blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${tournament.title.replace(/[^\p{L}\p{N}]+/gu, "_")}_тайбрейк.png`;
-      a.click();
-      URL.revokeObjectURL(url);
-    });
+    downloadCanvas(canvas, tournament.title, "_тайбрейк");
   }
 
   return (
@@ -4579,7 +4357,10 @@ function TiebreakResultsPanel({ tournament, refreshKey }) {
         </h3>
         <div style={{ display: "flex", gap: 8 }}>
           {data.rounds.length > 0 && (
-            <button onClick={handleDownloadTiebreak} style={ghostButtonStyle}>Скачать</button>
+            <>
+              <CopyButton getText={handleCopyTiebreak} />
+              <button onClick={handleDownloadTiebreak} style={ghostButtonStyle}>Скачать таблицу</button>
+            </>
           )}
           <button onClick={refresh} style={ghostButtonStyle}>Обновить</button>
         </div>
@@ -4784,7 +4565,6 @@ function StandingsPanel({ tournament }) {
   const [editing, setEditing] = useState(null); // {participantId, day} | null
   const [form, setForm] = useState({ attempts_used: 1, solved: true, note: "" });
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
   const [hoveredCell, setHoveredCell] = useState(null); // {participantId, day} | null
   const [hoveredBonus, setHoveredBonus] = useState(null); // {participantId, number} | null
   const tie = useTieResolution(tournament.id, () => refresh());
@@ -4802,13 +4582,7 @@ function StandingsPanel({ tournament }) {
     // (см. пункт бэклога)
     const lines = standings.rows.map((r) => `${placeLabel(r)} · ${r.callsign} — ${r.total_points}`);
     const text = `${tags}\n\n${lines.join("\n")}${hasTieResolved() ? `\n\n${TIE_FOOTNOTE}` : ""}`;
-    navigator.clipboard.writeText(text).then(
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      },
-      () => setCopied(false)
-    );
+    return text;
   }
 
   function handleDownloadStandings() {
@@ -4939,14 +4713,7 @@ function StandingsPanel({ tournament }) {
       });
     }
 
-    canvas.toBlob((blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${tournament.title.replace(/[^\p{L}\p{N}]+/gu, "_")}.png`;
-      a.click();
-      URL.revokeObjectURL(url);
-    });
+    downloadCanvas(canvas, tournament.title, "");
   }
 
   async function load(day) {
@@ -5022,9 +4789,7 @@ function StandingsPanel({ tournament }) {
               <option key={d} value={d}>День {d}</option>
             ))}
           </select>
-          <button onClick={handleCopyStandings} style={ghostButtonStyle}>
-            {copied ? "Скопировано!" : "Скопировать таблицу"}
-          </button>
+          <CopyButton getText={handleCopyStandings} />
           <button onClick={handleDownloadStandings} style={ghostButtonStyle}>Скачать таблицу</button>
           {tournament.type === "standard" && selectedDay === "current"
             && standings.rows.some((r) => r.place.includes("-") || r.tie_resolved) && (
@@ -5340,8 +5105,6 @@ function formatMatchResults(m, side, detailed = false) {
 function MatchWordQueue({ matchId, gamesRequired = 1 }) {
   const matchIdRef = useLatest(matchId);
   const [queue, setQueue] = useState(null);
-  const [editingNum, setEditingNum] = useState(null);
-  const [wordForm, setWordForm] = useState("");
   const [error, setError] = useState("");
 
   async function refresh() {
@@ -5362,15 +5125,13 @@ function MatchWordQueue({ matchId, gamesRequired = 1 }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchId]);
 
-  async function handleSet(gameNumber) {
+  async function handleSet(gameNumber, text) {
     setError("");
     try {
       await api(`/api/admin/bracket/matches/${matchId}/words/${gameNumber}`, {
         method: "POST",
-        body: JSON.stringify({ word: wordForm.trim().toLowerCase() }),
+        body: JSON.stringify({ word: text }),
       });
-      setEditingNum(null);
-      setWordForm("");
       refresh();
     } catch (e) {
       setError(e.message);
@@ -5414,36 +5175,12 @@ function MatchWordQueue({ matchId, gamesRequired = 1 }) {
       {queue.map((q) => (
         <div key={q.game_number} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
           <span style={{ fontSize: 11, opacity: 0.6, width: 55 }}>Игра {q.game_number}:</span>
-          {editingNum === q.game_number ? (
-            <>
-              <input
-                autoFocus value={wordForm} onChange={(e) => setWordForm(e.target.value)} maxLength={7}
-                style={{ ...inputStyle, padding: "2px 6px", fontSize: 12, width: 80 }}
-              />
-              <button onClick={() => handleSet(q.game_number)} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
-              <button onClick={() => setEditingNum(null)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>Отмена</button>
-            </>
-          ) : (
-            <>
-              <span style={{ textTransform: "uppercase", letterSpacing: 1, fontSize: 13 }}>{q.word}</span>
-              {q.editable && (
-                <>
-                  <LengthSelect value={q.length} onChange={(n) => handleLength(q, n)} title="Сменить длину слова: система подберёт новое слово" />
-                  <button
-                    onClick={() => { setEditingNum(q.game_number); setWordForm(q.word); }}
-                    style={{ ...ghostButtonStyle, padding: "1px 6px", fontSize: 11 }}
-                  >
-                    Заменить
-                  </button>
-                  <button
-                    onClick={() => handleReroll(q.game_number)}
-                    style={{ ...ghostButtonStyle, padding: "1px 6px", fontSize: 11 }}
-                  >
-                    Предложить другое
-                  </button>
-                </>
-              )}
-            </>
+          <span style={{ textTransform: "uppercase", letterSpacing: 1, fontSize: 13, minWidth: 70 }}>{q.word}</span>
+          {q.editable && (
+            <WordActions
+              compact word={q.word} length={q.length} onLength={(n) => handleLength(q, n)}
+              onReroll={() => handleReroll(q.game_number)} onReplace={(text) => handleSet(q.game_number, text)}
+            />
           )}
         </div>
       ))}
@@ -6007,7 +5744,7 @@ function HallPanel({ users }) {
   }
 
   async function handleDeleteEntry(entry) {
-    if (!window.confirm(`Удалить запись «${entry.title}» вместе с картинками?`)) return;
+    if (!await askConfirm(`Удалить запись «${entry.title}» вместе с картинками?`)) return;
     setError("");
     try {
       setEntries((await api(`/api/admin/hall/entries/${entry.id}`, { method: "DELETE" })).entries);

@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { ADMIN_BASE } from "../adminBase.js";
 
+export const LENGTHS = [5, 6, 7];
+export const isWordLength = (w) => LENGTHS.includes((w || "").trim().length);
+
 export const TYPE_LABEL = {
   standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат", endless: "Бессрочная игра", tiebreak: "Тай-брейк", marathon: "Марафон",
 };
@@ -44,3 +47,17 @@ export const buttonStyle = { padding: "8px 12px", borderRadius: 6, border: "none
 export const ghostButtonStyle = { padding: "6px 10px", borderRadius: 6, border: "1px solid #3a3a3c", background: "transparent", color: "#fff", fontSize: 13, cursor: "pointer" };
 export const thStyle = { padding: "4px 8px", textAlign: "left" };
 export const tdStyle = { padding: "4px 8px" };
+
+// Выбор длины слова (5/6/7); пустое значение — «как базовая» (если задан allowEmpty).
+export function LengthSelect({ value, onChange, disabled, allowEmpty, emptyLabel = "—", title, style }) {
+  return (
+    <select
+      value={value ?? ""} disabled={disabled} title={title}
+      onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
+      style={{ ...inputStyle, padding: "2px 4px", fontSize: 12, width: "auto", ...style }}
+    >
+      {allowEmpty && <option value="">{emptyLabel}</option>}
+      {LENGTHS.map((n) => <option key={n} value={n}>{n} букв</option>)}
+    </select>
+  );
+}

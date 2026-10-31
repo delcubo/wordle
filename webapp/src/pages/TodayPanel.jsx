@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { api, TYPE_LABEL, useIsMobile, panelStyle, inputStyle, buttonStyle, ghostButtonStyle } from "./adminShared.js";
+import { api, TYPE_LABEL, useIsMobile, panelStyle, ghostButtonStyle } from "./adminShared.jsx";
+import WordActions from "./WordActions.jsx";
 
 const REFRESH_MS = 60000;
 const RESULTS_SHOWN = 12;
-const WORD_RE = /^[а-яё]{5,7}$/i;
 const touch = (isMobile) => (isMobile ? { minHeight: 40 } : {});
 
 function formatClock(date) {
@@ -18,34 +18,9 @@ function Chip({ children, color = "#3a3a3c", title }) {
   );
 }
 
-// Слово на завтра: подтвердить, предложить другое, исключить из словаря или ввести своё — те же действия,
-// что и на странице розыгрыша (WordConfirmPanel), но прямо с карточки.
+// Слово на завтра: те же действия над словом, что и на странице розыгрыша (WordActions), но прямо с карточки.
 function NextWord({ word, onChange, onOpenWords, isMobile }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [custom, setCustom] = useState(null); // null — поле скрыто
-
-  async function run(fn) {
-    setBusy(true);
-    setError("");
-    try {
-      onChange(await fn());
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const confirm = (override) => run(() => api(`/api/admin/words/${word.id}/confirm`, {
-    method: "POST", body: JSON.stringify({ override_word: override }),
-  }).then((w) => { setCustom(null); return w; }));
-  const reroll = () => run(() => api(`/api/admin/words/${word.id}/reroll`, { method: "POST" }));
-  const excludeAndReroll = () => run(async () => {
-    await api("/api/admin/dictionary/excluded", { method: "POST", body: JSON.stringify({ word: word.word }) });
-    return api(`/api/admin/words/${word.id}/reroll`, { method: "POST" });
-  });
-
+  const post = (path, body) => api(path, { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) });
   const confirmed = word.status === "confirmed";
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #2a2a2c" }}>
@@ -56,35 +31,14 @@ function NextWord({ word, onChange, onOpenWords, isMobile }) {
         <span style={{ fontSize: 22, fontWeight: 700, textTransform: "uppercase", letterSpacing: 2 }}>{word.word}</span>
         <Chip color={confirmed ? "#538d4e" : "#b59f3b"}>{confirmed ? "подтверждено" : "предложено системой"}</Chip>
       </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {!confirmed && (
-          <button onClick={() => confirm(null)} disabled={busy} style={{ ...buttonStyle, ...touch(isMobile) }}>Подтвердить</button>
-        )}
-        <button onClick={reroll} disabled={busy} style={{ ...ghostButtonStyle, ...touch(isMobile) }}>Другое слово</button>
-        <button
-          onClick={excludeAndReroll} disabled={busy} style={{ ...ghostButtonStyle, ...touch(isMobile) }}
-          title="Исключить это слово из будущих предложений и сразу показать другое"
-        >
-          🚫 Исключить
-        </button>
-        <button onClick={() => setCustom(custom === null ? "" : null)} style={{ ...ghostButtonStyle, ...touch(isMobile) }}>Своё слово</button>
+      <WordActions
+        word={word.word}
+        onConfirm={confirmed ? undefined : async () => onChange(await post(`/api/admin/words/${word.id}/confirm`, { override_word: null }))}
+        onReroll={async () => onChange(await post(`/api/admin/words/${word.id}/reroll`))}
+        onReplace={async (text) => onChange(await post(`/api/admin/words/${word.id}/confirm`, { override_word: text }))}
+      >
         <button onClick={onOpenWords} style={{ ...ghostButtonStyle, ...touch(isMobile), opacity: 0.7 }}>Все слова →</button>
-      </div>
-      {custom !== null && (
-        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-          <input
-            autoFocus value={custom} onChange={(e) => setCustom(e.target.value)} maxLength={7} placeholder="Слово 5–7 букв"
-            style={{ ...inputStyle, flex: 1, minWidth: 0, ...touch(isMobile) }}
-          />
-          <button
-            onClick={() => confirm(custom.trim().toLowerCase())} disabled={busy || !WORD_RE.test(custom.trim())}
-            style={{ ...buttonStyle, ...touch(isMobile) }}
-          >
-            Заменить
-          </button>
-        </div>
-      )}
-      {error && <div style={{ color: "#e5484d", fontSize: 12, marginTop: 6 }}>{error}</div>}
+      </WordActions>
     </div>
   );
 }
