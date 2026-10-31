@@ -3,8 +3,9 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { ADMIN_BASE } from "../adminBase.js";
 import HallView from "../components/HallView.jsx";
 import TodayPanel from "./TodayPanel.jsx";
-import { api, TYPE_LABEL, LENGTHS, LengthSelect, useIsMobile, panelStyle, inputStyle, buttonStyle, ghostButtonStyle, thStyle, tdStyle } from "./adminShared.jsx";
+import { api, ModesContext, modeHelpers, useModes, LengthSelect, useIsMobile, panelStyle, inputStyle, buttonStyle, ghostButtonStyle, thStyle, tdStyle } from "./adminShared.jsx";
 import WordActions from "./WordActions.jsx";
+import { CreateWizard, TournamentSettings, summaryOf } from "./TournamentForm.jsx";
 import { askConfirm, ConfirmHost } from "./confirmDialog.jsx";
 import { CopyButton, downloadCanvas } from "./exportUtils.jsx";
 
@@ -18,15 +19,7 @@ function useLatest(value) {
   return ref;
 }
 
-const DEFAULT_SCORING = { "1": 10, "2": 5, "3": 4, "4": 3, "5": 2, "6": 1 };
 
-// Бонусные слова: после каких дней открываются бонусы при длительности D и N (для подсказок в настройках)
-const bonusDays = (duration, every) => {
-  const d = Number(duration);
-  const n = Number(every);
-  if (!d || !n || n < 1) return [];
-  return Array.from({ length: Math.floor(d / n) }, (_, i) => (i + 1) * n);
-};
 // Янтарная подсветка бонусных очков (таблица на экране и в картинке)
 const BONUS_BG = "rgba(229, 169, 76, 0.22)";
 const BONUS_BG_PNG = "#fbe3b0";
@@ -222,12 +215,14 @@ function LengthPlanGrid({ title, hint, colLabel, rows, slots, plan, base, onSave
 
 const STATUS_LABEL = { draft: "черновик", active: "идёт", tiebreak: "тай-брейк", playoff: "плей-офф", finished: "завершён" };
 
-// Подвкладки страницы розыгрыша — только те, что есть у режима.
-function subtabsFor(t) {
+// Подвкладки страницы розыгрыша — по модулям режима (реестр: api/modes.py).
+function subtabsFor(t, has) {
+  const any = (...modules) => modules.some((m) => has(t.type, m));
   const tabs = [{ key: "participants", label: "Участники" }];
-  if (t.type !== "knockout") tabs.push({ key: "words", label: "Слова" });
-  if (t.type === "marathon" || t.type === "tiebreak" || t.duration_days != null) tabs.push({ key: "results", label: "Результаты" });
-  if (t.type === "championship" || t.type === "knockout") tabs.push({ key: "bracket", label: t.type === "championship" ? "Плей-офф" : "Сетка" });
+  if (any("daily_words", "marathon_words", "tiebreak_words")) tabs.push({ key: "words", label: "Слова" });
+  if (any("standings", "marathon_results", "tiebreak_results")) tabs.push({ key: "results", label: "Результаты" });
+  if (any("playoff")) tabs.push({ key: "bracket", label: t.type === "championship" ? "Плей-офф" : "Сетка" });
+  tabs.push({ key: "settings", label: "Настройки" });
   return tabs;
 }
 
@@ -248,6 +243,7 @@ export default function AdminDashboard() {
   const [theme, setTheme] = useState("dark");
   const [teamsVersion, setTeamsVersion] = useState(0); // меняется при правке команд — командная таблица перечитывается
   const [entriesVersion, setEntriesVersion] = useState(0); // меняется при удалении игрока — панели тай-брейка перечитываются
+  const [modes, setModes] = useState(() => modeHelpers([]));
   const [needConfirm, setNeedConfirm] = useState(0); // сколько слов на завтра ждут подтверждения (значок на вкладке «Сегодня»)
   const [headerH, setHeaderH] = useState(0);
   const scrollPending = useRef(false);
@@ -259,7 +255,8 @@ export default function AdminDashboard() {
   // (иначе при первой загрузке могло открыться меню архивного розыгрыша).
   const firstLive = tournaments.find((t) => !t.archived) || tournaments[0] || null;
   const selected = tournaments.find((t) => String(t.id) === params.get("id")) || firstLive;
-  const subtabs = selected ? subtabsFor(selected) : [];
+  const { has, label: modeLabel } = modes;
+  const subtabs = selected ? subtabsFor(selected, has) : [];
   const sub = subtabs.some((s) => s.key === params.get("sub")) ? params.get("sub") : "participants";
 
   function go(patch) {
@@ -285,9 +282,13 @@ export default function AdminDashboard() {
     setTheme((await api("/api/admin/settings/theme")).theme);
   }
 
+  async function loadModes() {
+    setModes(modeHelpers(await api("/api/admin/modes")));
+  }
+
   useEffect(() => {
     api("/api/admin/me")
-      .then(() => Promise.all([refreshTournaments(), refreshUsers(), refreshTheme()]))
+      .then(() => Promise.all([refreshTournaments(), refreshUsers(), refreshTheme(), loadModes()]))
       .catch(() => {})
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -327,6 +328,7 @@ export default function AdminDashboard() {
   if (loading) return <Centered>Загрузка...</Centered>;
 
   return (
+    <ModesContext.Provider value={modes}>
     <div className="admin-root" style={{ minHeight: "100vh", background: "#121213", color: "#fff", fontFamily: "system-ui, sans-serif" }}>
       {isMobile && <style>{MOBILE_CSS}</style>}
       <ConfirmHost />
@@ -370,6 +372,7 @@ export default function AdminDashboard() {
               onSelect={(t) => { if (isMobile) scrollPending.current = true; go({ id: t.id }); }}
               onCreated={refreshTournaments}
               onActivated={refreshTournaments}
+              onOpenSettings={(t) => openTournament(t.id, "settings")}
             />
           </div>
           <div ref={contentRef} style={{ ...(isMobile ? {} : { flex: "2 1 500px" }), scrollMarginTop: headerH + 8, minWidth: 0 }}>
@@ -379,7 +382,7 @@ export default function AdminDashboard() {
                   {!isMobile && (
                     <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
                       <b style={{ fontSize: 16 }}>{selected.title}</b>
-                      <span style={{ fontSize: 12, opacity: 0.7 }}>{TYPE_LABEL[selected.type]} · {STATUS_LABEL[selected.status] || selected.status}</span>
+                      <span style={{ fontSize: 12, opacity: 0.7 }}>{modeLabel(selected.type)} · {STATUS_LABEL[selected.status] || selected.status}</span>
                     </div>
                   )}
                   <div style={{ display: "flex", gap: 6, overflowX: "auto" }}>
@@ -395,7 +398,7 @@ export default function AdminDashboard() {
                       tournament={selected} users={users} allTournaments={tournaments}
                       onEntriesChanged={() => setEntriesVersion((v) => v + 1)}
                     />
-                    {(selected.type === "marathon" || selected.type === "tiebreak") && selected.teams_enabled && (
+                    {has(selected.type, "teams") && selected.teams_enabled && (
                       <MarathonTeamsPanel tournament={selected} refreshKey={entriesVersion} onChanged={() => setTeamsVersion((v) => v + 1)} />
                     )}
                   </>
@@ -403,20 +406,20 @@ export default function AdminDashboard() {
 
                 {sub === "words" && (
                   <>
-                    {selected.type === "tiebreak" && (
+                    {has(selected.type, "tiebreak_words") && (
                       selected.teams_enabled
                         ? <TiebreakTeamWordsPanel tournament={selected} refreshKey={entriesVersion} />
                         : <TiebreakWordsPanel tournament={selected} />
                     )}
-                    {selected.type === "marathon" && (
+                    {has(selected.type, "marathon_words") && (
                       selected.individual_words
                         ? <MarathonIndividualWordsPanel tournament={selected} onTournamentChanged={refreshTournaments} />
                         : <MarathonWordsPanel tournament={selected} onTournamentChanged={refreshTournaments} />
                     )}
-                    {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <TodayWordPanel tournament={selected} />}
-                    {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordConfirmPanel tournament={selected} />}
-                    {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordHistoryPanel tournament={selected} />}
-                    {(selected.type === "standard" || selected.type === "championship") && selected.bonus_enabled && (
+                    {has(selected.type, "daily_words") && <TodayWordPanel tournament={selected} />}
+                    {has(selected.type, "daily_words") && <WordConfirmPanel tournament={selected} />}
+                    {has(selected.type, "daily_words") && <WordHistoryPanel tournament={selected} />}
+                    {has(selected.type, "bonus") && selected.bonus_enabled && (
                       <BonusWordsPanel tournament={selected} />
                     )}
                   </>
@@ -424,27 +427,31 @@ export default function AdminDashboard() {
 
                 {sub === "results" && (
                   <>
-                    {selected.type === "tiebreak" && (
+                    {has(selected.type, "tiebreak_results") && (
                       selected.teams_enabled
                         ? <TiebreakTeamResultsPanel tournament={selected} refreshKey={entriesVersion} />
                         : <TiebreakResultsPanel tournament={selected} refreshKey={entriesVersion} />
                     )}
-                    {selected.type === "marathon" && selected.teams_enabled && (
+                    {has(selected.type, "marathon_results") && selected.teams_enabled && (
                       <MarathonTeamStandingsPanel
                         tournament={selected} refreshKey={teamsVersion} tournaments={tournaments}
                         onTournamentsChanged={refreshTournaments}
                       />
                     )}
-                    {selected.type === "marathon" && <MarathonStandingsPanel tournament={selected} />}
-                    {selected.duration_days != null && <StandingsPanel tournament={selected} />}
+                    {has(selected.type, "marathon_results") && <MarathonStandingsPanel tournament={selected} />}
+                    {has(selected.type, "standings") && <StandingsPanel tournament={selected} />}
                   </>
                 )}
 
                 {sub === "bracket" && (
                   <>
-                    {selected.type === "championship" && <TiebreakPanel tournament={selected} onTournamentChanged={refreshTournaments} />}
+                    {has(selected.type, "tiebreak_phase") && <TiebreakPanel tournament={selected} onTournamentChanged={refreshTournaments} />}
                     <BracketPanel tournament={selected} onTournamentChanged={refreshTournaments} />
                   </>
+                )}
+
+                {sub === "settings" && (
+                  <TournamentSettings key={selected.id} tournament={selected} onSaved={refreshTournaments} />
                 )}
               </>
             ) : (
@@ -455,6 +462,7 @@ export default function AdminDashboard() {
       )}
       </div>
     </div>
+    </ModesContext.Provider>
   );
 }
 
@@ -1013,94 +1021,10 @@ function DictionaryPanel() {
   );
 }
 
-function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivated }) {
-  const [showForm, setShowForm] = useState(false);
-  const [title, setTitle] = useState("");
-  const [type, setType] = useState("standard");
-  const [startDate, setStartDate] = useState("");
-  const [duration, setDuration] = useState(20);
-  const [bracketSize, setBracketSize] = useState(16);
-  const [wordsCount, setWordsCount] = useState(5);
-  const [endDate, setEndDate] = useState("");
-  const [individualWords, setIndividualWords] = useState(false);
-  const [wordLength, setWordLength] = useState(5);
-  const [bonusEnabled, setBonusEnabled] = useState(false);
-  const [bonusEvery, setBonusEvery] = useState(5);
-  const [bonusLength, setBonusLength] = useState(6);
-  const [hashtag, setHashtag] = useState("");
-  const [note, setNote] = useState("");
-  const [error, setError] = useState("");
-  const [editingSettings, setEditingSettings] = useState(null); // id розыгрыша | null
-  const [settingsForm, setSettingsForm] = useState({
-    title: "", duration_days: "", hashtag: "", note: "", start_date: "", notify_admin: false, first_place: 1,
-    third_place_match: false, words_count: "", end_date: "", individual_words: false, teams_enabled: false,
-    bonus_enabled: false, bonus_every_days: "", bonus_default_length: 6,
-  });
-  const [telegramTest, setTelegramTest] = useState(null); // { ok, detail } | null
+function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivated, onOpenSettings }) {
+  const { label } = useModes();
+  const [showWizard, setShowWizard] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
-
-  const todayIso = new Date().toISOString().slice(0, 10);
-
-  function startEditSettings(t) {
-    setError("");
-    setEditingSettings(t.id);
-    setSettingsForm({
-      title: t.title, duration_days: t.duration_days ?? "", hashtag: t.hashtag || "",
-      note: t.note || "", start_date: t.start_date, notify_admin: !!t.notify_admin,
-      first_place: t.first_place ?? 1, third_place_match: !!t.third_place_match,
-      words_count: t.words_count ?? "", end_date: t.end_date || "", individual_words: !!t.individual_words,
-      teams_enabled: !!t.teams_enabled,
-      bonus_enabled: !!t.bonus_enabled, bonus_every_days: t.bonus_every_days ?? "", bonus_default_length: t.bonus_default_length || 6,
-    });
-    setTelegramTest(null);
-  }
-
-  async function handleTelegramTest() {
-    setTelegramTest({ ok: null, detail: "Отправляю..." });
-    try {
-      setTelegramTest(await api("/api/admin/telegram/test", { method: "POST" }));
-    } catch (e) {
-      setTelegramTest({ ok: false, detail: e.message });
-    }
-  }
-
-  async function handleSaveSettings(t) {
-    setError("");
-    try {
-      const body = {
-        title: settingsForm.title, hashtag: settingsForm.hashtag, note: settingsForm.note,
-        notify_admin: settingsForm.notify_admin,
-      };
-      if (t.type === "tiebreak") {
-        body.first_place = Number(settingsForm.first_place) || 1;
-        body.teams_enabled = settingsForm.teams_enabled;
-        if (settingsForm.end_date) body.end_date = settingsForm.end_date;
-        else if (t.end_date) body.clear_end_date = true;
-      }
-      if (supportsThirdPlace(t)) body.third_place_match = settingsForm.third_place_match;
-      if (t.type === "marathon") {
-        body.words_count = Number(settingsForm.words_count);
-        body.individual_words = settingsForm.individual_words;
-        body.teams_enabled = settingsForm.teams_enabled;
-        if (settingsForm.end_date) body.end_date = settingsForm.end_date;
-        else if (t.end_date) body.clear_end_date = true;
-      }
-      if (t.duration_days != null) body.duration_days = Number(settingsForm.duration_days);
-      if (t.type === "standard" || t.type === "championship") {
-        body.bonus_enabled = settingsForm.bonus_enabled;
-        if (settingsForm.bonus_enabled) body.bonus_every_days = Number(settingsForm.bonus_every_days);
-        body.bonus_default_length = Number(settingsForm.bonus_default_length);
-      }
-      if (t.start_date >= todayIso && settingsForm.start_date !== t.start_date) {
-        body.start_date = settingsForm.start_date;
-      }
-      await api(`/api/admin/tournaments/${t.id}`, { method: "PATCH", body: JSON.stringify(body) });
-      setEditingSettings(null);
-      onCreated();
-    } catch (e) {
-      setError(e.message);
-    }
-  }
 
   async function handleTogglePause(t) {
     await api(`/api/admin/tournaments/${t.id}/pause`, { method: "PATCH", body: JSON.stringify({ paused: !t.paused }) });
@@ -1110,46 +1034,6 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
   async function handleToggleArchived(t) {
     await api(`/api/admin/tournaments/${t.id}/archive`, { method: "PATCH", body: JSON.stringify({ archived: !t.archived }) });
     onActivated();
-  }
-
-  const needsDuration = type === "standard" || type === "championship";
-  const needsBracket = type === "knockout" || type === "championship";
-
-  async function handleCreate(e) {
-    e.preventDefault();
-    setError("");
-    try {
-      await api("/api/admin/tournaments", {
-        method: "POST",
-        body: JSON.stringify({
-          title,
-          type,
-          start_date: startDate,
-          duration_days: needsDuration ? Number(duration) : null,
-          scoring_rules: DEFAULT_SCORING,
-          skip_flag_symbol: "🚩",
-          bracket_size: needsBracket ? Number(bracketSize) : null,
-          words_count: type === "marathon" ? Number(wordsCount) : null,
-          individual_words: type === "marathon" ? individualWords : false,
-          word_length: wordLength,
-          bonus_enabled: needsDuration && bonusEnabled,
-          bonus_every_days: needsDuration && bonusEnabled ? Number(bonusEvery) : null,
-          bonus_default_length: Number(bonusLength),
-          end_date: (type === "marathon" || type === "tiebreak") && endDate ? endDate : null,
-          rounds_per_match: 1,
-          hashtag: hashtag.trim() || null,
-          note: note.trim() || null,
-        }),
-      });
-      setShowForm(false);
-      setTitle("");
-      setStartDate("");
-      setHashtag("");
-      setNote("");
-      onCreated();
-    } catch (e) {
-      setError(e.message);
-    }
   }
 
   function renderCard(t) {
@@ -1183,259 +1067,37 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
           )}
         </div>
         <div style={{ fontSize: 13, opacity: 0.7 }}>
-          {TYPE_LABEL[t.type] || t.type} · {t.start_date}
-          {t.duration_days != null ? ` · ${t.duration_days} дн.` : ""}
-          {t.word_length && t.word_length !== 5 ? ` · ${t.word_length} букв` : ""}
-          {t.type === "marathon" && t.words_count != null ? ` · ${t.words_count} сл.${t.individual_words ? " (личные)" : ""}${t.teams_enabled ? " · команды" : ""}` : ""}{t.type === "tiebreak" && t.teams_enabled ? " · команды" : ""}{t.type === "tiebreak" && t.end_date ? ` · до ${t.end_date}` : ""}{t.bonus_enabled ? ` · бонусы каждые ${t.bonus_every_days} дн.` : ""} · {STATUS_LABEL[t.status] || t.status}
+          {label(t.type)} · {summaryOf(t)} · {STATUS_LABEL[t.status] || t.status}
         </div>
-        {t.note && editingSettings !== t.id && (
+        {t.note && (
           <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4, whiteSpace: "pre-wrap" }}>{t.note}</div>
         )}
-        {editingSettings === t.id ? (
-          <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
-            <input
-              value={settingsForm.title}
-              onChange={(e) => setSettingsForm((f) => ({ ...f, title: e.target.value }))}
-              placeholder="Название (день/стадия добавляются автоматически)"
-              style={{ ...inputStyle, fontSize: 12, padding: "4px 6px" }}
-            />
-            {t.start_date >= todayIso && (
-              <label style={{ fontSize: 11, opacity: 0.7 }}>
-                Дата старта (розыгрыш ещё не начался)
-                <input
-                  type="date" min={todayIso}
-                  value={settingsForm.start_date}
-                  onChange={(e) => setSettingsForm((f) => ({ ...f, start_date: e.target.value }))}
-                  style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", marginTop: 2 }}
-                />
-              </label>
-            )}
-            {t.type === "marathon" && (
-              <>
-                <label style={{ fontSize: 11, opacity: 0.8 }}>
-                  Число слов (увеличить можно всегда, уменьшить — пока убираемые слова не начаты)
-                  <input
-                    type="number" min={1} max={30} value={settingsForm.words_count}
-                    onChange={(e) => setSettingsForm((f) => ({ ...f, words_count: e.target.value }))}
-                    style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", marginTop: 2, width: 90, display: "block" }}
-                  />
-                </label>
-                <label style={{ fontSize: 11, opacity: 0.8 }}>
-                  Дата окончания (пусто — без срока)
-                  <input
-                    type="date" min={t.start_date} value={settingsForm.end_date}
-                    onChange={(e) => setSettingsForm((f) => ({ ...f, end_date: e.target.value }))}
-                    style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", marginTop: 2, display: "block" }}
-                  />
-                </label>
-              </>
-            )}
-            {t.type === "marathon" && (
-              <div>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-                  <input
-                    type="checkbox" checked={settingsForm.individual_words}
-                    onChange={(e) => setSettingsForm((f) => ({ ...f, individual_words: e.target.checked }))}
-                  />
-                  У каждого участника свой набор слов
-                </label>
-                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
-                  Менять режим можно, пока никто не сделал ни одной догадки: слова пересоздаются заново.
-                </div>
-              </div>
-            )}
-            {t.type === "marathon" && (
-              <div>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-                  <input
-                    type="checkbox" checked={settingsForm.teams_enabled}
-                    onChange={(e) => setSettingsForm((f) => ({ ...f, teams_enabled: e.target.checked }))}
-                  />
-                  Командный зачёт
-                </label>
-                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
-                  Админ собирает игроков в команды (от 2 человек); место команды — по среднему числу попыток на слово.
-                  Игра для участников не меняется, в копируемый результат добавляется название команды.
-                </div>
-                {settingsForm.teams_enabled && !settingsForm.individual_words && (
-                  <div style={{ fontSize: 11, color: "#e5a94c", marginTop: 2 }}>
-                    Внимание: у всех общий набор слов — участники одной команды могут подсказывать друг другу ответы.
-                    Командный зачёт рассчитан на личные наборы слов.
-                  </div>
-                )}
-              </div>
-            )}
-            {t.type === "tiebreak" && (
-              <label style={{ fontSize: 11, opacity: 0.8 }}>
-                Дата окончания (пусто — раунд закрывается в конце дня, в который он начался)
-                <input
-                  type="date" min={t.start_date} value={settingsForm.end_date}
-                  onChange={(e) => setSettingsForm((f) => ({ ...f, end_date: e.target.value }))}
-                  style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", marginTop: 2, display: "block" }}
-                />
-                <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
-                  Игроки могут играть раунд до конца этого дня; тай-брейк закрывается, когда доиграли все, либо по истечении срока.
-                </span>
-              </label>
-            )}
-            {t.type === "tiebreak" && (
-              <div>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-                  <input
-                    type="checkbox" checked={settingsForm.teams_enabled}
-                    onChange={(e) => setSettingsForm((f) => ({ ...f, teams_enabled: e.target.checked }))}
-                  />
-                  Командный тай-брейк
-                </label>
-                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
-                  Места разыгрывают команды (от 2 подключённых игроков): у каждого игрока в раунде своё слово, результат
-                  команды — среднее число попыток (не угадал — 7, не завершил или не играл — 8). Включить и собрать команды нужно до
-                  начала: после старта менять нельзя.
-                </div>
-              </div>
-            )}
-            {t.duration_days != null && (
-              <input
-                type="number" min={1}
-                value={settingsForm.duration_days}
-                onChange={(e) => setSettingsForm((f) => ({ ...f, duration_days: e.target.value }))}
-                placeholder="Длительность (дней)"
-                style={{ ...inputStyle, fontSize: 12, padding: "4px 6px" }}
-              />
-            )}
-            {(t.type === "standard" || t.type === "championship") && (
-              <div>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-                  <input
-                    type="checkbox" checked={settingsForm.bonus_enabled}
-                    onChange={(e) => setSettingsForm((f) => ({ ...f, bonus_enabled: e.target.checked }))}
-                  />
-                  Бонусные слова
-                </label>
-                {settingsForm.bonus_enabled && (
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 4, fontSize: 11 }}>
-                    <label>
-                      за каждые{" "}
-                      <input
-                        type="number" min={1} value={settingsForm.bonus_every_days}
-                        onChange={(e) => setSettingsForm((f) => ({ ...f, bonus_every_days: e.target.value }))}
-                        style={{ ...inputStyle, fontSize: 12, padding: "2px 6px", width: 60, display: "inline-block" }}
-                      />{" "}
-                      дн. без пропуска
-                    </label>
-                    <label>
-                      длина новых слов{" "}
-                      <select
-                        value={settingsForm.bonus_default_length}
-                        onChange={(e) => setSettingsForm((f) => ({ ...f, bonus_default_length: Number(e.target.value) }))}
-                        style={{ ...inputStyle, fontSize: 12, padding: "2px 4px", width: "auto", display: "inline-block" }}
-                      >
-                        {LENGTHS.map((n) => <option key={n} value={n}>{n} букв</option>)}
-                      </select>
-                    </label>
-                  </div>
-                )}
-                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
-                  Игрок, не пропустивший ни одного дня блока из N дней, получает право в последний день блока (после слова дня)
-                  отгадать бонусное слово за очки по шкале розыгрыша — только в этот день.
-                  {settingsForm.bonus_enabled && bonusDays(settingsForm.duration_days, settingsForm.bonus_every_days).length > 0
-                    && ` Бонусы откроются в дни: ${bonusDays(settingsForm.duration_days, settingsForm.bonus_every_days).join(", ")}.`}
-                  {t.bonus_enabled && " Менять N и выключать бонусы можно, пока их никто не сыграл."}
-                </div>
-              </div>
-            )}
-            <input
-              value={settingsForm.hashtag}
-              onChange={(e) => setSettingsForm((f) => ({ ...f, hashtag: e.target.value }))}
-              placeholder="Хэштег для результата (например #вордли)"
-              style={{ ...inputStyle, fontSize: 12, padding: "4px 6px" }}
-            />
-            <textarea
-              value={settingsForm.note}
-              onChange={(e) => setSettingsForm((f) => ({ ...f, note: e.target.value }))}
-              placeholder="Заметка админа (описание, игрокам не видна)"
-              style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", minHeight: 44, resize: "vertical" }}
-            />
-            {t.type === "tiebreak" && (
-              <label style={{ fontSize: 11, opacity: 0.8 }}>
-                Первое разыгрываемое место (например, 13, если разыгрываются места 13-15)
-                <input
-                  type="number" min={1}
-                  value={settingsForm.first_place}
-                  onChange={(e) => setSettingsForm((f) => ({ ...f, first_place: e.target.value }))}
-                  style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", marginTop: 2, width: 90, display: "block" }}
-                />
-              </label>
-            )}
-            {supportsThirdPlace(t) && (
-              <div>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-                  <input
-                    type="checkbox" checked={settingsForm.third_place_match}
-                    onChange={(e) => setSettingsForm((f) => ({ ...f, third_place_match: e.target.checked }))}
-                  />
-                  Игра за 3 место
-                </label>
-                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
-                  Проигравшие полуфиналов играют отдельную игру в день финала. Включить можно в любой день до конца
-                  розыгрыша, отключить — пока в игре нет ни одной догадки.
-                </div>
-              </div>
-            )}
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-              <input
-                type="checkbox" checked={settingsForm.notify_admin}
-                onChange={(e) => setSettingsForm((f) => ({ ...f, notify_admin: e.target.checked }))}
-              />
-              Уведомлять меня в Telegram, когда игрок закончил партию
-            </label>
-            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 11 }}>
-              <button
-                type="button" onClick={handleTelegramTest}
-                style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}
-              >
-                Отправить тестовое сообщение
-              </button>
-              {telegramTest && (
-                <span style={{ color: telegramTest.ok === false ? "#e5484d" : telegramTest.ok ? "#538d4e" : undefined, opacity: 0.9 }}>
-                  {telegramTest.detail}
-                </span>
-              )}
-            </div>
-            {error && <div style={{ color: "#e5484d", fontSize: 12 }}>{error}</div>}
-            <div style={{ display: "flex", gap: 4 }}>
-              <button onClick={() => handleSaveSettings(t)} style={{ ...buttonStyle, padding: "2px 8px", fontSize: 11 }}>OK</button>
-              <button onClick={() => setEditingSettings(null)} style={{ ...ghostButtonStyle, padding: "2px 8px", fontSize: 11 }}>Отмена</button>
-            </div>
-          </div>
-        ) : (
-          <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-            {(t.status === "active" || t.status === "tiebreak" || t.status === "playoff") && (
-              <button
-                onClick={(e) => { e.stopPropagation(); handleTogglePause(t); }}
-                title="Немедленно блокирует игру для всех участников без изменения статуса розыгрыша"
-                style={{ ...ghostButtonStyle, fontSize: 12 }}
-              >
-                {t.paused ? "Возобновить" : "Приостановить"}
-              </button>
-            )}
-            {(t.archived || t.status === "finished" || t.paused) && (
-              <button
-                onClick={(e) => { e.stopPropagation(); handleToggleArchived(t); }}
-                title="Убрать розыгрыш с глаз долой в архив (или вернуть обратно)"
-                style={{ ...ghostButtonStyle, fontSize: 12 }}
-              >
-                {t.archived ? "Вернуть из архива" : "В архив"}
-              </button>
-            )}
+        <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+          {(t.status === "active" || t.status === "tiebreak" || t.status === "playoff") && (
             <button
-              onClick={(e) => { e.stopPropagation(); startEditSettings(t); }}
+              onClick={(e) => { e.stopPropagation(); handleTogglePause(t); }}
+              title="Немедленно блокирует игру для всех участников без изменения статуса розыгрыша"
               style={{ ...ghostButtonStyle, fontSize: 12 }}
             >
-              Настройки
+              {t.paused ? "Возобновить" : "Приостановить"}
             </button>
-          </div>
-        )}
+          )}
+          {(t.archived || t.status === "finished" || t.paused) && (
+            <button
+              onClick={(e) => { e.stopPropagation(); handleToggleArchived(t); }}
+              title="Убрать розыгрыш с глаз долой в архив (или вернуть обратно)"
+              style={{ ...ghostButtonStyle, fontSize: 12 }}
+            >
+              {t.archived ? "Вернуть из архива" : "В архив"}
+            </button>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); onOpenSettings(t); }}
+            style={{ ...ghostButtonStyle, fontSize: 12 }}
+          >
+            Настройки
+          </button>
+        </div>
       </div>
     );
   }
@@ -1482,109 +1144,13 @@ function TournamentPanel({ tournaments, selected, onSelect, onCreated, onActivat
         </div>
       )}
 
-      {!showForm ? (
-        <button onClick={() => setShowForm(true)} style={buttonStyle}>+ Новый розыгрыш</button>
+      {!showWizard ? (
+        <button onClick={() => setShowWizard(true)} style={buttonStyle}>+ Новый розыгрыш</button>
       ) : (
-        <form onSubmit={handleCreate} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
-          <input
-            placeholder="Название (день/стадия добавляются автоматически)"
-            value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} required
-          />
-          <select value={type} onChange={(e) => setType(e.target.value)} style={inputStyle}>
-            <option value="standard">Стандартный</option>
-            <option value="championship">Чемпионат (+ плей-офф)</option>
-            <option value="knockout">На вылет</option>
-            <option value="endless">Бессрочная игра (без очков и таблицы)</option>
-            <option value="tiebreak">Тай-брейк (распределение мест за один день)</option>
-            <option value="marathon">Марафон (несколько слов подряд)</option>
-          </select>
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={inputStyle} required />
-          <label style={{ fontSize: 12, opacity: 0.8 }}>
-            Длина слов{type === "marathon" || needsBracket || type === "tiebreak" ? " (базовая — по позициям можно будет менять)" : ""}
-            <select value={wordLength} onChange={(e) => setWordLength(Number(e.target.value))} style={{ ...inputStyle, display: "block", marginTop: 2 }}>
-              {LENGTHS.map((n) => <option key={n} value={n}>{n} букв{n === 5 ? " (обычная)" : ""}</option>)}
-            </select>
-          </label>
-          {needsDuration && (
-            <input type="number" placeholder="Длительность (дней)" value={duration} onChange={(e) => setDuration(e.target.value)} style={inputStyle} required min={1} />
-          )}
-          {needsDuration && (
-            <div>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-                <input type="checkbox" checked={bonusEnabled} onChange={(e) => setBonusEnabled(e.target.checked)} />
-                Бонусные слова
-              </label>
-              {bonusEnabled && (
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 4, fontSize: 12 }}>
-                  <label>
-                    за каждые{" "}
-                    <input
-                      type="number" min={1} max={Number(duration) || undefined} value={bonusEvery}
-                      onChange={(e) => setBonusEvery(e.target.value)} style={{ ...inputStyle, width: 70, display: "inline-block" }}
-                    />{" "}
-                    дн. без пропуска
-                  </label>
-                  <label>
-                    длина слов{" "}
-                    <select value={bonusLength} onChange={(e) => setBonusLength(Number(e.target.value))} style={{ ...inputStyle, width: "auto", display: "inline-block" }}>
-                      {LENGTHS.map((n) => <option key={n} value={n}>{n} букв</option>)}
-                    </select>
-                  </label>
-                  <div style={{ opacity: 0.6, width: "100%" }}>
-                    {bonusDays(duration, bonusEvery).length > 0
-                      ? `Бонусные слова откроются в дни: ${bonusDays(duration, bonusEvery).join(", ")}. Длину каждого слова можно будет изменить отдельно.`
-                      : "При такой длительности бонусных слов не будет — уменьшите N."}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          {type === "marathon" && (
-            <>
-              <label style={{ fontSize: 12, opacity: 0.8 }}>
-                Число слов (от 1 до 30)
-                <input
-                  type="number" placeholder="Число слов (1-30)" value={wordsCount}
-                  onChange={(e) => setWordsCount(e.target.value)} style={{ ...inputStyle, display: "block", marginTop: 2 }}
-                  required min={1} max={30}
-                />
-              </label>
-              <label style={{ fontSize: 12, opacity: 0.8 }}>
-                Дата окончания (необязательно: без неё игра идёт, пока вы её не закроете)
-                <input
-                  type="date" value={endDate} min={startDate || undefined}
-                  onChange={(e) => setEndDate(e.target.value)} style={{ ...inputStyle, display: "block", marginTop: 2 }}
-                />
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-                <input type="checkbox" checked={individualWords} onChange={(e) => setIndividualWords(e.target.checked)} />
-                У каждого участника свой набор слов
-              </label>
-            </>
-          )}
-          {type === "tiebreak" && (
-            <label style={{ fontSize: 12, opacity: 0.8 }}>
-              Дата окончания (необязательно: без неё раунд закрывается в конце дня старта)
-              <input
-                type="date" value={endDate} min={startDate || undefined}
-                onChange={(e) => setEndDate(e.target.value)} style={{ ...inputStyle, display: "block", marginTop: 2 }}
-              />
-            </label>
-          )}
-          {needsBracket && (
-            <input type="number" placeholder="Размер сетки (степень двойки)" value={bracketSize} onChange={(e) => setBracketSize(e.target.value)} style={inputStyle} required min={2} />
-          )}
-          <input placeholder="Хэштег для результата (например #вордли), опционально" value={hashtag} onChange={(e) => setHashtag(e.target.value)} style={inputStyle} />
-          <textarea
-            placeholder="Заметка админа (описание, игрокам не видна), опционально"
-            value={note} onChange={(e) => setNote(e.target.value)} style={{ ...inputStyle, minHeight: 50, resize: "vertical" }}
-          />
-          {error && <div style={{ color: "#e5484d" }}>{error}</div>}
-          <div style={{ display: "flex", gap: 8 }}>
-            <button type="submit" style={buttonStyle}>Создать</button>
-            <button type="button" onClick={() => setShowForm(false)} style={ghostButtonStyle}>Отмена</button>
-          </div>
-        </form>
+        <CreateWizard
+          onCreated={async () => { setShowWizard(false); await onCreated(); }}
+          onCancel={() => setShowWizard(false)}
+        />
       )}
     </div>
   );
@@ -1647,6 +1213,7 @@ function ClearableInput({ value, onClear, style, inputStyle: customInputStyle, .
 
 function EntriesPanel({ tournament, users, allTournaments, onEntriesChanged }) {
   const isMobile = useIsMobile();
+  const { has } = useModes();
   const tournamentIdRef = useLatest(tournament.id);
   const [entries, setEntries] = useState([]);
   const [userId, setUserId] = useState("");
@@ -1706,7 +1273,7 @@ function EntriesPanel({ tournament, users, allTournaments, onEntriesChanged }) {
   const inactiveCount = entries.length - activeCount;
   const playedTodayCount = entries.filter((e) => e.active && e.played_today).length;
   // Режимы, где в списке показывается, сыграл ли участник сегодня.
-  const tracksToday = ["endless", "standard", "knockout"].includes(tournament.type);
+  const tracksToday = has(tournament.type, "tracks_today");
   // Зелёный — уже сыграл, жёлтый — ещё нет; в knockout жёлтым только те, у кого
   // сегодня вообще есть игра (выбывшие/ждущие следующий раунд не подсвечиваются).
   function todayColor(e) {
@@ -5066,10 +4633,6 @@ function TiebreakPanel({ tournament, onTournamentChanged }) {
 const MATCH_STATUS_LABEL = { pending: "ожидает", in_progress: "идёт", finished: "завершён" };
 
 // Опция "игра за 3 место" — только в розыгрышах с сеткой плей-офф от 4 участников.
-function supportsThirdPlace(t) {
-  return (t.type === "championship" || t.type === "knockout") && (t.bracket_size || 0) >= 4;
-}
-
 function formatAttempts(attemptsUsed, solved) {
   if (attemptsUsed == null) return "";
   return `(${solved ? attemptsUsed : "X"}/6)`;

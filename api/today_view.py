@@ -13,12 +13,12 @@ from datetime import timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api import crud, marathon
+from api.modes import has as mode_has
 from api.models import Tournament, TournamentStatus, TournamentType
 from api.tournament_time import today, day_number_for_date, effective_status
 
 MAX_ATTEMPTS = 6
 UPCOMING_DRAFT_DAYS = 3   # ещё не начавшийся розыгрыш показываем, если стартует не позже чем через столько дней
-NO_DAILY_WORD = (TournamentType.knockout, TournamentType.tiebreak, TournamentType.marathon)
 
 
 def _iso_utc(naive_dt) -> str | None:
@@ -135,7 +135,7 @@ async def _tiebreak_results(session: AsyncSession, tournament: Tournament, entri
 
 async def _upcoming_word(session: AsyncSession, tournament: Tournament) -> dict | None:
     """Слово на ближайший ещё не наступивший день — как GET /tournaments/{id}/words/upcoming."""
-    if tournament.type in NO_DAILY_WORD:
+    if not mode_has(tournament.type, "daily_words"):
         return None
     next_day = max(day_number_for_date(tournament.start_date, today()), 0) + 1
     if tournament.duration_days is not None and next_day > tournament.duration_days:

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, TYPE_LABEL, useIsMobile, panelStyle, ghostButtonStyle } from "./adminShared.jsx";
+import { api, useModes, useIsMobile, panelStyle, ghostButtonStyle } from "./adminShared.jsx";
 import WordActions from "./WordActions.jsx";
 
 const REFRESH_MS = 60000;
@@ -54,6 +54,7 @@ function ProgressBar({ done, inProgress, total }) {
 }
 
 function Card({ card, onOpen, onWordChange, isMobile }) {
+  const { label } = useModes();
   const [showAll, setShowAll] = useState(false);
   const results = showAll ? card.results : card.results.slice(0, RESULTS_SHOWN);
   const started = card.status !== "draft";
@@ -64,7 +65,7 @@ function Card({ card, onOpen, onWordChange, isMobile }) {
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 16, overflowWrap: "anywhere" }}>{card.title}</div>
           <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>
-            {TYPE_LABEL[card.type] || card.type}{card.label ? ` · ${card.label}` : ""}
+            {label(card.type)}{card.label ? ` · ${card.label}` : ""}
           </div>
         </div>
         <button onClick={() => onOpen(card.id, "participants")} style={{ ...ghostButtonStyle, ...touch(isMobile), flexShrink: 0 }}>Открыть →</button>

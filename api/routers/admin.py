@@ -47,6 +47,7 @@ from api import crud, tiebreak, bracket, bracket_game, notify, marathon, teams, 
 from api import word_plan as wp
 from api.standings_view import compute_standings
 from api.today_view import build_today
+from api.modes import modes_out, has as mode_has
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -279,14 +280,14 @@ async def create_tournament(
     except ValueError:
         raise HTTPException(status_code=400, detail="Неизвестный тип розыгрыша")
 
-    if t_type in (TournamentType.standard, TournamentType.championship) and not payload.duration_days:
+    if mode_has(t_type, "duration") and not payload.duration_days:
         raise HTTPException(status_code=400, detail="Для этого типа розыгрыша нужно указать длительность в днях")
 
     if payload.bracket_size is not None:
         n = payload.bracket_size
         if n <= 0 or (n & (n - 1)) != 0:
             raise HTTPException(status_code=400, detail="Размер сетки должен быть степенью двойки")
-    if t_type == TournamentType.knockout and not payload.bracket_size:
+    if t_type == TournamentType.knockout and not payload.bracket_size:  # у чемпионата размер необязателен: берётся из итогов
         raise HTTPException(status_code=400, detail="Для розыгрыша на вылет нужно указать размер сетки")
 
     if payload.word_length not in SUPPORTED_LENGTHS:
@@ -294,12 +295,12 @@ async def create_tournament(
     if payload.bonus_default_length not in SUPPORTED_LENGTHS:
         raise HTTPException(status_code=400, detail="Длина бонусных слов должна быть 5, 6 или 7 букв")
     if payload.bonus_enabled:
-        if t_type not in (TournamentType.standard, TournamentType.championship):
+        if not mode_has(t_type, "bonus"):
             raise HTTPException(status_code=400, detail="Бонусные слова есть только у Стандартного режима и Чемпионата")
         if not payload.bonus_every_days or not (1 <= payload.bonus_every_days <= (payload.duration_days or 0)):
             raise HTTPException(status_code=400, detail="N (бонус за каждые N дней) — от 1 до длительности розыгрыша")
 
-    if t_type == TournamentType.marathon:
+    if mode_has(t_type, "words_count"):
         if payload.words_count is None or not (marathon.MIN_WORDS <= payload.words_count <= marathon.MAX_WORDS):
             raise HTTPException(
                 status_code=400, detail=f"Число слов должно быть от {marathon.MIN_WORDS} до {marathon.MAX_WORDS}"
@@ -310,7 +311,7 @@ async def create_tournament(
     if t_type == TournamentType.tiebreak:
         if payload.end_date is not None and payload.end_date < payload.start_date:
             raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты старта")
-    elif t_type != TournamentType.marathon and payload.end_date is not None:
+    elif not mode_has(t_type, "end_date") and payload.end_date is not None:
         raise HTTPException(status_code=400, detail="Дата окончания задаётся только у марафона и тай-брейка")
 
     if t_type == TournamentType.endless:
@@ -321,19 +322,15 @@ async def create_tournament(
         if other is not None:
             raise HTTPException(status_code=400, detail=f"Уже идёт бессрочная игра «{other.title}» — сначала завершите её")
 
-    no_duration_types = (TournamentType.knockout, TournamentType.endless, TournamentType.tiebreak, TournamentType.marathon)
     tournament = Tournament(
         title=payload.title,
         type=t_type,
         start_date=payload.start_date,
-        duration_days=payload.duration_days if t_type not in no_duration_types else None,
-        scoring_rules=(
-            payload.scoring_rules
-            if t_type not in (TournamentType.endless, TournamentType.tiebreak, TournamentType.marathon) else None
-        ),
-        words_count=payload.words_count if t_type == TournamentType.marathon else None,
-        end_date=payload.end_date if t_type in (TournamentType.marathon, TournamentType.tiebreak) else None,
-        individual_words=bool(payload.individual_words) and t_type == TournamentType.marathon,
+        duration_days=payload.duration_days if mode_has(t_type, "duration") else None,
+        scoring_rules=payload.scoring_rules if mode_has(t_type, "scoring") else None,
+        words_count=payload.words_count if mode_has(t_type, "words_count") else None,
+        end_date=payload.end_date if mode_has(t_type, "end_date") else None,
+        individual_words=bool(payload.individual_words) and mode_has(t_type, "individual_words"),
         word_length=payload.word_length,
         bonus_enabled=bool(payload.bonus_enabled),
         bonus_every_days=payload.bonus_every_days if payload.bonus_enabled else None,
@@ -403,6 +400,13 @@ async def _sync_bonus_words(session: AsyncSession, tournament: Tournament) -> No
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError:
         raise HTTPException(status_code=400, detail="В словаре не хватает слов нужной длины для бонусов")
+
+
+@router.get("/modes")
+async def get_modes(_: None = Depends(require_admin)):
+    """Реестр режимов: название, описание и набор модулей каждого (см. api/modes.py) — по нему админка
+    строит мастер создания розыгрыша, форму настроек, подвкладки и панели."""
+    return modes_out()
 
 
 @router.get("/today")
@@ -631,7 +635,7 @@ async def add_entry(
 async def get_entries(tournament_id: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
     entries = await crud.list_entries(session, tournament_id)
     tournament = await crud.get_tournament(session, tournament_id)
-    if tournament is None or tournament.type not in (TournamentType.endless, TournamentType.standard, TournamentType.knockout):
+    if tournament is None or not mode_has(tournament.type, "tracks_today"):
         return entries
     attempts_by_entry = await crud.get_entries_played_today(session, tournament)
     game_today_ids = None
@@ -1116,7 +1120,7 @@ async def get_upcoming_word(tournament_id: int, session: AsyncSession = Depends(
     tournament = await crud.get_tournament(session, tournament_id)
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
-    if tournament.type in (TournamentType.knockout, TournamentType.tiebreak, TournamentType.marathon):
+    if not mode_has(tournament.type, "daily_words"):
         raise HTTPException(status_code=400, detail="У этого типа розыгрыша нет ежедневного слова")
 
     current_day = day_number_for_date(tournament.start_date, today())
@@ -1139,7 +1143,7 @@ async def get_today_word(tournament_id: int, session: AsyncSession = Depends(get
     tournament = await crud.get_tournament(session, tournament_id)
     if tournament is None:
         raise HTTPException(status_code=404, detail="Розыгрыш не найден")
-    if tournament.type in (TournamentType.knockout, TournamentType.tiebreak, TournamentType.marathon):
+    if not mode_has(tournament.type, "daily_words"):
         raise HTTPException(status_code=400, detail="У этого типа розыгрыша нет слова дня")
 
     current_day = day_number_for_date(tournament.start_date, today())

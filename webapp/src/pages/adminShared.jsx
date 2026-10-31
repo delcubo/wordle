@@ -1,6 +1,6 @@
 // Общее для страниц админки: запросы к API, стили, хук ширины экрана. Вынесено из AdminDashboard.jsx,
 // чтобы новые экраны (например «Сегодня») можно было держать в отдельных файлах.
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { ADMIN_BASE } from "../adminBase.js";
 
 export const LENGTHS = [5, 6, 7];
@@ -61,3 +61,18 @@ export function LengthSelect({ value, onChange, disabled, allowEmpty, emptyLabel
     </select>
   );
 }
+
+// Реестр режимов (GET /api/admin/modes, см. api/modes.py): название, описание и модули каждого режима.
+// Админка строит по нему мастер создания, форму настроек, подвкладки и панели.
+export function modeHelpers(list) {
+  const byType = Object.fromEntries((list || []).map((m) => [m.type, m]));
+  return {
+    list: list || [],
+    byType,
+    has: (type, module) => !!byType[type] && byType[type].modules.includes(module),
+    label: (type) => (byType[type] && byType[type].label) || TYPE_LABEL[type] || type,
+  };
+}
+
+export const ModesContext = createContext(modeHelpers([]));
+export const useModes = () => useContext(ModesContext);
