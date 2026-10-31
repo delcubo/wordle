@@ -1,6 +1,6 @@
 // Общее для страниц админки: запросы к API, стили, хук ширины экрана. Вынесено из AdminDashboard.jsx,
 // чтобы новые экраны (например «Сегодня») можно было держать в отдельных файлах.
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { ADMIN_BASE } from "../adminBase.js";
 
 export const LENGTHS = [5, 6, 7];
@@ -76,3 +76,19 @@ export function modeHelpers(list) {
 
 export const ModesContext = createContext(modeHelpers([]));
 export const useModes = () => useContext(ModesContext);
+
+// Всегда актуальное значение для отбрасывания устаревших ответов — если
+// админ успел переключиться на другой розыгрыш/матч, пока запрос летал,
+// применять его результат уже нельзя (иначе на экране повиснут данные не
+// того розыгрыша под правильным заголовком). См. refresh() в панелях ниже.
+export function useLatest(value) {
+  const ref = useRef(value);
+  ref.current = value;
+  return ref;
+}
+
+export const STATUS_LABEL = { draft: "черновик", active: "идёт", tiebreak: "тай-брейк", playoff: "плей-офф", finished: "завершён" };
+
+export function userLabel(u) {
+  return u.admin_note || `Игрок #${u.id}`;
+}

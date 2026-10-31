@@ -255,7 +255,7 @@ async def add_all_users(session: AsyncSession, tournament: Tournament) -> int:
     (неудалённых) игроков — чтобы не добавлять по одному вручную. Уже
     подключённых пропускает; тех, кого раньше отключили от ЭТОГО розыгрыша,
     просто подключает обратно (сохраняя прежний позывной и историю попыток —
-    как при подключении по одному, см. api/routers/admin.py::add_entry).
+    как при подключении по одному, см. api/routers/admin/entries.py::add_entry).
     Новым (никогда не участвовавшим в этом розыгрыше) подбирает позывной по
     умолчанию (см. _pick_default_callsign).
 
@@ -495,7 +495,7 @@ async def reset_todays_attempt(session: AsyncSession, entry: TournamentEntry, to
     Attempt целиком, чтобы для игрока это выглядело так, будто он ещё не
     играл сегодня (get_or_create_attempt на следующей отправке заведёт новую
     попытку с нуля). Не про исправление результата (см. override_day_result в
-    api/routers/admin.py) — про полный повторный шанс на сегодня.
+    api/routers/admin/standings.py) — про полный повторный шанс на сегодня.
 
     Не применимо к knockout (там нет слова дня вне сетки) и к tiebreak (там
     номер дня раундовый, а не календарный — см. api/routers/game.py::_resolve_context)
@@ -712,7 +712,7 @@ async def override_attempt(
     """
     Создаёт или перезаписывает Attempt результатом, заданным админом вручную
     (исправление ошибки или зачёт дня, который участник не мог сыграть) —
-    см. api/routers/admin.py::override_day_result. Реальные guesses при этом
+    см. api/routers/admin/standings.py::override_day_result. Реальные guesses при этом
     не восстанавливаются, только итог (сколько попыток, угадал ли, очки).
     """
     from datetime import datetime

@@ -61,7 +61,13 @@ wordle-app/
 │   ├── data/answer_words.txt               # 3 567 существительных в им. падеже — рабочий словарь
 │   └── routers/
 │       ├── game.py                          # my-tournaments / today / guess (по токену + tournament_id)
-│       └── admin.py                          # users / tournaments / entries / words / standings
+│       └── admin/                            # админка по областям (подключаются в __init__.py):
+│           ├── tournaments.py, entries.py, users.py     # розыгрыши, участие, игроки
+│           ├── words.py, bonus.py, marathon.py, teams.py # слова дня, бонусы, марафон, команды
+│           ├── standings.py, tiebreak.py, bracket.py     # таблица и ничьи, тай-брейк, сетка плей-офф
+│           └── auth.py, dictionary.py, common.py         # вход/тема, словарь, общие помощники
+│   ├── modes.py                      # реестр режимов: модули каждого (настройки и панели админки)
+│   └── today_view.py                 # экран админки «Сегодня»
 │
 ├── scripts/
 │   ├── build_answer_words.py  # пересборка api/data/answer_words.txt (нужен pymorphy3, не для рантайма)
@@ -77,7 +83,11 @@ wordle-app/
 │           ├── MyTournaments.jsx    # список розыгрышей игрока
 │           ├── PlayerGame.jsx        # игра в конкретном розыгрыше
 │           ├── AdminLogin.jsx         # вход администратора
-│           └── AdminDashboard.jsx      # игроки / розыгрыши / участники / слово дня / таблица
+│           ├── AdminDashboard.jsx      # каркас админки: вкладки, подвкладки розыгрыша, адрес
+│           ├── TodayPanel.jsx          # экран «Сегодня»
+│           ├── TournamentForm.jsx      # мастер создания и настройки (из реестра режимов)
+│           ├── WordActions.jsx, confirmDialog.jsx, exportUtils.jsx, adminShared.jsx  # общие части
+│           └── admin/                  # панели по областям: участники, слова, результаты, сетка, игроки…
 │
 ├── alembic/                    # миграции БД
 ├── requirements.txt

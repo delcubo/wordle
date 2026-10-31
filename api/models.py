@@ -271,7 +271,7 @@ class Attempt(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # заполнено, только если результат этого дня скорректирован админом вручную
-    # (см. api/routers/admin.py::override_attempt) — не пусто = не "естественный" результат
+    # (см. api/routers/admin/standings.py::override_day_result) — не пусто = не "естественный" результат
     admin_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     entry: Mapped["TournamentEntry"] = relationship(back_populates="attempts")
