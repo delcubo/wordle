@@ -1,19 +1,9 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { ADMIN_BASE } from "../adminBase.js";
 import HallView from "../components/HallView.jsx";
-
-function useIsMobile(breakpoint = 640) {
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth < breakpoint);
-  useEffect(() => {
-    function onResize() {
-      setIsMobile(window.innerWidth < breakpoint);
-    }
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [breakpoint]);
-  return isMobile;
-}
+import TodayPanel from "./TodayPanel.jsx";
+import { api, TYPE_LABEL, useIsMobile, panelStyle, inputStyle, buttonStyle, ghostButtonStyle, thStyle, tdStyle } from "./adminShared.js";
 
 // Всегда актуальное значение для отбрасывания устаревших ответов — если
 // админ успел переключиться на другой розыгрыш/матч, пока запрос летал,
@@ -26,7 +16,6 @@ function useLatest(value) {
 }
 
 const DEFAULT_SCORING = { "1": 10, "2": 5, "3": 4, "4": 3, "5": 2, "6": 1 };
-const TYPE_LABEL = { standard: "Стандартный", knockout: "На вылет", championship: "Чемпионат", endless: "Бессрочная игра", tiebreak: "Тай-брейк", marathon: "Марафон" };
 const LENGTHS = [5, 6, 7];
 
 // Бонусные слова: после каких дней открываются бонусы при длительности D и N (для подсказок в настройках)
@@ -246,43 +235,59 @@ function LengthPlanGrid({ title, hint, colLabel, rows, slots, plan, base, onSave
 
 const STATUS_LABEL = { draft: "черновик", active: "идёт", tiebreak: "тай-брейк", playoff: "плей-офф", finished: "завершён" };
 
-async function api(path, options = {}) {
-  const res = await fetch(path, {
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  if (res.status === 401) {
-    window.location.href = ADMIN_BASE;
-    throw new Error("unauthorized");
-  }
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || "Ошибка запроса");
-  }
-  return res.json();
+// Подвкладки страницы розыгрыша — только те, что есть у режима.
+function subtabsFor(t) {
+  const tabs = [{ key: "participants", label: "Участники" }];
+  if (t.type !== "knockout") tabs.push({ key: "words", label: "Слова" });
+  if (t.type === "marathon" || t.type === "tiebreak" || t.duration_days != null) tabs.push({ key: "results", label: "Результаты" });
+  if (t.type === "championship" || t.type === "knockout") tabs.push({ key: "bracket", label: t.type === "championship" ? "Плей-офф" : "Сетка" });
+  return tabs;
 }
+
+// Что видит админ на телефоне: цели для пальца не меньше ~38px, широкие таблицы прокручиваются внутри себя.
+const MOBILE_CSS = `
+.admin-root button, .admin-root select, .admin-root input:not([type=checkbox]):not([type=radio]) { min-height: 38px; }
+.admin-root table { display: block; max-width: 100%; overflow-x: auto; }
+`;
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
-  const [tab, setTab] = useState("tournaments");
+  // вкладка, розыгрыш и подвкладка — в адресе (?tab=…&id=…&sub=…): работают «назад» и ссылка на экран
+  const [params, setParams] = useSearchParams();
   const [tournaments, setTournaments] = useState([]);
   const [users, setUsers] = useState([]);
-  const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
   const [theme, setTheme] = useState("dark");
   const [teamsVersion, setTeamsVersion] = useState(0); // меняется при правке команд — командная таблица перечитывается
   const [entriesVersion, setEntriesVersion] = useState(0); // меняется при удалении игрока — панели тай-брейка перечитываются
+  const [needConfirm, setNeedConfirm] = useState(0); // сколько слов на завтра ждут подтверждения (значок на вкладке «Сегодня»)
+  const [headerH, setHeaderH] = useState(0);
+  const scrollPending = useRef(false);
+  const headerRef = useRef(null);
+  const contentRef = useRef(null);
+
+  const tab = params.get("tab") || "today";
+  // По умолчанию — первый неархивный розыгрыш, а не просто первый в списке
+  // (иначе при первой загрузке могло открыться меню архивного розыгрыша).
+  const firstLive = tournaments.find((t) => !t.archived) || tournaments[0] || null;
+  const selected = tournaments.find((t) => String(t.id) === params.get("id")) || firstLive;
+  const subtabs = selected ? subtabsFor(selected) : [];
+  const sub = subtabs.some((s) => s.key === params.get("sub")) ? params.get("sub") : "participants";
+
+  function go(patch) {
+    const next = new URLSearchParams(params);
+    Object.entries(patch).forEach(([k, v]) => (v == null ? next.delete(k) : next.set(k, String(v))));
+    setParams(next);
+  }
+
+  function openTournament(id, subKey) {
+    scrollPending.current = true;
+    go({ tab: "tournaments", id, sub: subKey });
+  }
 
   async function refreshTournaments() {
-    const data = await api("/api/admin/tournaments");
-    setTournaments(data);
-    // По умолчанию — первый неархивный розыгрыш, а не просто первый в списке
-    // (иначе при первой загрузке могло открыться меню архивного розыгрыша,
-    // если он оказался раньше в ответе API).
-    const firstLive = data.find((t) => !t.archived) || data[0] || null;
-    setSelected((prev) => (prev ? data.find((t) => t.id === prev.id) || firstLive : firstLive));
+    setTournaments(await api("/api/admin/tournaments"));
   }
 
   async function refreshUsers() {
@@ -301,6 +306,26 @@ export default function AdminDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // высота закреплённой шапки — чтобы панель подвкладок прилипала прямо под ней
+  useLayoutEffect(() => {
+    function measure() {
+      setHeaderH(headerRef.current ? headerRef.current.offsetHeight : 0);
+    }
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [loading, isMobile]);
+
+  // «Открыть →» из «Сегодня» и выбор розыгрыша из списка: прокрутить к его содержимому (на телефоне
+  // список розыгрышей идёт выше). Адрес меняется позже состояния, поэтому ждём, пока блок появится.
+  useEffect(() => {
+    if (scrollPending.current && tab === "tournaments" && contentRef.current) {
+      scrollPending.current = false;
+      // список розыгрыша выше ещё дорисовывается — прокручиваем после этого
+      setTimeout(() => contentRef.current && contentRef.current.scrollIntoView({ block: "start" }), 150);
+    }
+  });
+
   async function handleLogout() {
     await api("/api/admin/logout", { method: "POST" });
     navigate(ADMIN_BASE);
@@ -315,27 +340,35 @@ export default function AdminDashboard() {
   if (loading) return <Centered>Загрузка...</Centered>;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#121213", color: "#fff", fontFamily: "system-ui, sans-serif" }}>
-      <div style={{ position: "sticky", top: 0, zIndex: 10, background: "#121213", padding: "20px 20px 0", borderBottom: "1px solid #2a2a2c" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <h1 style={{ margin: 0 }}>Админ-панель · Вордли</h1>
+    <div className="admin-root" style={{ minHeight: "100vh", background: "#121213", color: "#fff", fontFamily: "system-ui, sans-serif" }}>
+      {isMobile && <style>{MOBILE_CSS}</style>}
+      <div
+        ref={headerRef}
+        style={{ position: "sticky", top: 0, zIndex: 10, background: "#121213", padding: isMobile ? "10px 12px 0" : "20px 20px 0", borderBottom: "1px solid #2a2a2c" }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isMobile ? 8 : 16, gap: 8 }}>
+          <h1 style={{ margin: 0, fontSize: isMobile ? 18 : undefined }}>{isMobile ? "Админка" : "Админ-панель · Вордли"}</h1>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button onClick={handleToggleTheme} style={ghostButtonStyle} title="Тема оформления для игроков (не влияет на саму админ-панель)">
-              Тема игроков: {theme === "dark" ? "тёмная" : "светлая"}
+            <button onClick={handleToggleTheme} style={{ ...ghostButtonStyle, whiteSpace: "nowrap" }} title="Тема оформления для игроков (не влияет на саму админ-панель)">
+              {isMobile ? "Тема" : "Тема игроков"}: {theme === "dark" ? "тёмная" : "светлая"}
             </button>
             <button onClick={handleLogout} style={ghostButtonStyle}>Выйти</button>
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, paddingBottom: 12 }}>
-          <TabButton active={tab === "tournaments"} onClick={() => setTab("tournaments")}>Розыгрыши</TabButton>
-          <TabButton active={tab === "users"} onClick={() => setTab("users")}>Игроки</TabButton>
-          <TabButton active={tab === "dictionary"} onClick={() => setTab("dictionary")}>Словарь</TabButton>
-          <TabButton active={tab === "hall"} onClick={() => setTab("hall")}>Зал славы</TabButton>
+        <div style={{ display: "flex", gap: 8, paddingBottom: 12, overflowX: "auto" }}>
+          <TabButton active={tab === "today"} onClick={() => go({ tab: "today" })}>
+            Сегодня{needConfirm > 0 ? ` (${needConfirm})` : ""}
+          </TabButton>
+          <TabButton active={tab === "tournaments"} onClick={() => go({ tab: "tournaments" })}>Розыгрыши</TabButton>
+          <TabButton active={tab === "users"} onClick={() => go({ tab: "users" })}>Игроки</TabButton>
+          <TabButton active={tab === "dictionary"} onClick={() => go({ tab: "dictionary" })}>Словарь</TabButton>
+          <TabButton active={tab === "hall"} onClick={() => go({ tab: "hall" })}>Зал славы</TabButton>
         </div>
       </div>
 
-      <div style={{ padding: 20 }}>
+      <div style={{ padding: isMobile ? 12 : 20 }}>
+      {tab === "today" && <TodayPanel onOpen={openTournament} onNeedConfirmChange={setNeedConfirm} />}
       {tab === "users" && <UsersPanel users={users} onChanged={refreshUsers} />}
       {tab === "dictionary" && <DictionaryPanel />}
       {tab === "hall" && <HallPanel users={users} />}
@@ -346,53 +379,84 @@ export default function AdminDashboard() {
             <TournamentPanel
               tournaments={tournaments}
               selected={selected}
-              onSelect={setSelected}
+              onSelect={(t) => { if (isMobile) scrollPending.current = true; go({ id: t.id }); }}
               onCreated={refreshTournaments}
               onActivated={refreshTournaments}
             />
           </div>
-          <div style={isMobile ? {} : { flex: "2 1 500px" }}>
+          <div ref={contentRef} style={{ ...(isMobile ? {} : { flex: "2 1 500px" }), scrollMarginTop: headerH + 8, minWidth: 0 }}>
             {selected ? (
               <>
-                <EntriesPanel
-                  tournament={selected} users={users} allTournaments={tournaments}
-                  onEntriesChanged={() => setEntriesVersion((v) => v + 1)}
-                />
-                {(selected.type === "marathon" || selected.type === "tiebreak") && selected.teams_enabled && (
-                  <MarathonTeamsPanel tournament={selected} refreshKey={entriesVersion} onChanged={() => setTeamsVersion((v) => v + 1)} />
+                <div style={{ position: "sticky", top: headerH, zIndex: 5, background: "#121213", padding: "8px 0" }}>
+                  {!isMobile && (
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                      <b style={{ fontSize: 16 }}>{selected.title}</b>
+                      <span style={{ fontSize: 12, opacity: 0.7 }}>{TYPE_LABEL[selected.type]} · {STATUS_LABEL[selected.status] || selected.status}</span>
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 6, overflowX: "auto" }}>
+                    {subtabs.map((s) => (
+                      <TabButton key={s.key} active={sub === s.key} onClick={() => go({ sub: s.key })}>{s.label}</TabButton>
+                    ))}
+                  </div>
+                </div>
+
+                {sub === "participants" && (
+                  <>
+                    <EntriesPanel
+                      tournament={selected} users={users} allTournaments={tournaments}
+                      onEntriesChanged={() => setEntriesVersion((v) => v + 1)}
+                    />
+                    {(selected.type === "marathon" || selected.type === "tiebreak") && selected.teams_enabled && (
+                      <MarathonTeamsPanel tournament={selected} refreshKey={entriesVersion} onChanged={() => setTeamsVersion((v) => v + 1)} />
+                    )}
+                  </>
                 )}
-                {selected.type === "tiebreak" && (
-                  selected.teams_enabled
-                    ? <TiebreakTeamWordsPanel tournament={selected} refreshKey={entriesVersion} />
-                    : <TiebreakWordsPanel tournament={selected} />
+
+                {sub === "words" && (
+                  <>
+                    {selected.type === "tiebreak" && (
+                      selected.teams_enabled
+                        ? <TiebreakTeamWordsPanel tournament={selected} refreshKey={entriesVersion} />
+                        : <TiebreakWordsPanel tournament={selected} />
+                    )}
+                    {selected.type === "marathon" && (
+                      selected.individual_words
+                        ? <MarathonIndividualWordsPanel tournament={selected} onTournamentChanged={refreshTournaments} />
+                        : <MarathonWordsPanel tournament={selected} onTournamentChanged={refreshTournaments} />
+                    )}
+                    {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <TodayWordPanel tournament={selected} />}
+                    {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordConfirmPanel tournament={selected} />}
+                    {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordHistoryPanel tournament={selected} />}
+                    {(selected.type === "standard" || selected.type === "championship") && selected.bonus_enabled && (
+                      <BonusWordsPanel tournament={selected} />
+                    )}
+                  </>
                 )}
-                {selected.type === "marathon" && (
-                  selected.individual_words
-                    ? <MarathonIndividualWordsPanel tournament={selected} onTournamentChanged={refreshTournaments} />
-                    : <MarathonWordsPanel tournament={selected} onTournamentChanged={refreshTournaments} />
+
+                {sub === "results" && (
+                  <>
+                    {selected.type === "tiebreak" && (
+                      selected.teams_enabled
+                        ? <TiebreakTeamResultsPanel tournament={selected} refreshKey={entriesVersion} />
+                        : <TiebreakResultsPanel tournament={selected} refreshKey={entriesVersion} />
+                    )}
+                    {selected.type === "marathon" && selected.teams_enabled && (
+                      <MarathonTeamStandingsPanel
+                        tournament={selected} refreshKey={teamsVersion} tournaments={tournaments}
+                        onTournamentsChanged={refreshTournaments}
+                      />
+                    )}
+                    {selected.type === "marathon" && <MarathonStandingsPanel tournament={selected} />}
+                    {selected.duration_days != null && <StandingsPanel tournament={selected} />}
+                  </>
                 )}
-                {selected.type === "marathon" && selected.teams_enabled && (
-                  <MarathonTeamStandingsPanel
-                    tournament={selected} refreshKey={teamsVersion} tournaments={tournaments}
-                    onTournamentsChanged={refreshTournaments}
-                  />
-                )}
-                {selected.type === "marathon" && <MarathonStandingsPanel tournament={selected} />}
-                {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <TodayWordPanel tournament={selected} />}
-                {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordConfirmPanel tournament={selected} />}
-                {selected.type !== "knockout" && selected.type !== "tiebreak" && selected.type !== "marathon" && <WordHistoryPanel tournament={selected} />}
-                {(selected.type === "standard" || selected.type === "championship") && selected.bonus_enabled && (
-                  <BonusWordsPanel tournament={selected} />
-                )}
-                {selected.type === "tiebreak" && (
-                  selected.teams_enabled
-                    ? <TiebreakTeamResultsPanel tournament={selected} refreshKey={entriesVersion} />
-                    : <TiebreakResultsPanel tournament={selected} refreshKey={entriesVersion} />
-                )}
-                {selected.duration_days != null && <StandingsPanel tournament={selected} />}
-                {selected.type === "championship" && <TiebreakPanel tournament={selected} onTournamentChanged={refreshTournaments} />}
-                {(selected.type === "championship" || selected.type === "knockout") && (
-                  <BracketPanel tournament={selected} onTournamentChanged={refreshTournaments} />
+
+                {sub === "bracket" && (
+                  <>
+                    {selected.type === "championship" && <TiebreakPanel tournament={selected} onTournamentChanged={refreshTournaments} />}
+                    <BracketPanel tournament={selected} onTournamentChanged={refreshTournaments} />
+                  </>
                 )}
               </>
             ) : (
@@ -6169,12 +6233,3 @@ function Centered({ children }) {
     </div>
   );
 }
-
-const panelStyle = { background: "#1c1c1e", borderRadius: 10, padding: 16 };
-// colorScheme: "dark" — иначе нативная иконка календаря/цвета у <input type="date">
-// рисуется тёмной по умолчанию и сливается с тёмным фоном поля (см. пункт бэклога).
-const inputStyle = { padding: "8px 10px", borderRadius: 6, border: "1px solid #3a3a3c", background: "#121213", color: "#fff", fontSize: 14, colorScheme: "dark" };
-const buttonStyle = { padding: "8px 12px", borderRadius: 6, border: "none", background: "#538d4e", color: "#fff", fontSize: 14, cursor: "pointer" };
-const ghostButtonStyle = { padding: "6px 10px", borderRadius: 6, border: "1px solid #3a3a3c", background: "transparent", color: "#fff", fontSize: 13, cursor: "pointer" };
-const thStyle = { padding: "4px 8px", textAlign: "left" };
-const tdStyle = { padding: "4px 8px" };

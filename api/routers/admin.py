@@ -46,6 +46,7 @@ from api.tournament_time import today, day_number_for_date, effective_status
 from api import crud, tiebreak, bracket, bracket_game, notify, marathon, teams, bonus
 from api import word_plan as wp
 from api.standings_view import compute_standings
+from api.today_view import build_today
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -402,6 +403,13 @@ async def _sync_bonus_words(session: AsyncSession, tournament: Tournament) -> No
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError:
         raise HTTPException(status_code=400, detail="В словаре не хватает слов нужной длины для бонусов")
+
+
+@router.get("/today")
+async def get_today(session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
+    """Экран «Сегодня»: по карточке на идущий розыгрыш — сколько закончили, результаты, слово на завтра
+    (см. api/today_view.py)."""
+    return await build_today(session)
 
 
 @router.get("/tournaments", response_model=list[TournamentOut])
