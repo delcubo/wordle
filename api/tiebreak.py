@@ -31,6 +31,7 @@ compute_final_order() восстанавливает итоговый поряд
 игроку — см. get_entry_place).
 """
 from collections import defaultdict
+from datetime import date
 from fractions import Fraction
 
 from sqlalchemy import delete
@@ -339,6 +340,18 @@ async def _result_key(
     return SKIPPED_ATTEMPTS
 
 
+async def _create_continuation(
+    session: AsyncSession, tournament: Tournament, round_: TiebreakRound, entry_ids: list[int]
+) -> None:
+    """Продолжение раунда для группы, оставшейся равной; если такое уже заведено (раунд закрывали
+    повторно), второе не создаём."""
+    group = set(entry_ids)
+    for child in await crud.get_child_rounds(session, round_.id):
+        if {p.entry_id for p in await crud.list_tiebreak_participants(session, child.id)} == group:
+            return
+    await crud.create_tiebreak_round(session, tournament, entry_ids, previous_round_id=round_.id)
+
+
 async def _try_resolve_round(session: AsyncSession, tournament: Tournament, round_: TiebreakRound) -> None:
     daily_word = await crud.get_daily_word_by_id(session, round_.daily_word_id)
     deadline_passed = round_deadline_passed(tournament, daily_word)
@@ -372,7 +385,7 @@ async def _try_resolve_round(session: AsyncSession, tournament: Tournament, roun
         # если ничья только потому, что вся подгруппа пропустила слово (не завершила или не
         # приступала) — новый раунд её не разрешит (играть некому), нужна ручная доигровка
         if len(entry_ids) > 1 and key != SKIPPED_ATTEMPTS:
-            await crud.create_tiebreak_round(session, tournament, entry_ids, previous_round_id=round_.id)
+            await _create_continuation(session, tournament, round_, entry_ids)
 
 
 async def compute_final_order(session: AsyncSession, tournament: Tournament) -> list[int]:
@@ -476,6 +489,50 @@ async def override_round_order(
     return round_
 
 
+async def reopen_tiebreak(session: AsyncSession, tournament: Tournament, end_date: date) -> list[TiebreakRound]:
+    """
+    Вернуть в игру завершённый розыгрыш типа tiebreak, чтобы доиграл тот, кто не успел: раунды, где
+    кто-то не завершил слово и получил пропуск, снова открываются, статус «завершён» снимается, а
+    срок тай-брейка переносится на end_date (иначе дедлайн раунда уже прошёл и он закрылся бы сразу
+    при первом же обращении). Как только все доиграют — или в конце дня end_date — места
+    пересчитаются, и розыгрыш завершится сам, как обычно.
+
+    Раунды с ручным порядком (задан админом) не трогаем. Если у раунда уже есть продолжение, не
+    возвращаем: оно создано по прежним результатам, и после доигровки могло бы не совпасть с новыми.
+    Возвращает открытые раунды.
+    """
+    if tournament.type != TournamentType.tiebreak:
+        raise ValueError("Вернуть в игру можно только розыгрыш типа «Тай-брейк»")
+    if tournament.status != TournamentStatus.finished:
+        raise ValueError("Розыгрыш не завершён")
+    if end_date < today():
+        raise ValueError("Новый срок не может быть в прошлом")
+
+    candidates = []
+    for round_ in await crud.list_tiebreak_rounds(session, tournament.id):
+        if not round_.completed or round_.manual_order is not None:
+            continue
+        for p in await crud.list_tiebreak_participants(session, round_.id):
+            word_id = await crud.round_word_id_for_entry(session, round_, p.entry_id)
+            if await _result_key(session, p.entry_id, word_id, finalize=False) is None:
+                candidates.append(round_)
+                break
+    if not candidates:
+        raise ValueError("Некого возвращать в игру: все участники завершили свои слова во всех раундах")
+    for round_ in candidates:
+        if await crud.get_child_rounds(session, round_.id):
+            raise ValueError(f"У раунда {round_.round_number} уже есть продолжение — вернуть его в игру нельзя")
+
+    for round_ in candidates:
+        round_.completed = False
+        session.add(round_)
+    tournament.status = TournamentStatus.active
+    tournament.end_date = end_date
+    session.add(tournament)
+    await session.commit()
+    return candidates
+
+
 async def get_rounds_view(session: AsyncSession, tournament_id: int) -> list[dict]:
     """Раунды тай-брейка розыгрыша с расшифровкой участников — для админ-панели."""
     rounds = await crud.list_tiebreak_rounds(session, tournament_id)
@@ -566,7 +623,7 @@ async def _try_resolve_team_round(session: AsyncSession, tournament: Tournament,
         # среднее 8 — все игроки этих команд пропустили слово: новый раунд играть некому
         if len(team_ids) > 1 and score != SKIPPED_ATTEMPTS:
             entry_ids = [p.entry_id for p in participants if p.team_id in team_ids]
-            await crud.create_tiebreak_round(session, tournament, entry_ids, previous_round_id=round_.id)
+            await _create_continuation(session, tournament, round_, entry_ids)
 
 
 async def build_team_results(session: AsyncSession, tournament: Tournament) -> dict:

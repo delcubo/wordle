@@ -15,6 +15,7 @@ import { TiebreakTeamWordsPanel, TiebreakWordsPanel } from "./admin/TiebreakWord
 import { TiebreakResultsPanel, TiebreakTeamResultsPanel } from "./admin/TiebreakResults.jsx";
 import { StandingsPanel } from "./admin/StandingsPanel.jsx";
 import { TiebreakPanel } from "./admin/TiebreakPanel.jsx";
+import { TiebreakReopen } from "./admin/TiebreakReopen.jsx";
 import { BracketPanel } from "./admin/Bracket.jsx";
 
 // Редко нужные вкладки грузятся отдельными файлами, только когда их открывают
@@ -236,6 +237,9 @@ export default function AdminDashboard() {
 
                 {sub === "results" && (
                   <>
+                    {has(selected.type, "tiebreak_results") && selected.status === "finished" && (
+                      <TiebreakReopen tournament={selected} onChanged={refreshTournaments} />
+                    )}
                     {has(selected.type, "tiebreak_results") && (
                       selected.teams_enabled
                         ? <TiebreakTeamResultsPanel tournament={selected} refreshKey={entriesVersion} />

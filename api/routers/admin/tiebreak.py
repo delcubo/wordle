@@ -8,12 +8,15 @@ from api.admin_auth import require_admin
 from api.database import get_session
 from api.dictionary import canonical_word, SUPPORTED_LENGTHS, validate_manual_word
 from api.models import TiebreakRound, Tournament, TournamentType
+from api.routers.admin.common import _tournament_out
 from api.schemas import (
+    TournamentOut,
     SetTiebreakWordRequest,
     SlotLengthRequest,
     TeamWordDayOut,
     TiebreakOverrideRequest,
     TiebreakParticipantOut,
+    TiebreakReopenRequest,
     TiebreakResultsOut,
     TiebreakRoundOut,
     TiebreakStartResponse,
@@ -60,6 +63,23 @@ async def get_tiebreak_state(tournament_id: int, session: AsyncSession = Depends
 
     rounds = await tiebreak.get_rounds_view(session, tournament_id)
     return [_tiebreak_round_response(r) for r in rounds]
+
+@router.post("/tournaments/{tournament_id}/tiebreak/reopen", response_model=TournamentOut)
+async def reopen_tiebreak(
+    tournament_id: int, payload: TiebreakReopenRequest,
+    session: AsyncSession = Depends(get_session), _: None = Depends(require_admin),
+):
+    """Вернуть завершённый тай-брейк в игру, чтобы доиграл тот, кто не успел (см. tiebreak.reopen_tiebreak)."""
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    try:
+        await tiebreak.reopen_tiebreak(session, tournament, payload.end_date)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await session.refresh(tournament)
+    return _tournament_out(tournament)
+
 
 @router.post("/tiebreak/rounds/{round_id}/override", response_model=TiebreakRoundOut)
 async def override_tiebreak_round(

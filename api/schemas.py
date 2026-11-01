@@ -497,6 +497,10 @@ class TiebreakRoundOut(BaseModel):
     admin_note: str | None = None
 
 
+class TiebreakReopenRequest(BaseModel):
+    end_date: date  # до какого дня включительно можно доиграть
+
+
 class TiebreakStartResponse(BaseModel):
     started: bool
     rounds_created: int

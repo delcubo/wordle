@@ -26,7 +26,7 @@ export function TiebreakTeamResultsPanel({ tournament, refreshKey }) {
     setData(null);
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tournament.id, tournament.teams_enabled, refreshKey]);
+  }, [tournament.id, tournament.teams_enabled, tournament.status, refreshKey]);
 
   if (!data) return error ? <div style={{ ...panelStyle, marginTop: 20, color: "#e5484d" }}>{error}</div> : null;
 
@@ -218,7 +218,7 @@ export function TiebreakResultsPanel({ tournament, refreshKey }) {
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tournament.id, refreshKey]);
+  }, [tournament.id, tournament.status, refreshKey]);
 
   if (!data) return null;
 
