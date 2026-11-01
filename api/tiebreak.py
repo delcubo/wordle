@@ -206,7 +206,8 @@ async def build_results(session: AsyncSession, tournament: Tournament) -> dict:
         for entry_id in participants_by_round[r.id]:
             attempt = await crud.get_attempt(session, entry_id, daily_word.id)
             cells.setdefault(entry_id, {})[r.id] = (
-                {"solved": attempt.solved, "attempts_used": attempt.attempts_used} if attempt else None
+                {"solved": attempt.solved, "attempts_used": attempt.attempts_used,
+                 "guesses": list(attempt.guesses), "word": daily_word.word} if attempt else None
             )
 
     places: dict[int, str] = {}
@@ -644,13 +645,17 @@ async def build_team_results(session: AsyncSession, tournament: Tournament) -> d
         }
 
     member_cells: dict[int, dict[int, dict | None]] = defaultdict(dict)   # entry -> round -> результат
+    words_by_id: dict[int, DailyWord] = {}
     keys_by_round: dict[int, dict[int, int]] = {}
     for r in rounds:
         keys_by_round[r.id] = {}
         for p in participants_by_round[r.id]:
             attempt = await crud.get_attempt(session, p.entry_id, p.daily_word_id)
+            if p.daily_word_id not in words_by_id:
+                words_by_id[p.daily_word_id] = await crud.get_daily_word_by_id(session, p.daily_word_id)
             member_cells[p.entry_id][r.id] = (
-                {"solved": attempt.solved, "attempts_used": attempt.attempts_used} if attempt else None
+                {"solved": attempt.solved, "attempts_used": attempt.attempts_used,
+                 "guesses": list(attempt.guesses), "word": words_by_id[p.daily_word_id].word} if attempt else None
             )
             if r.completed:
                 keys_by_round[r.id][p.entry_id] = await _result_key(session, p.entry_id, p.daily_word_id, finalize=True)

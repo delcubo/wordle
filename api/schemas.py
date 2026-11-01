@@ -264,6 +264,8 @@ class SetTiebreakWordRequest(BaseModel):
 class TiebreakResultCell(BaseModel):
     solved: bool
     attempts_used: int
+    guesses: list[str] = []  # попытки игрока по слову раунда (для подсказки при наведении)
+    word: str | None = None  # слово, по которому сделаны попытки
 
 
 class TiebreakResultRound(BaseModel):

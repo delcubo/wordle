@@ -1,6 +1,25 @@
 import { Fragment, useEffect, useState } from "react";
 import { api, ghostButtonStyle, panelStyle, tdStyle, thStyle, useLatest } from "../adminShared.jsx";
 import { CopyButton, downloadCanvas } from "../exportUtils.jsx";
+import { GuessesPopup } from "./GuessesPopup.jsx";
+
+// Ячейка результата игрока: при наведении (на телефоне — по нажатию) — его попытки по слову раунда, как в таблице
+// стандартного режима.
+function ResultCell({ cell, style, children }) {
+  const [shown, setShown] = useState(false);
+  const has = !!(cell && cell.guesses && cell.guesses.length > 0);
+  return (
+    <td
+      onMouseEnter={() => { if (has) setShown(true); }}
+      onMouseLeave={() => setShown(false)}
+      onClick={() => { if (has) setShown((v) => !v); }}
+      style={{ ...style, position: "relative", cursor: has ? "default" : undefined }}
+    >
+      {children}
+      {shown && <GuessesPopup guesses={cell.guesses} heading={cell.word || undefined} />}
+    </td>
+  );
+}
 
 // Результаты командного тай-брейка: место команды, среднее по раундам, результаты игроков.
 export function TiebreakTeamResultsPanel({ tournament, refreshKey }) {
@@ -185,7 +204,7 @@ export function TiebreakTeamResultsPanel({ tournament, refreshKey }) {
                       <tr key={m.entry_id} style={{ opacity: m.active ? 0.85 : 0.5, fontSize: 12 }}>
                         <td></td>
                         <td style={tdStyle}>{m.callsign}</td>
-                        {m.cells.map((cell, i) => <td key={i} style={{ ...tdStyle, textAlign: "center" }}>{cellText(cell)}</td>)}
+                        {m.cells.map((cell, i) => <ResultCell key={i} cell={cell} style={{ ...tdStyle, textAlign: "center" }}>{cellText(cell)}</ResultCell>)}
                       </tr>
                     ))}
                   </Fragment>
@@ -378,7 +397,7 @@ export function TiebreakResultsPanel({ tournament, refreshKey }) {
                   <td style={{ ...tdStyle, fontWeight: row.place && !row.place.includes("-") ? 700 : 400 }}>{row.place || "-"}</td>
                   <td style={tdStyle}>{row.callsign}</td>
                   {row.cells.map((cell, i) => (
-                    <td key={i} style={tdStyle}>{cellText(cell)}</td>
+                    <ResultCell key={i} cell={cell} style={tdStyle}>{cellText(cell)}</ResultCell>
                   ))}
                 </tr>
               ))}
