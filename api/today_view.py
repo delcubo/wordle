@@ -18,6 +18,8 @@ from api.models import Tournament, TournamentStatus, TournamentType
 from api.tournament_time import today, day_number_for_date, effective_status
 
 MAX_ATTEMPTS = 6
+UNFINISHED_RANK = 1000    # rank незакончивших — после всех закончивших
+TOP_SHOWN = 3             # сколько лучших показывать в сводке марафона
 UPCOMING_DRAFT_DAYS = 3   # ещё не начавшийся розыгрыш показываем, если стартует не позже чем через столько дней
 
 
@@ -53,6 +55,7 @@ async def _daily_results(session: AsyncSession, tournament: Tournament, entries:
             "callsign": e.callsign, "done": done,
             "text": _attempt_text(attempt) if done else "играет",
             "at": _iso_utc(attempt.finished_at if done else attempt.started_at),
+            "rank": (attempt.attempts_used if attempt.solved else MAX_ATTEMPTS + 1) if done else UNFINISHED_RANK,
         })
     return results, label
 
@@ -96,17 +99,21 @@ async def _bracket_results(session: AsyncSession, tournament: Tournament, entrie
     return results, round_label or "сегодня игр нет", playing
 
 
-async def _marathon_results(session: AsyncSession, tournament: Tournament) -> list[dict]:
+async def _marathon_results(session: AsyncSession, tournament: Tournament) -> tuple[list[dict], set[int]]:
+    """Результаты марафона по таблице розыгрыша (в неё входят и отключённые игроки с набранными результатами).
+    Возвращает (результаты, id участий в таблице). rank — место в таблице у прошедших все слова."""
     standings = await marathon.compute_standings(session, tournament)
     count = standings["words_count"]
-    results = []
-    for row in standings["rows"]:
+    results, listed = [], set()
+    for pos, row in enumerate(standings["rows"]):
         done = row["finished_all"]
+        listed.add(row["entry_id"])
         results.append({
             "callsign": row["callsign"], "done": done, "at": None,
             "text": f"{row['words_done']}/{count} слов · {row['total_attempts']} поп." if not done else f"все слова · {row['score']} оч.",
+            "rank": pos if done else UNFINISHED_RANK - row["words_done"],
         })
-    return results
+    return results, listed
 
 
 async def _tiebreak_results(session: AsyncSession, tournament: Tournament, entries: list) -> tuple[list[dict], str, int]:
@@ -131,6 +138,30 @@ async def _tiebreak_results(session: AsyncSession, tournament: Tournament, entri
                 "at": _iso_utc(attempt.finished_at if done else attempt.started_at),
             })
     return results, (f"раунд {current}" if current else "нет активных раундов"), playing
+
+
+def _attempts_summary(results: list[dict]) -> dict:
+    """Распределение по результатам: «3/6 — 4 игрока», «X/6 — 2», «играют — 17» (вместо списка имён)."""
+    counts: dict[str, int] = {}
+    for r in results:
+        if r["done"]:
+            counts[r["text"]] = counts.get(r["text"], 0) + 1
+    buckets = [{"label": label, "count": counts[label], "tone": "fail" if label.startswith("X") else "good"}
+               for label in sorted(counts, key=lambda t: (t.startswith("X"), t))]
+    playing = sum(1 for r in results if not r["done"])
+    if playing:
+        buckets.append({"label": "играют", "count": playing, "tone": "playing"})
+    return {"buckets": buckets, "top": []}
+
+
+def _marathon_summary(results: list[dict]) -> dict:
+    finished = sorted((r for r in results if r["done"]), key=lambda r: r["rank"])
+    buckets = []
+    if finished:
+        buckets.append({"label": "прошли все слова", "count": len(finished), "tone": "good"})
+    if len(results) > len(finished):
+        buckets.append({"label": "в процессе", "count": len(results) - len(finished), "tone": "playing"})
+    return {"buckets": buckets, "top": [{"callsign": r["callsign"], "text": r["text"]} for r in finished[:TOP_SHOWN]]}
 
 
 async def _upcoming_word(session: AsyncSession, tournament: Tournament) -> dict | None:
@@ -158,15 +189,20 @@ async def build_today(session: AsyncSession) -> list[dict]:
         if status == TournamentStatus.draft and (t.start_date - today()).days > UPCOMING_DRAFT_DAYS:
             continue
 
-        entries = [e for e in await crud.list_entries(session, t.id) if e.active]
+        all_entries = await crud.list_entries(session, t.id)
+        entries = [e for e in all_entries if e.active]
         results: list[dict] = []
+        summary = None
         label, playing = "", len(entries)
         if status == TournamentStatus.draft:
             label = f"старт {t.start_date.strftime('%d.%m')}"
             playing = 0
         elif t.type == TournamentType.marathon:
-            results = await _marathon_results(session, t)
+            results, listed = await _marathon_results(session, t)
             label = f"слов: {t.words_count}"
+            # в таблице марафона есть и отключённые игроки с результатами — считаем и их, иначе «18 из 6»
+            playing = len([e for e in all_entries if not e.hidden_from_standings and (e.active or e.id in listed)])
+            summary = _marathon_summary(results)
         elif t.type == TournamentType.knockout or status == TournamentStatus.playoff:
             results, label, playing = await _bracket_results(session, t, entries)
             if t.type == TournamentType.championship:
@@ -177,9 +213,10 @@ async def build_today(session: AsyncSession) -> list[dict]:
                 label = f"тай-брейк · {label}"
         else:
             results, label = await _daily_results(session, t, entries)
+            summary = _attempts_summary(results)
 
         done = sum(1 for r in results if r["done"])
-        results.sort(key=lambda r: (not r["done"], r["at"] or "~", r["callsign"].lower()))
+        results.sort(key=lambda r: (not r["done"], r.get("rank", 0), r["at"] or "~", r["callsign"].lower()))
         attention = []
         if t.paused:
             attention.append("розыгрыш приостановлен")
@@ -188,6 +225,6 @@ async def build_today(session: AsyncSession) -> list[dict]:
         cards.append({
             "id": t.id, "title": t.title, "type": t.type.value, "status": status.value, "paused": bool(t.paused),
             "label": label, "players_total": playing, "done": done, "in_progress": len(results) - done,
-            "results": results, "next_word": await _upcoming_word(session, t), "attention": attention,
+            "results": results, "summary": summary, "next_word": await _upcoming_word(session, t), "attention": attention,
         })
     return cards

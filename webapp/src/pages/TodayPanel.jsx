@@ -4,6 +4,8 @@ import WordActions from "./WordActions.jsx";
 
 const REFRESH_MS = 60000;
 const RESULTS_SHOWN = 12;
+const TONE_COLOR = { good: "#2f4d2c", fail: "#5a2a2a", playing: "#4d4326" };
+const SORTS = { rank: "по результату", time: "по времени", name: "по позывному" };
 const touch = (isMobile) => (isMobile ? { minHeight: 40 } : {});
 
 function formatClock(date) {
@@ -53,10 +55,89 @@ function ProgressBar({ done, inProgress, total }) {
   );
 }
 
+// Сводка вместо списка имён: сколько игроков с каким результатом (в марафоне — ещё и лучшие по очкам).
+function Distribution({ summary }) {
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {summary.buckets.map((b) => (
+          <Chip key={b.label} color={TONE_COLOR[b.tone]}>{b.label} · <b>{b.count}</b></Chip>
+        ))}
+      </div>
+      {summary.top.length > 0 && (
+        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6, overflowWrap: "anywhere" }}>
+          Лучшие: {summary.top.map((t) => `${t.callsign} (${t.text.replace("все слова · ", "")})`).join(", ")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Полный список результатов: поиск по позывному и сортировка; на телефоне — на весь экран.
+function ResultsDialog({ title, results, onClose, isMobile }) {
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState("rank");
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const q = query.trim().toLowerCase();
+  const rows = results.filter((r) => !q || r.callsign.toLowerCase().includes(q));
+  if (sort === "time") rows.sort((a, b) => (b.at || "").localeCompare(a.at || "") || a.callsign.localeCompare(b.callsign));
+  if (sort === "name") rows.sort((a, b) => a.callsign.localeCompare(b.callsign, "ru"));
+  const clock = (r) => (r.at ? `${r.done ? "" : "с "}${formatClock(new Date(r.at))}` : "");
+
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 50, display: "flex", alignItems: isMobile ? "stretch" : "center", justifyContent: "center" }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          ...panelStyle, display: "flex", flexDirection: "column", boxSizing: "border-box",
+          width: isMobile ? "100%" : 560, maxHeight: isMobile ? "100%" : "80vh", borderRadius: isMobile ? 0 : undefined,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <div style={{ fontWeight: 700, overflowWrap: "anywhere" }}>{title} · {results.length}</div>
+          <button onClick={onClose} style={{ ...ghostButtonStyle, ...touch(isMobile) }}>Закрыть</button>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          <input
+            value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Поиск по позывному" autoFocus={!isMobile}
+            style={{ flex: "1 1 160px", minWidth: 0, padding: "6px 10px", borderRadius: 6, border: "1px solid #3a3a3c", background: "#1a1a1c", color: "inherit", ...touch(isMobile) }}
+          />
+          <select
+            value={sort} onChange={(e) => setSort(e.target.value)}
+            style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #3a3a3c", background: "#1a1a1c", color: "inherit", ...touch(isMobile) }}
+          >
+            {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </div>
+        <div style={{ overflowY: "auto", minHeight: 0 }}>
+          {rows.length === 0 && <div style={{ opacity: 0.7, padding: "8px 0" }}>Никого не найдено.</div>}
+          {rows.map((r) => (
+            <div key={r.callsign} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid #2a2a2c", fontSize: 14 }}>
+              <span style={{ overflowWrap: "anywhere" }}>{r.callsign}</span>
+              <span style={{ display: "flex", gap: 10, flexShrink: 0, textAlign: "right" }}>
+                <span style={{ color: r.done ? "#7dc778" : "#d9c36a" }}>{r.text}</span>
+                <span style={{ opacity: 0.55, minWidth: 48 }}>{clock(r)}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Card({ card, onOpen, onWordChange, isMobile }) {
   const { label } = useModes();
-  const [showAll, setShowAll] = useState(false);
-  const results = showAll ? card.results : card.results.slice(0, RESULTS_SHOWN);
+  const [showDialog, setShowDialog] = useState(false);
+  const chips = card.results.slice(0, RESULTS_SHOWN);
   const started = card.status !== "draft";
   const needsConfirm = card.next_word && card.next_word.status !== "confirmed";
   return (
@@ -84,20 +165,26 @@ function Card({ card, onOpen, onWordChange, isMobile }) {
             {card.in_progress > 0 && <span style={{ opacity: 0.7 }}> · играют {card.in_progress}</span>}
           </div>
           <ProgressBar done={card.done} inProgress={card.in_progress} total={card.players_total} />
-          {card.results.length > 0 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-              {results.map((r) => (
-                <Chip key={r.callsign} color={r.done ? "#2f4d2c" : "#4d4326"}>{r.callsign} · {r.text}</Chip>
-              ))}
-              {card.results.length > RESULTS_SHOWN && (
-                <button onClick={() => setShowAll((v) => !v)} style={{ ...ghostButtonStyle, padding: "1px 8px", fontSize: 12 }}>
-                  {showAll ? "свернуть" : `ещё ${card.results.length - RESULTS_SHOWN}`}
-                </button>
-              )}
-            </div>
+          {card.summary ? (
+            <Distribution summary={card.summary} />
+          ) : (
+            card.results.length > 0 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                {chips.map((r) => (
+                  <Chip key={r.callsign} color={r.done ? "#2f4d2c" : "#4d4326"}>{r.callsign} · {r.text}</Chip>
+                ))}
+              </div>
+            )
+          )}
+          {card.results.length > 0 && (card.summary || card.results.length > RESULTS_SHOWN) && (
+            <button onClick={() => setShowDialog(true)} style={{ ...ghostButtonStyle, ...touch(isMobile), marginTop: 8, fontSize: 12 }}>
+              Все результаты ({card.results.length}) →
+            </button>
           )}
         </div>
       )}
+
+      {showDialog && <ResultsDialog title={card.title} results={card.results} onClose={() => setShowDialog(false)} isMobile={isMobile} />}
 
       {card.next_word && (
         <NextWord
