@@ -229,8 +229,7 @@ export function StandingsPanel({ tournament }) {
     setError("");
     setEditing({ participantId, day });
     setForm({
-      attempts_used: cell.played ? 1 : 1,
-      solved: cell.played ? cell.points > 0 : true,
+      result: cell.played && cell.points === 0 ? "fail" : "1",
       note: "",
     });
   }
@@ -238,11 +237,13 @@ export function StandingsPanel({ tournament }) {
   async function handleSave() {
     setError("");
     try {
+      const failed = form.result === "fail";
       await api(`/api/admin/entries/${editing.participantId}/days/${editing.day}/override`, {
         method: "POST",
         body: JSON.stringify({
-          attempts_used: Number(form.attempts_used),
-          solved: form.solved,
+          // "не угадал" — это все 6 попыток потрачены без успеха
+          attempts_used: failed ? 6 : Number(form.result),
+          solved: !failed,
           note: form.note,
         }),
       });
@@ -307,19 +308,16 @@ export function StandingsPanel({ tournament }) {
                   return (
                     <td key={i} style={{ ...tdStyle, background: "#2a2a2c" }}>
                       <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 140 }}>
-                        <input
-                          type="number" min={1} max={6} value={form.attempts_used}
-                          onChange={(e) => setForm((f) => ({ ...f, attempts_used: e.target.value }))}
+                        <select
+                          value={form.result}
+                          onChange={(e) => setForm((f) => ({ ...f, result: e.target.value }))}
                           style={{ ...inputStyle, padding: "2px 6px", fontSize: 12 }}
-                          placeholder="Попыток"
-                        />
-                        <label style={{ fontSize: 11, display: "flex", gap: 4, alignItems: "center" }}>
-                          <input
-                            type="checkbox" checked={form.solved}
-                            onChange={(e) => setForm((f) => ({ ...f, solved: e.target.checked }))}
-                          />
-                          угадал
-                        </label>
+                        >
+                          {[1, 2, 3, 4, 5, 6].map((n) => (
+                            <option key={n} value={String(n)}>Угадал с {n}-й попытки</option>
+                          ))}
+                          <option value="fail">Не угадал (0 очков)</option>
+                        </select>
                         <input
                           placeholder="Причина (обязательно)" value={form.note}
                           onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}

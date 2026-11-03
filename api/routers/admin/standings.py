@@ -126,6 +126,9 @@ async def override_day_result(
         raise HTTPException(status_code=400, detail=f"День должен быть от 1 до {tournament.duration_days}")
     if not (1 <= payload.attempts_used <= 6):
         raise HTTPException(status_code=400, detail="Число попыток должно быть от 1 до 6")
+    if not payload.solved and payload.attempts_used != 6:
+        # "не угадал" = все 6 попыток потрачены; иначе день считался бы незавершённым
+        raise HTTPException(status_code=400, detail="Если слово не угадано, число попыток должно быть 6")
     note = payload.note.strip()
     if not note:
         raise HTTPException(status_code=400, detail="Нужно указать причину корректировки")
