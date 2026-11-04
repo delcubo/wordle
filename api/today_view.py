@@ -36,15 +36,9 @@ def _attempt_text(attempt) -> str:
     return f"{attempt.attempts_used}/6" if attempt.solved else "X/6"
 
 
-async def _daily_results(session: AsyncSession, tournament: Tournament, entries: list) -> tuple[list[dict], str]:
-    """Результаты по слову сегодняшнего дня (standard/endless/championship в основном этапе)."""
-    day = day_number_for_date(tournament.start_date, today())
-    if day < 1 or (tournament.duration_days is not None and day > tournament.duration_days):
-        return [], ""
-    label = f"день {day} из {tournament.duration_days}" if tournament.duration_days else f"день {day}"
-    word = await crud.get_daily_word_by_day(session, tournament.id, day)
-    if word is None:
-        return [], label
+async def _word_results(session: AsyncSession, entries: list, word, past: bool = False) -> list[dict]:
+    """Результаты участников по одному общему слову дня. В прошедший день не закончивший
+    уже не «играет», а «не доиграл»."""
     results = []
     for e in entries:
         attempt = await crud.get_attempt(session, e.id, word.id)
@@ -53,11 +47,54 @@ async def _daily_results(session: AsyncSession, tournament: Tournament, entries:
         done = _finished(attempt)
         results.append({
             "callsign": e.callsign, "done": done,
-            "text": _attempt_text(attempt) if done else "играет",
+            "text": _attempt_text(attempt) if done else ("не доиграл" if past else "играет"),
             "at": _iso_utc(attempt.finished_at if done else attempt.started_at),
             "rank": (attempt.attempts_used if attempt.solved else MAX_ATTEMPTS + 1) if done else UNFINISHED_RANK,
         })
-    return results, label
+    return results
+
+
+async def _daily_results(session: AsyncSession, tournament: Tournament, entries: list) -> tuple[list[dict], str, int | None]:
+    """Результаты по слову сегодняшнего дня (standard/endless/championship в основном этапе).
+    Третье значение — номер сегодняшнего дня (по нему карточка предлагает пролистать прошедшие)."""
+    day = day_number_for_date(tournament.start_date, today())
+    if day < 1 or (tournament.duration_days is not None and day > tournament.duration_days):
+        return [], "", None
+    label = f"день {day} из {tournament.duration_days}" if tournament.duration_days else f"день {day}"
+    word = await crud.get_daily_word_by_day(session, tournament.id, day)
+    if word is None:
+        return [], label, day
+    return await _word_results(session, entries, word), label, day
+
+
+async def build_day(session: AsyncSession, tournament: Tournament, day: int) -> dict:
+    """Те же результаты, что в карточке «Сегодня», но за один из прошедших дней (standard/endless/
+    championship — режимы с общим словом дня). ValueError — день недоступен для просмотра."""
+    if not mode_has(tournament.type, "daily_words"):
+        raise ValueError("У этого режима нет слова дня")
+    current = day_number_for_date(tournament.start_date, today())
+    last = current if tournament.duration_days is None else min(current, tournament.duration_days)
+    if day < 1 or day > last:
+        raise ValueError("Такого дня ещё нет" if day >= 1 else "День должен быть не меньше 1")
+    word = await crud.get_daily_word_by_day(session, tournament.id, day)
+    past = day < current or (tournament.duration_days is not None and current > tournament.duration_days)
+    entries = await crud.list_entries(session, tournament.id)
+    results = await _word_results(session, entries, word, past=past) if word is not None else []
+    played = {r["callsign"] for r in results}
+    # игроки, которые к этому дню уже были в розыгрыше (отключённые — только если успели сыграть)
+    roster = [e for e in entries if e.joined_on_day <= day and (e.active or e.callsign in played)]
+    skipped = len(roster) - len(results)
+    summary = _attempts_summary(results, past=past)
+    if skipped > 0 and past:
+        summary["buckets"].append({"label": "не играли", "count": skipped, "tone": "skip"})
+    results.sort(key=lambda r: (not r["done"], r["rank"], r["at"] or "~", r["callsign"].lower()))
+    done = sum(1 for r in results if r["done"])
+    return {
+        "day": day, "calendar_date": word.calendar_date.isoformat() if word else None,
+        "word": word.word if word else None,
+        "players_total": len(roster), "done": done, "in_progress": len(results) - done, "not_played": max(skipped, 0),
+        "results": results, "summary": summary,
+    }
 
 
 async def _bracket_results(session: AsyncSession, tournament: Tournament, entries: list) -> tuple[list[dict], str, int]:
@@ -140,8 +177,9 @@ async def _tiebreak_results(session: AsyncSession, tournament: Tournament, entri
     return results, (f"раунд {current}" if current else "нет активных раундов"), playing
 
 
-def _attempts_summary(results: list[dict]) -> dict:
-    """Распределение по результатам: «3/6 — 4 игрока», «X/6 — 2», «играют — 17» (вместо списка имён)."""
+def _attempts_summary(results: list[dict], past: bool = False) -> dict:
+    """Распределение по результатам: «3/6 — 4 игрока», «X/6 — 2», «играют — 17» (вместо списка имён).
+    За прошедший день незакончившие — «не доиграли»."""
     counts: dict[str, int] = {}
     for r in results:
         if r["done"]:
@@ -150,7 +188,7 @@ def _attempts_summary(results: list[dict]) -> dict:
                for label in sorted(counts, key=lambda t: (t.startswith("X"), t))]
     playing = sum(1 for r in results if not r["done"])
     if playing:
-        buckets.append({"label": "играют", "count": playing, "tone": "playing"})
+        buckets.append({"label": "не доиграли" if past else "играют", "count": playing, "tone": "playing"})
     return {"buckets": buckets, "top": []}
 
 
@@ -193,6 +231,7 @@ async def build_today(session: AsyncSession) -> list[dict]:
         entries = [e for e in all_entries if e.active]
         results: list[dict] = []
         summary = None
+        day = None  # номер сегодняшнего дня у режимов с общим словом дня
         label, playing = "", len(entries)
         if status == TournamentStatus.draft:
             label = f"старт {t.start_date.strftime('%d.%m')}"
@@ -212,7 +251,7 @@ async def build_today(session: AsyncSession) -> list[dict]:
             if t.type == TournamentType.championship:
                 label = f"тай-брейк · {label}"
         else:
-            results, label = await _daily_results(session, t, entries)
+            results, label, day = await _daily_results(session, t, entries)
             summary = _attempts_summary(results)
 
         done = sum(1 for r in results if r["done"])
@@ -224,7 +263,7 @@ async def build_today(session: AsyncSession) -> list[dict]:
             attention.append("нет подключённых игроков")
         cards.append({
             "id": t.id, "title": t.title, "type": t.type.value, "status": status.value, "paused": bool(t.paused),
-            "label": label, "players_total": playing, "done": done, "in_progress": len(results) - done,
+            "label": label, "day": day, "players_total": playing, "done": done, "in_progress": len(results) - done,
             "results": results, "summary": summary, "next_word": await _upcoming_word(session, t), "attention": attention,
         })
     return cards

@@ -4,7 +4,7 @@ import WordActions from "./WordActions.jsx";
 
 const REFRESH_MS = 60000;
 const RESULTS_SHOWN = 12;
-const TONE_COLOR = { good: "#2f4d2c", fail: "#5a2a2a", playing: "#4d4326" };
+const TONE_COLOR = { good: "#2f4d2c", fail: "#5a2a2a", playing: "#4d4326", skip: "#3a3a3c" };
 const SORTS = { rank: "по результату", time: "по времени", name: "по позывному" };
 const touch = (isMobile) => (isMobile ? { minHeight: 40 } : {});
 
@@ -134,12 +134,45 @@ function ResultsDialog({ title, results, onClose, isMobile }) {
   );
 }
 
-function Card({ card, onOpen, onWordChange, isMobile }) {
+const shortDate = (iso) => iso.split("-").reverse().slice(0, 2).join(".");
+
+// Выбор дня в карточке: сегодня или любой прошедший (результаты за прошедший день грузятся отдельно).
+function DayPicker({ today, value, onChange, isMobile }) {
+  const days = Array.from({ length: today - 1 }, (_, i) => today - 1 - i);
+  return (
+    <select
+      value={value ?? "today"} onChange={(e) => onChange(e.target.value === "today" ? null : Number(e.target.value))}
+      title="Результаты за другой день"
+      style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #3a3a3c", background: "#1a1a1c", color: "inherit", fontSize: 12, ...touch(isMobile) }}
+    >
+      <option value="today">Сегодня (день {today})</option>
+      {days.map((d) => <option key={d} value={d}>День {d}</option>)}
+    </select>
+  );
+}
+
+function Card({ card: todayCard, onOpen, onWordChange, isMobile }) {
   const { label } = useModes();
   const [showDialog, setShowDialog] = useState(false);
+  const [pastDay, setPastDay] = useState(null);   // null — показываем сегодняшнюю карточку
+  const [past, setPast] = useState(null);         // результаты за pastDay
+  const [pastError, setPastError] = useState("");
+
+  useEffect(() => {
+    if (pastDay === null) { setPast(null); setPastError(""); return; }
+    let cancelled = false;
+    setPastError("");
+    api(`/api/admin/tournaments/${todayCard.id}/day-results?day=${pastDay}`)
+      .then((d) => { if (!cancelled) setPast(d); })
+      .catch((e) => { if (!cancelled) { setPast(null); setPastError(e.message); } });
+    return () => { cancelled = true; };
+  }, [pastDay, todayCard.id]);
+
+  const viewingPast = pastDay !== null && past !== null && past.day === pastDay;
+  const card = viewingPast ? { ...todayCard, ...past } : todayCard;
   const chips = card.results.slice(0, RESULTS_SHOWN);
   const started = card.status !== "draft";
-  const needsConfirm = card.next_word && card.next_word.status !== "confirmed";
+  const needsConfirm = todayCard.next_word && todayCard.next_word.status !== "confirmed";
   return (
     <div style={{ ...panelStyle, border: needsConfirm ? "1px solid #b59f3b" : "1px solid transparent" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
@@ -158,11 +191,26 @@ function Card({ card, onOpen, onWordChange, isMobile }) {
         </div>
       )}
 
+      {started && todayCard.day > 1 && (
+        <div style={{ marginTop: 10 }}>
+          <DayPicker today={todayCard.day} value={pastDay} onChange={setPastDay} isMobile={isMobile} />
+          {viewingPast && (
+            <span style={{ fontSize: 12, opacity: 0.8, marginLeft: 8, overflowWrap: "anywhere" }}>
+              {card.calendar_date && shortDate(card.calendar_date)}
+              {card.word && <> · слово <b style={{ textTransform: "uppercase", letterSpacing: 1 }}>{card.word}</b></>}
+            </span>
+          )}
+          {pastDay !== null && !viewingPast && !pastError && <span style={{ fontSize: 12, opacity: 0.6, marginLeft: 8 }}>Загрузка…</span>}
+          {pastError && <span style={{ fontSize: 12, color: "#e5484d", marginLeft: 8 }}>{pastError}</span>}
+        </div>
+      )}
+
       {started && (
         <div style={{ marginTop: 10 }}>
           <div style={{ fontSize: 13, marginBottom: 4 }}>
             Закончили <b>{card.done}</b>{card.players_total ? ` из ${card.players_total}` : ""}
-            {card.in_progress > 0 && <span style={{ opacity: 0.7 }}> · играют {card.in_progress}</span>}
+            {card.in_progress > 0 && <span style={{ opacity: 0.7 }}> · {viewingPast ? "не доиграли" : "играют"} {card.in_progress}</span>}
+            {viewingPast && card.not_played > 0 && <span style={{ opacity: 0.7 }}> · не играли {card.not_played}</span>}
           </div>
           <ProgressBar done={card.done} inProgress={card.in_progress} total={card.players_total} />
           {card.summary ? (
@@ -184,12 +232,17 @@ function Card({ card, onOpen, onWordChange, isMobile }) {
         </div>
       )}
 
-      {showDialog && <ResultsDialog title={card.title} results={card.results} onClose={() => setShowDialog(false)} isMobile={isMobile} />}
+      {showDialog && (
+        <ResultsDialog
+          title={viewingPast ? `${card.title} · день ${card.day}` : card.title}
+          results={card.results} onClose={() => setShowDialog(false)} isMobile={isMobile}
+        />
+      )}
 
-      {card.next_word && (
+      {todayCard.next_word && (
         <NextWord
-          word={card.next_word} isMobile={isMobile}
-          onChange={(w) => onWordChange(card.id, w)} onOpenWords={() => onOpen(card.id, "words")}
+          word={todayCard.next_word} isMobile={isMobile}
+          onChange={(w) => onWordChange(todayCard.id, w)} onOpenWords={() => onOpen(todayCard.id, "words")}
         />
       )}
     </div>

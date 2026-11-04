@@ -18,7 +18,7 @@ from api.schemas import (
     TournamentSettingsUpdateRequest,
     WordPlanRequest,
 )
-from api.today_view import build_today
+from api.today_view import build_day, build_today
 from api.tournament_time import day_number_for_date, today
 
 router = APIRouter()
@@ -163,6 +163,19 @@ async def get_today(session: AsyncSession = Depends(get_session), _: None = Depe
     """Экран «Сегодня»: по карточке на идущий розыгрыш — сколько закончили, результаты, слово на завтра
     (см. api/today_view.py)."""
     return await build_today(session)
+
+@router.get("/tournaments/{tournament_id}/day-results")
+async def get_day_results(
+    tournament_id: int, day: int, session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)
+):
+    """Результаты игроков за один день (как в карточке «Сегодня», только за выбранный прошедший день)."""
+    tournament = await crud.get_tournament(session, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Розыгрыш не найден")
+    try:
+        return await build_day(session, tournament, day)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/tournaments", response_model=list[TournamentOut])
 async def get_tournaments(session: AsyncSession = Depends(get_session), _: None = Depends(require_admin)):
