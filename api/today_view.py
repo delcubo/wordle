@@ -36,6 +36,14 @@ def _attempt_text(attempt) -> str:
     return f"{attempt.attempts_used}/6" if attempt.solved else "X/6"
 
 
+def _duration(attempt) -> int | None:
+    """Секунд от начала до конца игры; None — не закончена или результат выставлен админом вручную
+    (у такой попытки нет настоящих времён)."""
+    if not _finished(attempt) or attempt.admin_note or attempt.finished_at is None or attempt.started_at is None:
+        return None
+    return max(0, int((attempt.finished_at - attempt.started_at).total_seconds()))
+
+
 async def _word_results(session: AsyncSession, entries: list, word, past: bool = False) -> list[dict]:
     """Результаты участников по одному общему слову дня. В прошедший день не закончивший
     уже не «играет», а «не доиграл»."""
@@ -49,6 +57,7 @@ async def _word_results(session: AsyncSession, entries: list, word, past: bool =
             "callsign": e.callsign, "done": done,
             "text": _attempt_text(attempt) if done else ("не доиграл" if past else "играет"),
             "at": _iso_utc(attempt.finished_at if done else attempt.started_at),
+            "duration": _duration(attempt),
             "rank": (attempt.attempts_used if attempt.solved else MAX_ATTEMPTS + 1) if done else UNFINISHED_RANK,
         })
     return results
@@ -173,6 +182,7 @@ async def _tiebreak_results(session: AsyncSession, tournament: Tournament, entri
                 "callsign": by_id[p.entry_id].callsign, "done": done,
                 "text": _attempt_text(attempt) if done else "играет",
                 "at": _iso_utc(attempt.finished_at if done else attempt.started_at),
+                "duration": _duration(attempt),
             })
     return results, (f"раунд {current}" if current else "нет активных раундов"), playing
 

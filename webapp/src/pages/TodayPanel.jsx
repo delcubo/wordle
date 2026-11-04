@@ -5,11 +5,20 @@ import WordActions from "./WordActions.jsx";
 const REFRESH_MS = 60000;
 const RESULTS_SHOWN = 12;
 const TONE_COLOR = { good: "#2f4d2c", fail: "#5a2a2a", playing: "#4d4326", skip: "#3a3a3c" };
-const SORTS = { rank: "по результату", time: "по времени", name: "по позывному" };
+const SORTS = { rank: "по результату", time: "по времени", duration: "по длительности", name: "по позывному" };
 const touch = (isMobile) => (isMobile ? { minHeight: 40 } : {});
 
 function formatClock(date) {
   return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+}
+
+// Длительность игры (от первой попытки до конца): «2:35», от часа — «1 ч 05 м».
+function formatDuration(seconds) {
+  if (seconds == null) return "";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h} ч ${String(m).padStart(2, "0")} м`;
+  return `${m}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
 function Chip({ children, color = "#3a3a3c", title }) {
@@ -83,11 +92,15 @@ function ResultsDialog({ title, results, onClose, isMobile }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  const hasDuration = results.some((r) => r.duration != null);
+  const sorts = Object.entries(SORTS).filter(([k]) => k !== "duration" || hasDuration);
   const q = query.trim().toLowerCase();
   const rows = results.filter((r) => !q || r.callsign.toLowerCase().includes(q));
   if (sort === "time") rows.sort((a, b) => (b.at || "").localeCompare(a.at || "") || a.callsign.localeCompare(b.callsign));
+  if (sort === "duration") rows.sort((a, b) => (a.duration ?? Infinity) - (b.duration ?? Infinity) || a.callsign.localeCompare(b.callsign, "ru"));
   if (sort === "name") rows.sort((a, b) => a.callsign.localeCompare(b.callsign, "ru"));
   const clock = (r) => (r.at ? `${r.done ? "" : "с "}${formatClock(new Date(r.at))}` : "");
+  const colHead = { opacity: 0.5, fontSize: 11 };
 
   return (
     <div
@@ -114,17 +127,25 @@ function ResultsDialog({ title, results, onClose, isMobile }) {
             value={sort} onChange={(e) => setSort(e.target.value)}
             style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #3a3a3c", background: "#1a1a1c", color: "inherit", ...touch(isMobile) }}
           >
-            {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            {sorts.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </div>
+        {hasDuration && (
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, paddingBottom: 4, ...colHead }}>
+            <span style={{ minWidth: 40, textAlign: "right" }}>результат</span>
+            <span style={{ minWidth: 48, textAlign: "right" }} title="Во сколько закончил (у играющих — начал)">время</span>
+            <span style={{ minWidth: 56, textAlign: "right" }} title="От первой попытки до конца игры">длительность</span>
+          </div>
+        )}
         <div style={{ overflowY: "auto", minHeight: 0 }}>
           {rows.length === 0 && <div style={{ opacity: 0.7, padding: "8px 0" }}>Никого не найдено.</div>}
           {rows.map((r) => (
             <div key={r.callsign} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid #2a2a2c", fontSize: 14 }}>
               <span style={{ overflowWrap: "anywhere" }}>{r.callsign}</span>
               <span style={{ display: "flex", gap: 10, flexShrink: 0, textAlign: "right" }}>
-                <span style={{ color: r.done ? "#7dc778" : "#d9c36a" }}>{r.text}</span>
+                <span style={{ color: r.done ? "#7dc778" : "#d9c36a", ...(hasDuration ? { minWidth: 40 } : {}) }}>{r.text}</span>
                 <span style={{ opacity: 0.55, minWidth: 48 }}>{clock(r)}</span>
+                {hasDuration && <span style={{ opacity: 0.8, minWidth: 56 }}>{formatDuration(r.duration)}</span>}
               </span>
             </div>
           ))}
