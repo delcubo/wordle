@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, useModes, useIsMobile, panelStyle, ghostButtonStyle } from "./adminShared.jsx";
 import WordActions from "./WordActions.jsx";
+import AttemptCheckDialog from "./AttemptCheck.jsx";
 
 const REFRESH_MS = 60000;
 const RESULTS_SHOWN = 12;
@@ -86,11 +87,12 @@ function Distribution({ summary }) {
 function ResultsDialog({ title, results, onClose, isMobile }) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("rank");
+  const [checking, setChecking] = useState(null);   // {entryId, wordId} — открыто окно «Проверка»
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e) => { if (e.key === "Escape" && !checking) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, checking]);
 
   const hasDuration = results.some((r) => r.duration != null);
   const sorts = Object.entries(SORTS).filter(([k]) => k !== "duration" || hasDuration);
@@ -141,7 +143,18 @@ function ResultsDialog({ title, results, onClose, isMobile }) {
           {rows.length === 0 && <div style={{ opacity: 0.7, padding: "8px 0" }}>Никого не найдено.</div>}
           {rows.map((r) => (
             <div key={r.callsign} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid #2a2a2c", fontSize: 14 }}>
-              <span style={{ overflowWrap: "anywhere" }}>{r.callsign}</span>
+              <span style={{ overflowWrap: "anywhere" }}>
+                {r.callsign}
+                {r.text === "1/6" && r.entry_id && (
+                  <button
+                    onClick={() => setChecking({ entryId: r.entry_id, wordId: r.word_id })}
+                    title="С первой попытки — проверить, насколько это объяснимо"
+                    style={{ ...ghostButtonStyle, marginLeft: 8, padding: "0 8px", fontSize: 12 }}
+                  >
+                    🔍 проверка
+                  </button>
+                )}
+              </span>
               <span style={{ display: "flex", gap: 10, flexShrink: 0, textAlign: "right" }}>
                 <span style={{ color: r.done ? "#7dc778" : "#d9c36a", ...(hasDuration ? { minWidth: 40 } : {}) }}>{r.text}</span>
                 <span style={{ opacity: 0.55, minWidth: 48 }}>{clock(r)}</span>
@@ -151,6 +164,9 @@ function ResultsDialog({ title, results, onClose, isMobile }) {
           ))}
         </div>
       </div>
+      {checking && (
+        <AttemptCheckDialog entryId={checking.entryId} wordId={checking.wordId} onClose={() => setChecking(null)} isMobile={isMobile} />
+      )}
     </div>
   );
 }

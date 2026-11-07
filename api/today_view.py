@@ -57,7 +57,7 @@ async def _word_results(session: AsyncSession, entries: list, word, past: bool =
             "callsign": e.callsign, "done": done,
             "text": _attempt_text(attempt) if done else ("не доиграл" if past else "играет"),
             "at": _iso_utc(attempt.finished_at if done else attempt.started_at),
-            "duration": _duration(attempt),
+            "duration": _duration(attempt), "entry_id": e.id, "word_id": word.id,
             "rank": (attempt.attempts_used if attempt.solved else MAX_ATTEMPTS + 1) if done else UNFINISHED_RANK,
         })
     return results
@@ -182,7 +182,7 @@ async def _tiebreak_results(session: AsyncSession, tournament: Tournament, entri
                 "callsign": by_id[p.entry_id].callsign, "done": done,
                 "text": _attempt_text(attempt) if done else "играет",
                 "at": _iso_utc(attempt.finished_at if done else attempt.started_at),
-                "duration": _duration(attempt),
+                "duration": _duration(attempt), "entry_id": p.entry_id, "word_id": p.daily_word_id or r.daily_word_id,
             })
     return results, (f"раунд {current}" if current else "нет активных раундов"), playing
 

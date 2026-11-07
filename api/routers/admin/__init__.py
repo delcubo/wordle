@@ -5,7 +5,7 @@
 """
 from fastapi import APIRouter
 
-from api.routers.admin import auth, dictionary, users, tournaments, entries, marathon, teams, standings, bonus, words, tiebreak, bracket
+from api.routers.admin import auth, dictionary, users, tournaments, entries, marathon, teams, standings, bonus, words, tiebreak, bracket, checks
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -21,3 +21,4 @@ router.include_router(bonus.router)
 router.include_router(words.router)
 router.include_router(tiebreak.router)
 router.include_router(bracket.router)
+router.include_router(checks.router)
